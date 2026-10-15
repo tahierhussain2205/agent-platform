@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-import logging
 import sys
 from collections.abc import Callable, Sequence
 
@@ -11,11 +10,11 @@ import uvicorn
 from app.settings import get_settings
 
 
-def _configure_logging() -> None:
-    # Replaced by structured JSON logging in phase 4.
-    logging.basicConfig(
-        level=get_settings().log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
+def _configure_logging(command: str) -> None:
+    from app.logging import configure_logging
+
+    settings = get_settings()
+    configure_logging(settings.log_level, service=f"agent-{command}", json_output=settings.log_json)
 
 
 def uvicorn_config() -> uvicorn.Config:
@@ -29,6 +28,8 @@ def uvicorn_config() -> uvicorn.Config:
         proxy_headers=True,
         forwarded_allow_ips="*",
         timeout_graceful_shutdown=25,
+        access_log=False,  # the request context middleware writes one structured line per request
+        log_config=None,  # keep our JSON logging configuration
     )
 
 
@@ -108,6 +109,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    _configure_logging()
+    _configure_logging(args.command)
     handler: Callable[[argparse.Namespace], int] = args.handler
     return handler(args)

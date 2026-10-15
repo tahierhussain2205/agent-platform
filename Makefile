@@ -73,7 +73,7 @@ ci: lint typecheck test test-mutations build-web ## Run every CI step locally
 ## ---------------------------------------------------------------- local stack
 
 COMPOSE := docker compose
-INFRA   := postgres valkey temporal objectstore jaeger
+INFRA   := postgres pgbouncer valkey temporal objectstore jaeger
 
 .PHONY: dev
 dev: ## Build and start the whole stack, wait until healthy

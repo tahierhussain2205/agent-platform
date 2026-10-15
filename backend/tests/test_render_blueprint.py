@@ -19,7 +19,9 @@ from app.settings import Settings
 ROOT = Path(__file__).resolve().parents[2]
 BLUEPRINT: dict[str, Any] = yaml.safe_load((ROOT / "render.yaml").read_text())
 SCHEMA = json.loads((ROOT / "dev" / "schemas" / "render.schema.json").read_text())
-SECRET_NAME = re.compile(r"(SECRET|PASSWORD|TOKEN|API_KEY|PRIVATE|DATABASE_URL|REDIS_URL)")
+SECRET_NAME = re.compile(
+    r"(SECRET|PASSWORD|TOKEN|API_KEY|PRIVATE|DATABASE_URL|REDIS_URL|ENCRYPTION_KEYS|ACCESS_KEY)"
+)
 
 
 def _staging() -> dict[str, Any]:
@@ -263,3 +265,12 @@ def test_static_site() -> None:
     for name in ("X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy", "Strict-Transport-Security"):
         assert ("/*", name) in headers
     assert _env_keys(web)["VITE_API_URL"].get("sync") is False
+
+
+@pytest.mark.parametrize("name", ["api-staging", "worker-staging"])
+def test_encryption_and_storage_are_configured(name: str) -> None:
+    env = _env_keys(SERVICES[name])
+    for key in ("ENCRYPTION_KEYS", "S3_ENDPOINT_URL", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"):
+        assert env[key].get("sync") is False, key
+    assert env["ENCRYPTION_ACTIVE_KEY"]["value"] == "v1"
+    assert env["S3_BUCKET"]["value"].endswith("-staging")

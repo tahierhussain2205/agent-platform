@@ -1,4 +1,4 @@
-"""A database with two fully populated orgs: at least one row in every tenant table.
+"""Pytest plugin: a database with two fully populated orgs, at least one row in every tenant table.
 
 Tests run inside transactions that are rolled back (``tx``), so they can mutate freely. Tests
 that need commits (deferred constraints, concurrency) open their own connections.

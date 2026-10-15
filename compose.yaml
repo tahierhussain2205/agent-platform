@@ -14,7 +14,7 @@ x-backend: &backend
     # Migrations run as the Render-like database owner (not a superuser).
     MIGRATION_DATABASE_URL: postgresql://agent_admin:agent_admin@postgres:5432/agent
     # Components swap in their own login user; see Settings.component_dsn().
-    DATABASE_URL: postgresql://unused:unused@postgres:5432/agent
+    DATABASE_URL: postgresql://unused:unused@pgbouncer:6432/agent
     DB_API_PASSWORD: local-api-password-0001
     DB_WORKER_PASSWORD: local-worker-password-0001
     DB_VAULT_PASSWORD: local-vault-password-0001
@@ -23,6 +23,15 @@ x-backend: &backend
     TEMPORAL_ADDRESS: temporal:7233
     TEMPORAL_NAMESPACE: default
     TEMPORAL_TASK_QUEUE: agent-tasks
+    REDIS_URL: redis://valkey:6379/0
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    # Local development keys only (never use these anywhere else).
+    ENCRYPTION_KEYS: v1:bG9jYWwtZGV2LWtleS0wMDAwMDAwMDAwMDAwMDAwMDA=
+    ENCRYPTION_ACTIVE_KEY: v1
+    S3_ENDPOINT_URL: http://objectstore:8333
+    S3_BUCKET: artifacts
+    S3_ACCESS_KEY_ID: local-access-key
+    S3_SECRET_ACCESS_KEY: local-secret-key
   restart: "no"
 
 services:
@@ -40,6 +49,21 @@ services:
       - ./dev/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d agent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Transaction pooling like Render's built in PgBouncer; the API and worker connect through it.
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    ports: ["56432:6432"]
+    volumes:
+      - ./dev/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./dev/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 6432"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -119,6 +143,7 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
       valkey: { condition: service_healthy }
+      pgbouncer: { condition: service_healthy }
     healthcheck:
       test:
         - CMD
@@ -137,6 +162,7 @@ services:
     depends_on:
       migrate: { condition: service_completed_successfully }
       temporal: { condition: service_healthy }
+      pgbouncer: { condition: service_healthy }
 
   web:
     image: node:22-slim

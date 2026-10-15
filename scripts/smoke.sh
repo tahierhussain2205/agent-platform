@@ -11,6 +11,26 @@ echo "Smoke checking the local stack"
 
 body=$(curl -fsS "$API_URL/healthz") && [[ $body == '{"status":"ok"}' ]] && pass "api /healthz" || fail "api /healthz ($body)"
 
+body=$(curl -fsS "$API_URL/readyz") \
+  && echo "$body" | jq -e '. == {"status":"ready","checks":{"database":"ok","key_value":"ok"}}' >/dev/null \
+  && pass "api /readyz (Postgres through PgBouncer as api_service, Key Value)" || fail "api /readyz ($body)"
+
+rid="smoke-$(date +%s%N)"
+curl -s -o /dev/null -H "x-request-id: $rid" "$API_URL/smoke-not-found"
+line=$(docker compose logs api --no-log-prefix 2>/dev/null | grep "\"$rid\"" | tail -1)
+echo "$line" | jq -e --arg rid "$rid" '.request_id == $rid and .http_status == 404 and .service == "agent-api" and (.trace_id | length == 32)' >/dev/null \
+  && pass "structured JSON access log with request and trace ids" || fail "access log line: $line"
+
+# The same request's trace (id from its access log line) must reach Jaeger (v3 query API).
+trace_id=$(echo "$line" | jq -r .trace_id)
+found=""
+for _ in $(seq 1 20); do
+  found=$(curl -fsS "http://localhost:16686/api/v3/traces/$trace_id" 2>/dev/null \
+    | jq -r '[.result.resourceSpans[].scopeSpans[].spans[].name] | join(",")' 2>/dev/null) && [[ -n $found ]] && break
+  sleep 1
+done
+[[ -n $found ]] && pass "request trace $trace_id exported to Jaeger ($found)" || fail "trace $trace_id not in Jaeger"
+
 out=$(docker compose exec -T worker python -m app check temporal 2>&1) && [[ $out == "pong: smoke" ]] \
   && pass "worker connected to Temporal (PingWorkflow -> $out)" || fail "PingWorkflow: $out"
 

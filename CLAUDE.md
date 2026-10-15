@@ -60,20 +60,27 @@ A change never weakens one of these to make something work. If an invariant bloc
 Backend only: `cd backend && uv run pytest -k name`, `uv run python -m app api`.
 Web only: `pnpm --dir web dev`.
 
-Local URLs: API http://localhost:8000, console http://localhost:5173, Temporal UI http://localhost:8233,
-Jaeger http://localhost:16686, Postgres `localhost:55432` (postgres/postgres, db `agent`), Valkey `localhost:56379`,
-S3 (SeaweedFS) http://localhost:8333.
+Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173, Temporal UI http://localhost:8233,
+Jaeger http://localhost:16686, Postgres `localhost:55432` (postgres/postgres, db `agent`), PgBouncer `localhost:56432`,
+Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 
 ## Code conventions
 
 - **Python 3.12**, `uv` for dependencies (commit `uv.lock`), `ruff` (lint and format, line length 110), `mypy --strict` on `app/`.
-- **Layout** (grows per phase): `app/api/` HTTP layer only, `app/settings.py` the one typed settings object (environment only, never files in the image), `app/db/` database access and the migration runner, `app/workflows/` Temporal workflows and activities, `app/worker.py` the worker process, `app/seed/` the dev fixture.
+- **Layout** (grows per phase): `app/api/` HTTP layer only (`main.py` factory, `middleware.py`), `app/settings.py` the one typed settings object (environment only, never files in the image), `app/db/` pools, unit of work, error mapping, roles and the migration runner, `app/crypto/` envelope encryption, `app/storage.py` object storage, `app/kv.py` Key Value, `app/temporal.py` Temporal client, `app/logging.py` and `app/telemetry.py` observability, `app/workflows/` Temporal workflows and activities, `app/worker.py` the worker process, `app/maintenance.py` cron jobs, `app/seed/` the dev fixture.
 - **Naming**: modules and functions `snake_case`, classes `PascalCase`, SQL identifiers `snake_case`, tables plural.
 - **Typing**: full annotations; no `Any` in public signatures unless wrapping untyped JSON.
 - **Errors**: raise domain exceptions in services; the API layer maps them to HTTP responses. Never put secrets or tokens in exception messages.
 - **Logging**: structured JSON logs (phase 4). Never log tokens, secrets or raw Slack message text.
 - **Migrations**: add `backend/migrations/NNN_description.sql`; never edit an applied migration (the runner checks checksums). Files must not contain top level `begin`/`commit`: the runner wraps each file and its bookkeeping row in one transaction. Start with `set local role app_owner;` so objects are owned by `app_owner`. Migrations run as a non superuser (Render-like `agent_admin` locally): never rely on BYPASSRLS; cross tenant work goes through `security definer` functions owned by `app_owner` with `execute` granted only to the role that needs it.
-- **Database access by component**: each component connects as its own login user via `Settings.component_dsn("api" | "worker" | "vault" | "identity" | "maintenance")`; never use `MIGRATION_DATABASE_URL` outside `app migrate` / `app seed`. New tables need explicit grants and, if tenant scoped, the `tenant_isolation` policy and composite `(org_id, id)` foreign keys. Migrations must be safe to run against the previous code version.
+- **Database access by component**: each component connects as its own login user via `Settings.component_dsn("api" | "worker" | "vault" | "identity" | "maintenance")`; never use `MIGRATION_DATABASE_URL` outside `app migrate` / `app seed`.
+- **Tenant data in request handlers**: take `uow: UnitOfWork = Depends(get_uow)` and `conn = await uow.bind(org_id)`. Never take a pool connection directly in a request path (only `/readyz` does). The middleware commits before the response starts; raise to roll back. Do not use the unit of work from background tasks or streaming bodies.
+- **Errors**: let database errors propagate; `app/db/errors.py` maps them (403/409/422) with generic messages. Unhandled exceptions become a JSON 500 with the request id.
+- **Logging**: `log = logging.getLogger(__name__)`, structured fields via `extra={...}`. Request id, org id and trace ids are added automatically from context. Never log tokens, secrets, raw Slack text or raw database errors to clients.
+- **Tracing**: binding a unit of work tags spans with `tenant.id` automatically; spans never include SQL parameters or query strings.
+- **Secrets at rest**: `Envelope.seal(org_id, plaintext, context="<table>:<row id>")`; store `ciphertext` and `kms_key_id`. Never put plaintext secrets in the database, logs or model context.
+- **Object storage**: `ObjectStore.put(org_id, kind, data)` returns the `storage_ref`; reads and deletes need the same org id.
+- **Key Value**: build tenant keys with `kv.tenant_key(org_id, ...)`; `kv.global_key` only for data that is not tenant scoped. New tables need explicit grants and, if tenant scoped, the `tenant_isolation` policy and composite `(org_id, id)` foreign keys. Migrations must be safe to run against the previous code version.
 - **Adding a tool adapter**: arrives in phase 8.
 - **Adding a playbook**: arrives in phase 7.
 - **Web**: TypeScript strict, ESLint + Prettier, components in `PascalCase.tsx`, tests next to code as `*.test.tsx`.
@@ -111,3 +118,7 @@ S3 (SeaweedFS) http://localhost:8333.
 - Roles are cluster wide. Tests create login users with unique names and drop them; never touch the real `*_service` users from tests (the running dev stack uses them).
 - After changing `dev/postgres/init/` or editing migration 001, run `make reset` (init scripts run only on an empty volume; edited migrations fail the checksum).
 - A CREATEROLE non superuser cannot mention `SUPERUSER`/`BYPASSRLS` in `ALTER ROLE`; `app/db/roles.py` verifies attributes instead.
+- Logs go to stdout as JSON (one line each), not stderr; tests and scripts that wait for log lines must read stdout.
+- Tracing is configured once per process (`configure_tracing` is idempotent); tests configure it first in `tests/conftest.py` with an in-memory exporter (`SPANS`).
+- Use `httpx.ASGITransport(app=..., raise_app_exceptions=False)` in API tests, or unhandled exceptions are re-raised instead of returning the 500 the server would send.
+- Jaeger v2 dropped the legacy `/api/traces` query API; use `/api/v3/traces/<trace id>`.

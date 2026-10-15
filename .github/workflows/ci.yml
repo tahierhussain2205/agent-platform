@@ -28,9 +28,15 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports: ["6379:6379"]
     env:
       TEST_DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
       TEST_TEMPORAL_ADDRESS: localhost:7233
+      TEST_PGBOUNCER_HOSTPORT: localhost:56432
+      TEST_REDIS_URL: redis://localhost:6379/15
+      TEST_S3_ENDPOINT: http://localhost:8333
     steps:
       - uses: actions/checkout@v4
       # Service containers cannot take a command, so the Temporal dev server is started here.
@@ -42,6 +48,19 @@ jobs:
             sleep 2
           done
           exit 1
+      # Same PgBouncer config as Compose, pointed at the service container on the host network.
+      - name: Start PgBouncer
+        run: |
+          sed -e 's/host=postgres/host=127.0.0.1/' -e 's/listen_port = 6432/listen_port = 56432/' \
+            ../dev/pgbouncer/pgbouncer.ini > /tmp/pgbouncer.ini
+          docker run -d --name pgbouncer --network host \
+            -v /tmp/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro \
+            -v "$PWD/../dev/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro" edoburu/pgbouncer:latest
+      - name: Start object store
+        run: |
+          docker run -d --name objectstore -p 8333:8333 -v "$PWD/../dev/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro" \
+            chrislusf/seaweedfs:latest mini -dir=/data -bucket=artifacts -s3.config=/etc/seaweedfs/s3.json -admin.ui=false
+          for _ in $(seq 1 60); do curl -fsS -o /dev/null http://localhost:8333/status && exit 0; sleep 2; done; exit 1
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true

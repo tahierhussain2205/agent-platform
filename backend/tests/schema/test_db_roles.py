@@ -15,7 +15,7 @@ from app.db.migrate import ensure_login_users, migrate
 from app.db.roles import LoginUser, ensure_login_user, scram_sha256_verifier
 from app.settings import Settings
 from tests.conftest import ADMIN_URL, database_url
-from tests.schema.conftest import World
+from tests.world import World
 
 PASSWORD = "a-very-long-test-password-1"
 

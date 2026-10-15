@@ -26,6 +26,13 @@ projects:
                 value: INFO
               - key: TEMPORAL_TASK_QUEUE
                 value: agent-tasks
+              - key: ENCRYPTION_ACTIVE_KEY
+                value: v1
+              # Cloudflare R2 (S3 compatible); see decisions D-050.
+              - key: S3_REGION
+                value: auto
+              - key: S3_BUCKET
+                value: agent-artifacts-staging
 
           # One generated password per component login user (created by `app migrate`).
           # Render generates each value once; services only reference the groups they need.
@@ -110,6 +117,19 @@ projects:
                 sync: false
               - key: TEMPORAL_API_KEY
                 sync: false
+              # Envelope encryption master keys ("v1:<base64 32 bytes>"); generate with
+              # `python -c "import base64,os;print('v1:'+base64.b64encode(os.urandom(32)).decode())"`.
+              - key: ENCRYPTION_KEYS
+                sync: false
+              - key: S3_ENDPOINT_URL
+                sync: false
+              - key: S3_ACCESS_KEY_ID
+                sync: false
+              - key: S3_SECRET_ACCESS_KEY
+                sync: false
+              # OTLP/HTTP collector; empty until the tracing backend is chosen (phase 7).
+              - key: OTEL_EXPORTER_OTLP_ENDPOINT
+                sync: false
 
           # Temporal workers: agent tasks, schedules, approvals.
           - type: worker
@@ -150,6 +170,19 @@ projects:
               - key: TEMPORAL_NAMESPACE
                 sync: false
               - key: TEMPORAL_API_KEY
+                sync: false
+              # Envelope encryption master keys ("v1:<base64 32 bytes>"); generate with
+              # `python -c "import base64,os;print('v1:'+base64.b64encode(os.urandom(32)).decode())"`.
+              - key: ENCRYPTION_KEYS
+                sync: false
+              - key: S3_ENDPOINT_URL
+                sync: false
+              - key: S3_ACCESS_KEY_ID
+                sync: false
+              - key: S3_SECRET_ACCESS_KEY
+                sync: false
+              # OTLP/HTTP collector; empty until the tracing backend is chosen (phase 7).
+              - key: OTEL_EXPORTER_OTLP_ENDPOINT
                 sync: false
 
           # Partition creation, retention pruning, Slack membership reconciliation.

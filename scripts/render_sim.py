@@ -16,6 +16,7 @@ behavior, only that the Blueprint is coherent with the code and the image.
 
 from __future__ import annotations
 
+import base64
 import http.server
 import os
 import secrets
@@ -49,6 +50,12 @@ DASHBOARD_SECRETS = {
     "TEMPORAL_NAMESPACE": "default",
     "TEMPORAL_API_KEY": "",  # the local dev server needs none; Temporal Cloud would
     "VITE_API_URL": f"http://localhost:{RENDER_PORT}",
+    "ENCRYPTION_KEYS": "v1:" + base64.b64encode(os.urandom(32)).decode(),
+    # No object store or trace collector in the simulation: left empty, as an operator might.
+    "S3_ENDPOINT_URL": "",
+    "S3_ACCESS_KEY_ID": "",
+    "S3_SECRET_ACCESS_KEY": "",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "",
 }
 
 # Render's stand-in default database user: owns the database, can create roles, not a superuser.
@@ -270,8 +277,13 @@ def simulate_backend(env: dict[str, Any]) -> None:
     health = f"http://localhost:{RENDER_PORT}{api['healthCheckPath']}"
     if wait_for(lambda: http_ok(health), 60):
         ok(f"api-staging healthy on PORT={RENDER_PORT} at {api['healthCheckPath']}")
+        if wait_for(lambda: http_ok(f"http://localhost:{RENDER_PORT}/readyz"), 30):
+            ok("api-staging ready: connects as api_service with its generated password, and to Key Value")
+        else:
+            bad("api-staging /readyz not ready")
     else:
-        bad(f"api-staging health check failed: {docker('logs', f'{PREFIX}-api', check=False).stderr[-500:]}")
+        api_logs = docker("logs", f"{PREFIX}-api", check=False)
+        bad(f"api-staging health check failed: {(api_logs.stdout + api_logs.stderr)[-500:]}")
 
     worker = services["worker-staging"]
     worker_env = resolve_env(worker, env)
@@ -279,12 +291,17 @@ def simulate_backend(env: dict[str, Any]) -> None:
         "run", "-d", "--name", f"{PREFIX}-worker", "--network", NETWORK, *env_flags(worker_env),
         IMAGE, *shlex.split(worker["dockerCommand"]),
     )  # fmt: skip
-    polling = wait_for(lambda: "worker polling" in docker("logs", f"{PREFIX}-worker", check=False).stderr, 60)
+
+    def worker_logs() -> str:
+        result = docker("logs", f"{PREFIX}-worker", check=False)
+        return result.stdout + result.stderr
+
+    polling = wait_for(lambda: "worker polling" in worker_logs(), 60)
     pong = docker("exec", f"{PREFIX}-worker", "app", "check", "temporal", check=False)
     if polling and pong.stdout.strip() == "pong: smoke":
         ok("worker-staging connected to Temporal and answers PingWorkflow")
     else:
-        logs = docker("logs", f"{PREFIX}-worker", check=False).stderr[-300:]
+        logs = worker_logs()[-300:]
         bad(f"worker-staging: {pong.stderr[-300:]} {logs}")
 
     cron = services["maintenance-staging"]

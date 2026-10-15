@@ -6,9 +6,19 @@ from pathlib import Path
 
 import psycopg
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from psycopg import sql
 
 from app.settings import get_settings
+from app.telemetry import configure_tracing
+
+# Tracing is configured once per process; do it before any test builds an app so every span is
+# captured here (tests/api/test_observability.py reads them).
+SPANS = InMemorySpanExporter()
+configure_tracing("agent-test", None, "test", extra_exporters=[SPANS])
+
+# The populated two-org database (`world`) and helpers, shared by every database-backed test.
+pytest_plugins = ["tests.world"]
 
 # Admin connection to a Postgres server used for throwaway test databases.
 # Local: the Compose Postgres (`make infra`). CI: the Postgres service container.

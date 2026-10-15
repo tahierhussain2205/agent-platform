@@ -8,7 +8,7 @@ import pytest
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from tests.schema.conftest import TENANT_TABLES, World, scalar, tx
+from tests.world import TENANT_TABLES, World, scalar, tx
 
 APP_USER = "app_user"
 # app_user has no privileges at all on token ciphertext; only app_vault does.

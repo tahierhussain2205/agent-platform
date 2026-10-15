@@ -39,3 +39,12 @@ What each phase delivered. Decisions and blockers are in [spec/decisions_and_blo
 - Schema test suite: generic isolation for every tenant table (231 tests), spec 13.4 guarantees, login users, Render-like migrations, maintenance. Mutation check: 10 of 10 weakened guarantees caught.
 - `render.yaml`: pooled `DATABASE_URL`, generated password groups per component; `make render-sim` now migrates as a Render-like user and runs the cron.
 - Verified: 400 backend tests, mutation check, `make reset` + smoke, `make render-sim` all pass.
+
+## Phase 4: Backend core (done locally; staging blocked by B-001)
+
+- Unit of work middleware: one org per request, commit before the response starts (deferred constraint failures replace the response), rollback on errors and exceptions, closed after the response starts.
+- Database error mapping (403/409/422), JSON 500s with request ids, PgBouncer friendly pools.
+- JSON logging with request, org and trace ids, access log, redaction backstop; OpenTelemetry with tenant id on every span after binding, query strings and SQL parameters kept out of spans.
+- Key Value helpers, shared Temporal client (tracing interceptor), envelope encryption with per tenant keys and rotation, tenant scoped object storage, `/readyz`.
+- Compose: PgBouncer (transaction mode, `auth_query`); API and worker connect through it. CI: PgBouncer, Valkey and SeaweedFS in the backend job.
+- Verified: 535 backend tests (unit of work suite runs both direct and through PgBouncer), smoke checks including `/readyz` through PgBouncer and the request's trace in Jaeger, `make render-sim` (readiness with generated credentials).

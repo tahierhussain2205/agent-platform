@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import signal
 import socket
@@ -13,7 +14,8 @@ from temporalio.exceptions import TimeoutError
 
 from app.diagnostics import check_temporal
 from app.settings import Settings
-from app.worker import build_worker, connect_temporal
+from app.temporal import connect_temporal
+from app.worker import build_worker
 
 TEMPORAL = os.environ.get("TEST_TEMPORAL_ADDRESS", "localhost:7233")
 
@@ -62,15 +64,20 @@ def test_worker_process_stops_cleanly_on_sigterm(temporal_settings: Settings) ->
         "TEMPORAL_TASK_QUEUE": temporal_settings.temporal_task_queue,
         "WORKER_GRACEFUL_SHUTDOWN_SECONDS": "5",
     }
+    # Logs are JSON lines on stdout; stderr is merged so nothing is missed.
     proc = subprocess.Popen(
-        [sys.executable, "-m", "app", "worker"], env=env, stderr=subprocess.PIPE, text=True
+        [sys.executable, "-m", "app", "worker"],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
     )
     try:
-        assert proc.stderr is not None
+        assert proc.stdout is not None
         deadline = time.monotonic() + 30
         lines: list[str] = []
         while time.monotonic() < deadline:
-            line = proc.stderr.readline()
+            line = proc.stdout.readline()
             lines.append(line)
             if "worker polling" in line:
                 break
@@ -80,8 +87,11 @@ def test_worker_process_stops_cleanly_on_sigterm(temporal_settings: Settings) ->
         assert asyncio.run(check_temporal(temporal_settings)) == "pong: smoke"
         proc.send_signal(signal.SIGTERM)
         assert proc.wait(timeout=20) == 0
-        rest = proc.stderr.read()
+        rest = proc.stdout.read()
         assert "worker stopped" in rest
+        assert all(
+            json.loads(line)["service"] == "agent-worker" for line in rest.splitlines() if line.strip()
+        )
     finally:
         if proc.poll() is None:
             proc.kill()

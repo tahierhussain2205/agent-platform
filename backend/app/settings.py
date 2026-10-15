@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     env: Literal["local", "test", "staging", "production"] = "local"
     port: int = Field(default=8000, ge=1, le=65535)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # JSON lines (production); set false for human readable local output.
+    log_json: bool = True
+    # OTLP/HTTP collector base URL (Jaeger locally). Unset: no traces exported.
+    otel_exporter_otlp_endpoint: str | None = None
 
     # Direct (non pooled) connection used only by `migrate` and `seed`. It holds a session
     # advisory lock, so it must never point at PgBouncer.
@@ -26,6 +30,8 @@ class Settings(BaseSettings):
     db_vault_password: SecretStr | None = None
     db_identity_password: SecretStr | None = None
     db_maintenance_password: SecretStr | None = None
+    db_pool_min_size: int = Field(default=1, ge=0, le=50)
+    db_pool_max_size: int = Field(default=10, ge=1, le=200)
 
     temporal_address: str = "localhost:7233"
     temporal_namespace: str = "default"
@@ -35,8 +41,20 @@ class Settings(BaseSettings):
     # How long a stopping worker waits for in-flight activities before cancelling them.
     worker_graceful_shutdown_seconds: int = Field(default=60, ge=0, le=290)
 
-    # Key Value (Redis compatible). Used from phase 4.
+    # Key Value (Redis compatible).
     redis_url: SecretStr | None = None
+
+    # Envelope encryption: master keys "v1:<base64 32 bytes>,v2:..." and the version used for new
+    # secrets. Old versions stay listed until every ciphertext has been re-wrapped.
+    encryption_keys: SecretStr | None = None
+    encryption_active_key: str | None = None
+
+    # Object storage (S3 compatible). Endpoint unset means AWS S3.
+    s3_endpoint_url: str | None = None
+    s3_region: str = "us-east-1"
+    s3_bucket: str | None = None
+    s3_access_key_id: SecretStr | None = None
+    s3_secret_access_key: SecretStr | None = None
 
     @field_validator(
         "migration_database_url",
@@ -48,6 +66,11 @@ class Settings(BaseSettings):
         "db_maintenance_password",
         "temporal_api_key",
         "redis_url",
+        "encryption_keys",
+        "s3_access_key_id",
+        "s3_secret_access_key",
+        "otel_exporter_otlp_endpoint",
+        "s3_endpoint_url",
         mode="before",
     )
     @classmethod

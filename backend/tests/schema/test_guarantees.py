@@ -12,7 +12,7 @@ import pytest
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from tests.schema.conftest import World, scalar, tx
+from tests.world import World, scalar, tx
 
 APP_USER = "app_user"
 
@@ -705,7 +705,7 @@ def test_custom_mcp_needs_approval(world: World) -> None:
 
 
 def test_deleting_an_org_removes_its_data_and_leaves_others_intact(world: World) -> None:
-    from tests.schema.conftest import TENANT_TABLES
+    from tests.world import TENANT_TABLES
 
     def counts(conn: psycopg.Connection[Any], org: UUID) -> dict[str, int]:
         return {

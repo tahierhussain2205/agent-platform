@@ -12,8 +12,8 @@ from app import cli, maintenance
 from app.db import roles
 from app.db.roles import LoginUser, ensure_login_user
 from tests.conftest import ADMIN_URL
-from tests.schema.conftest import World
 from tests.schema.test_db_roles import PASSWORD, _url_for
+from tests.world import World
 
 
 @pytest.fixture

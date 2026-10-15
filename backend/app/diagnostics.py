@@ -4,7 +4,7 @@ import uuid
 from datetime import timedelta
 
 from app.settings import Settings
-from app.worker import connect_temporal
+from app.temporal import connect_temporal
 from app.workflows.ping import PingWorkflow
 
 
