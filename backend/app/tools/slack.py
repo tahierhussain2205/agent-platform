@@ -294,13 +294,19 @@ class SlackAdapter:
             ref=f"slack:{target.external_id}:{message['ts']}",
             channel_external_id=target.external_id,
             channel_name=target.name,
-            visibility="private" if target.is_private else "public",
+            visibility=target.visibility,
             ts=message["ts"],
             label=f"#{target.name}, {clock(message['ts'])}",
         )
         short = ctx.refs.add(source)
         who = names.get(message.get("user", ""), message.get("username") or message.get("user") or "someone")
         return f"[{short}] ({clock(message['ts'])}) {who}: {plain(message.get('text', ''), names)}"
+
+    async def transcript(self, ctx: ToolContext, target: Target, messages: list[dict[str, Any]]) -> list[str]:
+        """Lines with refs for a conversation (oldest first), as the model sees tool output."""
+        kept = sorted((m for m in messages if self._keep(m)), key=lambda m: float(m["ts"]))
+        names = await self._names(ctx, kept)
+        return [redact(self._line(ctx, target, m, names))[0] for m in kept]
 
     @staticmethod
     def _result(lines: list[str]) -> ToolResult:

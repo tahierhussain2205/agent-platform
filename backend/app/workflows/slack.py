@@ -4,10 +4,12 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.workflow import ParentClosePolicy
 
 with workflow.unsafe.imports_passed_through():
     from app.workflows.slack_activities import SlackActivities
     from app.workflows.slack_types import HomeRequest, SlackRequest, SyncRequest, SyncResult
+    from app.workflows.task import TaskWorkflow
 
 RETRY = RetryPolicy(
     initial_interval=timedelta(seconds=1), maximum_interval=timedelta(seconds=30), maximum_attempts=6
@@ -17,8 +19,9 @@ SHORT = timedelta(seconds=60)
 
 @workflow.defn(name="AgentRequestWorkflow")
 class AgentRequestWorkflow:
-    """A mention or DM. Phase 6 stub: identify, check access, acknowledge in the thread. The agent
-    loop replaces the acknowledgement in phase 7."""
+    """A mention or DM: identify the requester, check access, then hand over to a task workflow
+    (an abandoned child, so this intake finishes at once). Without an agent runtime configured it
+    only acknowledges."""
 
     @workflow.run
     async def run(self, req: SlackRequest) -> str:
@@ -47,13 +50,27 @@ class AgentRequestWorkflow:
                 retry_policy=RETRY,
             )
             return check.reason
-        await workflow.execute_activity_method(
-            SlackActivities.acknowledge,
+        task = await workflow.execute_activity_method(
+            SlackActivities.create_task,
             args=[req, requester],
             start_to_close_timeout=SHORT,
             retry_policy=RETRY,
         )
-        return "replied"
+        if task is None:
+            await workflow.execute_activity_method(
+                SlackActivities.acknowledge,
+                args=[req, requester],
+                start_to_close_timeout=SHORT,
+                retry_policy=RETRY,
+            )
+            return "replied"
+        await workflow.start_child_workflow(
+            TaskWorkflow.run,
+            task,
+            id=f"task-{req.event_id}",
+            parent_close_policy=ParentClosePolicy.ABANDON,
+        )
+        return "task_started"
 
 
 @workflow.defn(name="SyncWorkspaceWorkflow")

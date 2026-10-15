@@ -11,8 +11,10 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from app import kv
+from app.agent.runner import AgentDeps, AgentRunner
 from app.crypto import Envelope, LocalKeyProvider
 from app.db.pool import open_pool
+from app.llm.gateway import gateway_from_settings
 from app.settings import Settings
 from app.slack.client import SlackClient
 from app.slack.limiter import SlackRateLimiter
@@ -21,6 +23,8 @@ from app.vault import Vault
 from app.workflows.ping import PingWorkflow, ping
 from app.workflows.slack import AgentRequestWorkflow, PublishHomeWorkflow, SyncWorkspaceWorkflow
 from app.workflows.slack_activities import SlackActivities, SlackDeps
+from app.workflows.task import TaskWorkflow
+from app.workflows.task_activities import TaskActivities
 
 log = logging.getLogger(__name__)
 
@@ -55,14 +59,37 @@ async def build_slack_activities(
             settings.encryption_keys.get_secret_value(), settings.encryption_active_key
         )
     )
+    vault = Vault(vault_pool, envelope)
+    gateway = gateway_from_settings(settings, pool, kv_client)
+    tasks = None
+    if gateway is None:
+        log.warning("no model provider key (ANTHROPIC_API_KEY): the agent only acknowledges requests")
+    else:
+        closers.append(gateway.aclose)
+        tasks = TaskActivities(
+            AgentRunner(
+                AgentDeps(
+                    pool=pool,
+                    vault=vault,
+                    slack=slack,
+                    kv=kv_client,
+                    gateway=gateway,
+                    console_url=settings.console_url,
+                    approval_ttl_hours=settings.approval_ttl_hours,
+                )
+            )
+        )
     return SlackActivities(
         SlackDeps(
             pool=pool,
-            vault=Vault(vault_pool, envelope),
+            vault=vault,
             slack=slack,
             kv=kv_client,
             console_url=settings.console_url,
-        )
+            agent_enabled=tasks is not None,
+            task_token_budget=settings.task_token_budget,
+        ),
+        tasks,
     )
 
 
@@ -77,9 +104,13 @@ def build_worker(client: Client, settings: Settings, slack: SlackActivities | No
             slack.check_channel,
             slack.explain_refusal,
             slack.acknowledge,
+            slack.create_task,
             slack.sync_workspace,
             slack.publish_home,
         ]
+        if slack.tasks is not None:
+            workflows.append(TaskWorkflow)
+            activities += slack.tasks.all()
     return Worker(
         client,
         task_queue=settings.temporal_task_queue,

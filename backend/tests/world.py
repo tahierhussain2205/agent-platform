@@ -17,6 +17,7 @@ import pytest
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
+from app.agent.playbooks import sync_builtin_playbooks
 from app.db.migrate import migrate
 from app.seed import seed
 from tests.conftest import throwaway_database
@@ -211,6 +212,7 @@ def create_world(url: str) -> World:
         with psycopg.connect(url) as conn:
             conn.execute(mutation)
     seed(url)
+    sync_builtin_playbooks(url)
     with psycopg.connect(url) as conn:
         acme = _org(conn, "acme", "org_acme", "alice@acme.test", "bob@acme.test", "bugs")
         globex = _org(conn, "globex", "org_globex", "dave@globex.test", "erin@globex.test", "general")

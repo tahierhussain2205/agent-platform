@@ -54,6 +54,10 @@ def run_migrate(_: argparse.Namespace) -> int:
     print(f"applied {len(applied)} migration(s): {', '.join(applied) or 'none pending'}")
     users = ensure_login_users(url, settings)
     print(f"login users ensured: {', '.join(users) or 'none configured'}")
+    from app.agent.playbooks import sync_builtin_playbooks
+
+    added = sync_builtin_playbooks(url)
+    print(f"built in playbooks added: {', '.join(added) or 'none'}")
     return 0
 
 

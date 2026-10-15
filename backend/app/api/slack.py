@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode
 from uuid import UUID, uuid4
 
+import psycopg
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from temporalio.client import Client
@@ -23,9 +24,10 @@ from app.db.tenant import tenant_tx
 from app.identity.invite import InviteError, invite_member
 from app.settings import get_settings
 from app.slack import service, signature
-from app.slack.adapter import ChannelAdapter, DirectMessage
-from app.slack.client import SlackError
+from app.slack.adapter import ChannelAdapter, DirectMessage, Ephemeral, Intent
+from app.slack.client import SlackClient, SlackError
 from app.temporal import connect_temporal
+from app.vault import Vault
 from app.workflows.slack_types import HomeRequest, SlackRequest, SyncRequest
 
 log = logging.getLogger(__name__)
@@ -257,6 +259,12 @@ async def interactions(request: Request) -> Response:
             await _decide_access_request(
                 request, org_id, workspace_id, team_id, user, action_id, str(action.get("value", "")), payload
             )
+        elif action_id in ("approval_approve", "approval_reject"):
+            await _decide_approval(
+                request, org_id, workspace_id, user, action_id, str(action.get("value", "")), payload
+            )
+        elif action_id == "task_cancel":
+            await _cancel_task(request, org_id, workspace_id, user, str(action.get("value", "")), payload)
     except Exception:
         log.exception("slack interaction failed", extra={"action_id": action_id})
         return JSONResponse({"error": "failed"}, status_code=500)
@@ -386,6 +394,148 @@ async def _update_decision_message(
         )
     except SlackError as exc:
         log.warning("could not update the decision message: %s", exc.error)
+
+
+# ------------------------------------------------------------------ approvals and cancellation
+
+
+def _required(request: Request) -> tuple[Any, Vault, SlackClient]:
+    res = resources(request)
+    if res.db_pool is None or res.vault is None or res.slack is None:
+        raise RuntimeError("database, vault and Slack must be configured")
+    return res.db_pool, res.vault, res.slack
+
+
+async def _tell_clicker(
+    request: Request, org_id: UUID, user: str, payload: dict[str, Any], text: str
+) -> None:
+    """A private reply to the person who clicked, where they clicked (or a DM)."""
+    pool, vault, slack = _required(request)
+    team, token = await service.bot_token(pool, vault, org_id)
+    container = payload.get("container") or {}
+    channel = container.get("channel_id") or (payload.get("channel") or {}).get("id")
+    intents: list[Intent] = [Ephemeral(channel, user, text, container.get("thread_ts"))] if channel else []
+    for intent in [*intents, DirectMessage(user, text)]:
+        try:
+            await ChannelAdapter(slack, resources(request).kv).send(team, token, intent)
+            return
+        except SlackError as exc:
+            log.info("private reply not delivered: %s", exc.error)
+
+
+async def _decide_approval(
+    request: Request, org_id: UUID, workspace_id: UUID, user: str, action_id: str, value: str,
+    payload: dict[str, Any],
+) -> None:  # fmt: skip
+    """Write the decision (the database trigger enforces who may decide, expiry and finality),
+    then signal the waiting task and update the approval message."""
+    pool, vault, slack = _required(request)
+    decision = "approved" if action_id == "approval_approve" else "rejected"
+    try:
+        approval_id = UUID(value)
+    except ValueError:
+        return
+    async with tenant_tx(pool, org_id) as conn:
+        member = await _member(conn, workspace_id, user)
+        row = await (
+            await conn.execute(
+                "select a.status, a.message_ref, a.action_summary, t.workflow_id, a.expires_at <= now(), "
+                "a.task_id from app.approvals a join app.tasks t on t.id = a.task_id where a.id = %s",
+                (approval_id,),
+            )
+        ).fetchone()
+
+    async def tell(text: str) -> None:
+        await _tell_clicker(request, org_id, user, payload, text)
+
+    if row is None:  # unknown, or another org's (row level security)
+        await tell("This approval request no longer exists.")
+        return
+    status, message_ref, summary, workflow_id, expired, task_id = row
+    if status != "pending" or expired:
+        state = "expired" if expired and status == "pending" else status
+        await tell(f"This request was already {state}. Decisions are final.")
+        return
+    if member is None:
+        await tell("You can't decide this request.")
+        return
+    try:
+        async with tenant_tx(pool, org_id) as conn:
+            await conn.execute(
+                "update app.approvals set status = %s, decided_by = %s where id = %s",
+                (decision, member[0], approval_id),
+            )
+            await conn.execute(
+                "insert into app.audit_log (org_id, actor_type, actor_id, task_id, action, target, decision) "
+                "values (%s, 'user', %s, %s, %s, %s, %s)",
+                (org_id, member[0], task_id, f"approval.{decision}", summary[:500],
+                 "allowed" if decision == "approved" else "denied"),
+            )  # fmt: skip
+    except psycopg.errors.InsufficientPrivilege:
+        await tell("Only the person who asked or an admin can decide this.")
+        return
+    except psycopg.errors.CheckViolation:
+        await tell("This request was already decided or has expired.")
+        return
+    try:
+        handle = (await temporal(request)).get_workflow_handle(workflow_id)
+        await handle.signal("approval_decided", args=[str(approval_id), decision])
+    except Exception:  # the task re-reads the decision from the database while it waits
+        log.warning("could not signal the task", extra={"workflow_id": workflow_id}, exc_info=True)
+    team, token = await service.bot_token(pool, vault, org_id)
+    outcome = f"✅ Approved by <@{user}>" if decision == "approved" else f"❌ Rejected by <@{user}>"
+    channel, _, ts = str(message_ref or "").rpartition(":")
+    if channel and ts:
+        try:
+            await slack.call(
+                "chat.update", token, team, channel=channel, ts=ts, text=outcome,
+                blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": summary[:2900]}},
+                        {"type": "context", "elements": [{"type": "mrkdwn", "text": outcome}]}],
+            )  # fmt: skip
+        except SlackError as exc:
+            log.warning("could not update the approval message: %s", exc.error)
+
+
+async def _cancel_task(
+    request: Request, org_id: UUID, workspace_id: UUID, user: str, value: str, payload: dict[str, Any]
+) -> None:
+    pool, _, _ = _required(request)
+    try:
+        task_id = UUID(value)
+    except ValueError:
+        return
+    async with tenant_tx(pool, org_id) as conn:
+        member = await _member(conn, workspace_id, user)
+        task = await (
+            await conn.execute(
+                "select requested_by, workflow_id, status from app.tasks where id = %s", (task_id,)
+            )
+        ).fetchone()
+
+    async def tell(text: str) -> None:
+        await _tell_clicker(request, org_id, user, payload, text)
+
+    if task is None:
+        await tell("This task no longer exists.")
+        return
+    requested_by, workflow_id, status = task
+    if (
+        member is None
+        or member[2] == "removed"
+        or not (member[0] == requested_by or (member[1] == "admin" and member[2] == "active"))
+    ):
+        await tell("Only the person who asked or an admin can cancel this.")
+        return
+    if status in ("completed", "failed", "cancelled"):
+        await tell(f"This task is already {status}.")
+        return
+    async with tenant_tx(pool, org_id) as conn:
+        await conn.execute(
+            "insert into app.audit_log (org_id, actor_type, actor_id, task_id, action) "
+            "values (%s, 'user', %s, %s, 'task.cancelled')",
+            (org_id, member[0], task_id),
+        )
+    await (await temporal(request)).get_workflow_handle(workflow_id).cancel()
 
 
 # ------------------------------------------------------------------ OAuth install

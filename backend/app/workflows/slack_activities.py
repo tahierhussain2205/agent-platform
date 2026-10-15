@@ -10,6 +10,7 @@ from psycopg_pool import AsyncConnectionPool
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from app.agent.types import TaskRef
 from app.db.tenant import tenant_tx
 from app.slack import service
 from app.slack.adapter import ChannelAdapter, DirectMessage, Ephemeral, Intent, Reply
@@ -47,12 +48,15 @@ class SlackDeps:
     slack: SlackClient
     kv: Any
     console_url: str
+    agent_enabled: bool = False  # the agent runtime (model gateway) is configured
+    task_token_budget: int = 300_000
 
 
 class SlackActivities:
-    def __init__(self, deps: SlackDeps) -> None:
+    def __init__(self, deps: SlackDeps, tasks: Any = None) -> None:
         self.d = deps
         self.adapter = ChannelAdapter(deps.slack, deps.kv)
+        self.tasks = tasks  # TaskActivities when the agent runtime is configured
 
     async def _token(self, org_id: str) -> tuple[str, str]:
         try:
@@ -258,6 +262,58 @@ class SlackActivities:
         if self.d.kv is not None:
             await self.d.kv.set(key, str(sent.get("ts")), ex=24 * 3600)
         return str(sent.get("ts"))
+
+    @activity.defn(name="slack_create_task")
+    async def create_task(self, req: SlackRequest, requester: Requester) -> TaskRef | None:
+        """The session (one per thread or DM conversation) and a queued task for an allowed
+        request. Keyed by the Slack event id, so a retried activity finds the same task. None when
+        the agent runtime is not configured (the caller then only acknowledges)."""
+        if not self.d.agent_enabled or requester.membership_id is None:
+            return None
+        team, _ = await self._token(req.org_id)
+        im = req.channel_type == "im"
+        thread_ts = req.thread_ts or (None if im else req.ts)
+        workflow_id = f"task-{req.event_id}"
+        async with tenant_tx(self.d.pool, req.org_id) as conn:
+            channel_id = None if im else await service.channel_id_for(conn, req.workspace_id, req.channel)
+            session = await (
+                await conn.execute(
+                    "insert into app.sessions (org_id, workspace_id, channel_id, external_channel_id, "
+                    "external_thread_id, started_by) values (%s, %s, %s, %s, %s, %s) "
+                    "on conflict (workspace_id, external_channel_id, external_thread_id) do update "
+                    "set last_activity_at = now(), status = 'active' returning id",
+                    (
+                        req.org_id,
+                        req.workspace_id,
+                        channel_id,
+                        req.channel,
+                        thread_ts or "dm",
+                        requester.membership_id,
+                    ),
+                )
+            ).fetchone()
+            assert session is not None
+            row = await (
+                await conn.execute(
+                    "insert into app.tasks (org_id, session_id, requested_by, trigger, model_tier, "
+                    "effective_mode, token_budget, workflow_id) select %s, %s, %s, %s, s.default_model_tier, "
+                    "app.effective_mode(%s, %s), %s, %s from app.org_settings s "
+                    "on conflict (workflow_id) do nothing returning id",
+                    (req.org_id, session[0], requester.membership_id, "dm" if im else "mention",
+                     requester.membership_id, channel_id, self.d.task_token_budget, workflow_id),
+                )
+            ).fetchone()  # fmt: skip
+            if row is None:
+                row = await (
+                    await conn.execute("select id from app.tasks where workflow_id = %s", (workflow_id,))
+                ).fetchone()
+        assert row is not None
+        return TaskRef(
+            org_id=req.org_id, task_id=str(row[0]), session_id=str(session[0]), workspace_id=req.workspace_id,
+            team_id=team, channel=req.channel, channel_type=req.channel_type,
+            channel_id=str(channel_id) if channel_id else None, thread_ts=thread_ts, message_ts=req.ts,
+            membership_id=requester.membership_id, slack_user_id=req.user, trigger="dm" if im else "mention",
+        )  # fmt: skip
 
     @activity.defn(name="slack_sync_workspace")
     async def sync_workspace(self, req: SyncRequest) -> SyncResult:

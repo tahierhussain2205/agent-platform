@@ -47,6 +47,7 @@ class Progress:
     text: str
     thread_ts: str | None = None
     ts: str | None = None  # set to update an existing status message
+    actions: list[tuple[str, str, str]] = field(default_factory=list)  # (action_id, label, value)
 
 
 @dataclass(frozen=True)
@@ -153,13 +154,25 @@ def render(intent: Intent) -> list[tuple[str, dict[str, Any]]]:
             )
         ]
     if isinstance(intent, Progress):
-        params = {
-            "channel": intent.channel,
-            "text": fallback(intent.text),
-            "blocks": [
-                {"type": "context", "elements": [{"type": "mrkdwn", "text": intent.text[:SECTION_LIMIT]}]}
-            ],
-        }
+        progress_blocks: list[dict[str, Any]] = [
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": intent.text[:SECTION_LIMIT]}]}
+        ]
+        if intent.actions:
+            progress_blocks.append(
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "action_id": a,
+                            "text": {"type": "plain_text", "text": label},
+                            "value": v,
+                        }
+                        for a, label, v in intent.actions
+                    ],
+                }
+            )
+        params = {"channel": intent.channel, "text": fallback(intent.text), "blocks": progress_blocks}
         if intent.ts:
             return [("chat.update", {**params, "ts": intent.ts})]
         return [("chat.postMessage", {**params, "thread_ts": intent.thread_ts})]
@@ -231,11 +244,19 @@ class ChannelAdapter:
         self.client = client
         self.kv = kv
 
-    async def send(self, team_id: str, token: str, intent: Intent) -> list[dict[str, Any]]:
-        """Send an intent; returns Slack's responses (``ts`` of each message posted)."""
+    async def send(
+        self, team_id: str, token: str, intent: Intent, metadata: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Send an intent; returns Slack's responses (``ts`` of each message posted). ``metadata``
+        (Slack message metadata) goes on the first message posted: we put idempotency keys there."""
         if isinstance(intent, Progress) and intent.ts and self.kv is not None:
             return await self._coalesced_update(team_id, token, intent)
-        return [await self.client.call(method, token, team_id, **params) for method, params in render(intent)]
+        responses = []
+        for index, (method, params) in enumerate(render(intent)):
+            if index == 0 and metadata and method == "chat.postMessage":
+                params = {**params, "metadata": metadata}
+            responses.append(await self.client.call(method, token, team_id, **params))
+        return responses
 
     async def _coalesced_update(self, team_id: str, token: str, intent: Progress) -> list[dict[str, Any]]:
         """Updates to the same status message are coalesced: if a newer update was queued while

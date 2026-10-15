@@ -20,6 +20,7 @@ BUCKETS: dict[str, tuple[str, int]] = {
     "conversations.history": ("tier3", 1),
     "conversations.replies": ("tier3", 1),
     "conversations.info": ("tier3", 1),
+    "chat.getPermalink": ("permalink", 20),  # a cheap lookup with a high limit
     "users.info": ("tier4", 2),
     "users.lookupByEmail": ("tier4", 2),
 }

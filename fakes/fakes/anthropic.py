@@ -232,7 +232,8 @@ def brief(user: str) -> dict[str, Any]:
         "decisions": [],
         "open_questions": [],
         "entities": {
-            "channels": sorted(set(CHANNEL.findall(request))),
+            # A channel to share in is a destination, not a source.
+            "channels": sorted(set(CHANNEL.findall(request)) - set(SHARE.findall(request))),
             "people": [asker],
             "time_window": window(request, now),
             "ids": re.findall(r"\b[A-Z]{2,10}-\d+\b", request),
@@ -285,7 +286,7 @@ def gather(messages: list[dict[str, Any]], first_user: str) -> list[dict[str, An
                 points.append({"text": f"{m.group(2).strip()}: {m.group(3).strip()[:200]}", "sources": [m.group(1)]})
         if not any(LINE.match(line) for line in result.splitlines()):
             gaps.append(result.splitlines()[0] if result else "No messages found.")
-    return [use("submit_findings", {"points": points[:15], "gaps": gaps})]
+    return [use("submit_findings", {"points": points[-15:], "gaps": gaps})]  # the most recent
 
 
 SHARE = re.compile(r"\b(?:post|share|send)\b[^#]*#([a-z0-9][a-z0-9_-]*)", re.IGNORECASE)

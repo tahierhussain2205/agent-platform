@@ -61,10 +61,15 @@ class Target:
     """The resource an operation touches, resolved before the policy check."""
 
     kind: Literal["slack_channel"]
-    id: UUID
+    id: UUID | None
     external_id: str
     name: str
     is_private: bool
+    is_dm: bool = False
+
+    @property
+    def visibility(self) -> Visibility:
+        return "dm" if self.is_dm else "private" if self.is_private else "public"
 
 
 @dataclass
