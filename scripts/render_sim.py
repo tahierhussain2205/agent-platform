@@ -56,6 +56,13 @@ DASHBOARD_SECRETS = {
     "S3_ACCESS_KEY_ID": "",
     "S3_SECRET_ACCESS_KEY": "",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "",
+    # No Clerk in the simulation: sign in is not configured (the API answers 503 for console routes).
+    "CONSOLE_ORIGINS": "http://localhost:5173",
+    "CLERK_ISSUER": "",
+    "CLERK_JWKS_URL": "",
+    "CLERK_SECRET_KEY": "",
+    "CLERK_WEBHOOK_SECRET": "",
+    "VITE_CLERK_PUBLISHABLE_KEY": "",
 }
 
 # Render's stand-in default database user: owns the database, can create roles, not a superuser.

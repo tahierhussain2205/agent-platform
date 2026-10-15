@@ -5,6 +5,7 @@ Svix retries and the synchronous console mirroring are both safe.
 """
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from psycopg import AsyncConnection
@@ -26,9 +27,19 @@ def full_name(first: Any, last: Any) -> str | None:
     return name or None
 
 
+def event_time(event: dict[str, Any]) -> datetime:
+    """When Clerk created the event (payload ``timestamp``, milliseconds). Membership changes
+    older than the state we already hold are ignored by the identity functions."""
+    ms = event.get("timestamp")
+    if isinstance(ms, int | float) and ms > 0:
+        return datetime.fromtimestamp(ms / 1000, UTC)
+    return datetime.now(UTC)
+
+
 async def apply_event(conn: AsyncConnection, event: dict[str, Any]) -> str:
     """Apply one event. Returns ``applied`` or ``ignored``."""
     kind, data = event.get("type"), event.get("data") or {}
+    at = event_time(event)
 
     async def call(sql: str, *args: Any) -> None:
         await conn.execute(sql, args)
@@ -52,27 +63,32 @@ async def apply_event(conn: AsyncConnection, event: dict[str, Any]) -> str:
     elif kind in ("organizationMembership.created", "organizationMembership.updated"):
         org, person = data["organization"], data["public_user_data"]
         await call(
-            "select app.identity_upsert_membership(%s, %s, %s, %s, %s, %s)",
+            "select app.identity_upsert_membership(%s, %s, %s, %s, %s, %s, %s)",
             org["id"], org.get("name"), person["user_id"], person["identifier"],
-            full_name(person.get("first_name"), person.get("last_name")), data["role"],
+            full_name(person.get("first_name"), person.get("last_name")), data["role"], at,
         )  # fmt: skip
     elif kind == "organizationMembership.deleted":
         await call(
-            "select app.identity_remove_membership(%s, %s)",
+            "select app.identity_remove_membership(%s, %s, %s)",
             data["organization"]["id"],
             data["public_user_data"]["user_id"],
+            at,
         )
     elif kind == "organizationInvitation.created":
         await call(
-            "select app.identity_invite(%s, %s, %s, %s)",
+            "select app.identity_invite(%s, %s, %s, %s, %s)",
             data["organization_id"],
             data["email_address"],
             data["role"],
             None,
+            at,
         )
     elif kind == "organizationInvitation.revoked":
         await call(
-            "select app.identity_revoke_invitation(%s, %s)", data["organization_id"], data["email_address"]
+            "select app.identity_revoke_invitation(%s, %s, %s)",
+            data["organization_id"],
+            data["email_address"],
+            at,
         )
     else:
         # organizationInvitation.accepted is followed by organizationMembership.created.

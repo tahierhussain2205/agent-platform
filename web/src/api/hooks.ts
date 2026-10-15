@@ -1,0 +1,188 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback } from 'react'
+import { useAuth } from '../auth/context'
+import { ApiRequestError, apiFetch } from './client'
+
+const LAGGING_MEMBERSHIP = ['not_a_member', 'membership_pending']
+
+export type Privilege = 'admin' | 'user'
+export type Tier = 'fast' | 'standard' | 'advanced'
+
+export interface RoleRef {
+  id: string
+  title: string
+  primary: boolean
+}
+
+export interface Me {
+  user: { id: string; email: string; name: string | null }
+  org: { id: string; name: string }
+  membership: {
+    id: string
+    privilege: Privilege
+    roles: { id: string; title: string; is_primary: boolean }[]
+  }
+}
+
+export interface OrgOverview {
+  org: {
+    id: string
+    name: string
+    clerk_org_id: string
+    status: string
+    plan: string
+    region: string
+    created_at: string
+  }
+  counts: {
+    members: number
+    admins: number
+    invited: number
+    roles: number
+    allowlisted_channels: number
+    active_schedules: number
+  }
+  workspace: { name: string; external_id: string; status: string } | null
+}
+
+export interface Member {
+  id: string
+  email: string
+  name: string | null
+  privilege: Privilege
+  status: 'active' | 'invited' | 'removed'
+  joined_at: string | null
+  created_at: string
+  signed_up: boolean
+  slack_linked: boolean
+  roles: RoleRef[]
+}
+
+export interface Role {
+  id: string
+  title: string
+  description: string
+  status: 'active' | 'archived'
+  members: number
+  primary_for: number
+  created_at: string
+}
+
+export interface OrgSettings {
+  default_model_tier: Tier
+  allowed_model_tiers: Tier[]
+  user_daily_token_limit: number | null
+  org_monthly_token_limit: number | null
+  max_concurrent_tasks: number
+  max_schedules: number
+  retention_days: number
+  display_settings: Record<string, unknown>
+  updated_at: string
+}
+
+export interface AuditEntry {
+  id: string
+  occurred_at: string
+  actor_type: 'user' | 'agent' | 'system'
+  actor_email: string | null
+  action: string
+  target: string | null
+  decision: 'allowed' | 'denied' | 'info'
+  reason: string | null
+  metadata: Record<string, unknown>
+}
+
+/** fetch bound to the current session token. */
+export function useApi() {
+  const { getToken } = useAuth()
+  return useCallback(
+    <T>(path: string, init?: RequestInit) => apiFetch<T>(getToken, path, init),
+    [getToken],
+  )
+}
+
+function useOrgKey() {
+  return useAuth().activeOrgId ?? 'none'
+}
+
+export function useMe() {
+  const api = useApi()
+  const auth = useAuth()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'me'],
+    queryFn: () => api<Me>('/api/me'),
+    // Right after signing up or accepting an invitation, the identity provider's webhook may not
+    // have reached the API yet: retry those answers for a few seconds before showing "no access".
+    retry: (count, error) =>
+      error instanceof ApiRequestError && LAGGING_MEMBERSHIP.includes(error.code) && count < 8,
+    retryDelay: 1000,
+    // Only once signed in with an active org; otherwise there is no token to send.
+    enabled: auth.status === 'signed_in' && auth.activeOrgId !== null,
+  })
+}
+
+export function useOrgOverview() {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({ queryKey: [org, 'org'], queryFn: () => api<OrgOverview>('/api/org') })
+}
+
+export function useMembers() {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({ queryKey: [org, 'members'], queryFn: () => api<Member[]>('/api/members') })
+}
+
+export function useRoles(includeArchived = false) {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'roles', includeArchived],
+    queryFn: () => api<Role[]>(`/api/roles${includeArchived ? '?include_archived=true' : ''}`),
+  })
+}
+
+export function useSettings() {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({ queryKey: [org, 'settings'], queryFn: () => api<OrgSettings>('/api/settings') })
+}
+
+export function useAudit(filters: {
+  action?: string
+  decision?: string
+  actorType?: string
+  before?: string
+}) {
+  const api = useApi()
+  const org = useOrgKey()
+  const params = new URLSearchParams({ limit: '25' })
+  if (filters.action) params.set('action', filters.action)
+  if (filters.decision) params.set('decision', filters.decision)
+  if (filters.actorType) params.set('actor_type', filters.actorType)
+  if (filters.before) params.set('before', filters.before)
+  return useQuery({
+    queryKey: [org, 'audit', params.toString()],
+    queryFn: () =>
+      api<{ items: AuditEntry[]; next_before: string | null }>(`/api/audit?${params.toString()}`),
+  })
+}
+
+/** A mutation that refreshes the given query groups when it succeeds. */
+export function useApiMutation<TInput, TOutput = unknown>(
+  request: (api: ReturnType<typeof useApi>, input: TInput) => Promise<TOutput>,
+  invalidate: string[],
+) {
+  const api = useApi()
+  const client = useQueryClient()
+  const org = useOrgKey()
+  return useMutation({
+    mutationFn: (input: TInput) => request(api, input),
+    onSuccess: async () => {
+      await Promise.all(invalidate.map((key) => client.invalidateQueries({ queryKey: [org, key] })))
+    },
+  })
+}
+
+export const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) })

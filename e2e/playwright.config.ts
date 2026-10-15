@@ -3,7 +3,9 @@ import { defineConfig, devices } from '@playwright/test'
 // Runs against the local stack started with `make dev`.
 export default defineConfig({
   testDir: './tests',
-  timeout: 30_000,
+  globalSetup: './global-setup.ts',
+  timeout: 60_000,
+  expect: { timeout: 10_000 },
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,

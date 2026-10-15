@@ -87,8 +87,22 @@ end $$;
 
 /* ---------------------------------------------------------------- memberships */
 
+-- Webhooks can arrive late or out of order (and the console mirrors its own changes before the
+-- webhook for them arrives). Each membership remembers when its identity state last changed;
+-- an event older than that is stale and ignored, so a late "invitation created" cannot undo a
+-- revocation that already happened.
+alter table app.org_memberships add column identity_event_at timestamptz;
+
+create function app.identity_is_stale(p_org uuid, p_user uuid, p_event_at timestamptz)
+returns boolean
+language sql stable as $$
+  select exists (select 1 from app.org_memberships
+                  where org_id = p_org and user_id = p_user and identity_event_at > p_event_at)
+$$;
+
 create function app.identity_upsert_membership(
-  p_clerk_org_id text, p_org_name text, p_clerk_user_id text, p_email text, p_name text, p_clerk_role text)
+  p_clerk_org_id text, p_org_name text, p_clerk_user_id text, p_email text, p_name text, p_clerk_role text,
+  p_event_at timestamptz default now())
 returns uuid
 language plpgsql security definer set search_path = app, pg_temp as $$
 declare
@@ -98,11 +112,15 @@ declare
   v_id uuid;
   v_before text;
 begin
+  if app.identity_is_stale(v_org, v_user, p_event_at) then
+    select id into v_id from app.org_memberships where org_id = v_org and user_id = v_user;
+    return v_id;
+  end if;
   select status || ':' || privilege into v_before from app.org_memberships where org_id = v_org and user_id = v_user;
-  insert into app.org_memberships (org_id, user_id, privilege, status)
-  values (v_org, v_user, v_privilege, 'active')
+  insert into app.org_memberships (org_id, user_id, privilege, status, identity_event_at)
+  values (v_org, v_user, v_privilege, 'active', p_event_at)
   on conflict (org_id, user_id) do update
-     set privilege = excluded.privilege, status = 'active'
+     set privilege = excluded.privilege, status = 'active', identity_event_at = excluded.identity_event_at
   returning id into v_id;
   if v_before is distinct from 'active:' || v_privilege then
     perform app.identity_audit(v_org, 'identity.membership_active', p_email,
@@ -112,7 +130,9 @@ begin
 end $$;
 
 -- An invitation: the person exists from now on (Slack email matching works before signup).
-create function app.identity_invite(p_clerk_org_id text, p_email text, p_clerk_role text, p_invited_by_clerk_user_id text)
+create function app.identity_invite(
+  p_clerk_org_id text, p_email text, p_clerk_role text, p_invited_by_clerk_user_id text,
+  p_event_at timestamptz default now())
 returns uuid
 language plpgsql security definer set search_path = app, pg_temp as $$
 declare
@@ -134,84 +154,103 @@ begin
   if not found then
     insert into app.users (email) values (p_email) returning id into v_user;
   end if;
+  if app.identity_is_stale(v_org, v_user, p_event_at) then
+    select id into v_id from app.org_memberships where org_id = v_org and user_id = v_user;
+    return v_id;
+  end if;
   select m.id into v_inviter
     from app.org_memberships m join app.users u on u.id = m.user_id
    where m.org_id = v_org and u.clerk_user_id = p_invited_by_clerk_user_id;
 
-  insert into app.org_memberships (org_id, user_id, privilege, status, invited_by)
-  values (v_org, v_user, v_privilege, 'invited', v_inviter)
+  insert into app.org_memberships (org_id, user_id, privilege, status, invited_by, identity_event_at)
+  values (v_org, v_user, v_privilege, 'invited', v_inviter, p_event_at)
   on conflict (org_id, user_id) do update
      set status     = case when app.org_memberships.status = 'removed' then 'invited' else app.org_memberships.status end,
          privilege  = case when app.org_memberships.status = 'active' then app.org_memberships.privilege else excluded.privilege end,
          invited_by = case when app.org_memberships.status = 'active' then app.org_memberships.invited_by
-                           else coalesce(excluded.invited_by, app.org_memberships.invited_by) end
+                           else coalesce(excluded.invited_by, app.org_memberships.invited_by) end,
+         identity_event_at = case when app.org_memberships.status = 'active' then app.org_memberships.identity_event_at
+                                  else excluded.identity_event_at end
   returning id into v_id;
   perform app.identity_audit(v_org, 'identity.invited', p_email, jsonb_build_object('privilege', v_privilege));
   return v_id;
 end $$;
 
+-- The next three functions lock the membership, ignore stale events, and otherwise always advance
+-- identity_event_at, even when the event confirms the current state: a later stale event must
+-- not slip in under an older stamp.
+
 -- Returns the membership id, or null when there is no such (non removed) membership.
-create function app.identity_set_privilege(p_clerk_org_id text, p_clerk_user_id text, p_clerk_role text)
+create function app.identity_set_privilege(
+  p_clerk_org_id text, p_clerk_user_id text, p_clerk_role text, p_event_at timestamptz default now())
 returns uuid
 language plpgsql security definer set search_path = app, pg_temp as $$
 declare
-  v_id uuid;
-  v_org uuid;
   v_privilege text := app.identity_privilege(p_clerk_role);
+  v_member record;
 begin
-  update app.org_memberships m
-     set privilege = v_privilege
-    from app.orgs o, app.users u
-   where o.clerk_org_id = p_clerk_org_id and u.clerk_user_id = p_clerk_user_id
-     and m.org_id = o.id and m.user_id = u.id and m.status <> 'removed'
-     and m.privilege <> v_privilege
-  returning m.id, m.org_id into v_id, v_org;
-  if v_id is not null then
-    perform app.identity_audit(v_org, 'identity.privilege_changed', p_clerk_user_id, jsonb_build_object('privilege', v_privilege));
-    return v_id;
-  end if;
-  select m.id into v_id
+  select m.id, m.org_id, m.privilege, m.identity_event_at into v_member
     from app.org_memberships m join app.orgs o on o.id = m.org_id join app.users u on u.id = m.user_id
-   where o.clerk_org_id = p_clerk_org_id and u.clerk_user_id = p_clerk_user_id and m.status <> 'removed';
-  return v_id;
+   where o.clerk_org_id = p_clerk_org_id and u.clerk_user_id = p_clerk_user_id and m.status <> 'removed'
+     for update of m;
+  if not found then
+    return null;
+  end if;
+  if v_member.identity_event_at > p_event_at then
+    return v_member.id;
+  end if;
+  update app.org_memberships set privilege = v_privilege, identity_event_at = p_event_at where id = v_member.id;
+  if v_member.privilege <> v_privilege then
+    perform app.identity_audit(v_member.org_id, 'identity.privilege_changed', p_clerk_user_id,
+                               jsonb_build_object('privilege', v_privilege));
+  end if;
+  return v_member.id;
 end $$;
 
-create function app.identity_remove_membership(p_clerk_org_id text, p_clerk_user_id text)
+create function app.identity_remove_membership(
+  p_clerk_org_id text, p_clerk_user_id text, p_event_at timestamptz default now())
 returns uuid
 language plpgsql security definer set search_path = app, pg_temp as $$
 declare
-  v_id uuid;
-  v_org uuid;
+  v_member record;
 begin
-  update app.org_memberships m
-     set status = 'removed'
-    from app.orgs o, app.users u
+  select m.id, m.org_id, m.status, m.identity_event_at into v_member
+    from app.org_memberships m join app.orgs o on o.id = m.org_id join app.users u on u.id = m.user_id
    where o.clerk_org_id = p_clerk_org_id and u.clerk_user_id = p_clerk_user_id
-     and m.org_id = o.id and m.user_id = u.id and m.status <> 'removed'
-  returning m.id, m.org_id into v_id, v_org;
-  if v_id is not null then
-    perform app.identity_audit(v_org, 'identity.membership_removed', p_clerk_user_id);
+     for update of m;
+  if not found then
+    return null;
   end if;
-  return v_id;
+  if v_member.identity_event_at > p_event_at then
+    return v_member.id;
+  end if;
+  update app.org_memberships set status = 'removed', identity_event_at = p_event_at where id = v_member.id;
+  if v_member.status <> 'removed' then
+    perform app.identity_audit(v_member.org_id, 'identity.membership_removed', p_clerk_user_id);
+  end if;
+  return v_member.id;
 end $$;
 
-create function app.identity_revoke_invitation(p_clerk_org_id text, p_email text)
+create function app.identity_revoke_invitation(
+  p_clerk_org_id text, p_email text, p_event_at timestamptz default now())
 returns uuid
 language plpgsql security definer set search_path = app, pg_temp as $$
 declare
-  v_id uuid;
-  v_org uuid;
+  v_member record;
 begin
-  update app.org_memberships m
-     set status = 'removed'
-    from app.orgs o, app.users u
+  select m.id, m.org_id, m.status, m.identity_event_at into v_member
+    from app.org_memberships m join app.orgs o on o.id = m.org_id join app.users u on u.id = m.user_id
    where o.clerk_org_id = p_clerk_org_id and lower(u.email) = lower(p_email)
-     and m.org_id = o.id and m.user_id = u.id and m.status = 'invited'
-  returning m.id, m.org_id into v_id, v_org;
-  if v_id is not null then
-    perform app.identity_audit(v_org, 'identity.invitation_revoked', p_email);
+     for update of m;
+  if not found or v_member.identity_event_at > p_event_at or v_member.status = 'active' then
+    return null;  -- unknown, stale, or already joined (an accepted invitation is not revoked)
   end if;
-  return v_id;
+  update app.org_memberships set status = 'removed', identity_event_at = p_event_at where id = v_member.id;
+  if v_member.status = 'invited' then
+    perform app.identity_audit(v_member.org_id, 'identity.invitation_revoked', p_email);
+    return v_member.id;
+  end if;
+  return null;
 end $$;
 
 -- Clerk deleted the user: disable them and remove their memberships. A membership that is an
@@ -287,13 +326,14 @@ $$;
 
 revoke all on function
   app.identity_audit(uuid, text, text, jsonb),
+  app.identity_is_stale(uuid, uuid, timestamptz),
   app.identity_upsert_org(text, text),
   app.identity_upsert_user(text, text, text),
-  app.identity_upsert_membership(text, text, text, text, text, text),
-  app.identity_invite(text, text, text, text),
-  app.identity_set_privilege(text, text, text),
-  app.identity_remove_membership(text, text),
-  app.identity_revoke_invitation(text, text),
+  app.identity_upsert_membership(text, text, text, text, text, text, timestamptz),
+  app.identity_invite(text, text, text, text, timestamptz),
+  app.identity_set_privilege(text, text, text, timestamptz),
+  app.identity_remove_membership(text, text, timestamptz),
+  app.identity_revoke_invitation(text, text, timestamptz),
   app.identity_disable_user(text),
   app.identity_offboard_org(text),
   app.resolve_console_identity(text, text),
@@ -303,11 +343,11 @@ from public;
 grant execute on function
   app.identity_upsert_org(text, text),
   app.identity_upsert_user(text, text, text),
-  app.identity_upsert_membership(text, text, text, text, text, text),
-  app.identity_invite(text, text, text, text),
-  app.identity_set_privilege(text, text, text),
-  app.identity_remove_membership(text, text),
-  app.identity_revoke_invitation(text, text),
+  app.identity_upsert_membership(text, text, text, text, text, text, timestamptz),
+  app.identity_invite(text, text, text, text, timestamptz),
+  app.identity_set_privilege(text, text, text, timestamptz),
+  app.identity_remove_membership(text, text, timestamptz),
+  app.identity_revoke_invitation(text, text, timestamptz),
   app.identity_disable_user(text),
   app.identity_offboard_org(text)
 to app_identity_sync;

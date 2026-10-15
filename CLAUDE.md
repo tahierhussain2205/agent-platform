@@ -18,7 +18,8 @@ A multi tenant AI agent that works as a teammate inside Slack. Each customer is 
 | Temporal workers (agent tasks, schedules, approvals) | `backend/app/` `worker` command |
 | Maintenance jobs (partitions, retention, reconciliation) | `backend/app/` `maintenance` command |
 | SQL migrations | `backend/migrations/NNN_*.sql` |
-| Admin console | `web/` (React, TypeScript, Vite) |
+| Admin console | `web/` (React, TypeScript, Vite, React Router, TanStack Query, Tailwind) |
+| Local SaaS stand-ins (Clerk, later Slack, Jira, ...) | `fakes/` (own image, Compose only, never deployed) |
 
 **One image, many commands.** `backend/Dockerfile` builds one image; `app <api|worker|maintenance|migrate|seed|check>` (console script, same as `python -m app`) selects the process. The image has no `ENTRYPOINT`; `CMD` is `app api` and every caller passes a full command. On Render ([render.yaml](render.yaml), runbook [docs/runbooks/deploy.md](docs/runbooks/deploy.md)): `api-staging` web service (migrations in `preDeployCommand`), `worker-staging` background worker, `maintenance-staging` cron job, `web-staging` static site, `db-staging` Render Postgres (PgBouncer pool), `kv-staging` Render Key Value. Production is an empty project until phase 13.
 
@@ -55,12 +56,13 @@ A change never weakens one of these to make something work. If an invariant bloc
 | `make test-stack` | `dev` + every stack level check |
 | `make render-sim` | Execute `render.yaml` locally with Docker the way Render would |
 | `make maintenance` | Run the maintenance jobs once (partitions; later reconciliation, retention) |
+| `make test-fakes` | Tests of the SaaS stand-ins |
 | `make test-mutations` | Weaken each DB guarantee in turn; the schema suite must catch every one |
 
 Backend only: `cd backend && uv run pytest -k name`, `uv run python -m app api`.
 Web only: `pnpm --dir web dev`.
 
-Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173, Temporal UI http://localhost:8233,
+Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173 (seeded accounts: alice@acme.test, bob@acme.test, frank@both.test, dave@globex.test; password `password123`), fakes http://localhost:4100 (Clerk stand-in at `/clerk`, test admin at `/_admin`), Temporal UI http://localhost:8233,
 Jaeger http://localhost:16686, Postgres `localhost:55432` (postgres/postgres, db `agent`), PgBouncer `localhost:56432`,
 Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 
@@ -80,7 +82,11 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - **Tracing**: binding a unit of work tags spans with `tenant.id` automatically; spans never include SQL parameters or query strings.
 - **Secrets at rest**: `Envelope.seal(org_id, plaintext, context="<table>:<row id>")`; store `ciphertext` and `kms_key_id`. Never put plaintext secrets in the database, logs or model context.
 - **Object storage**: `ObjectStore.put(org_id, kind, data)` returns the `storage_ref`; reads and deletes need the same org id.
-- **Key Value**: build tenant keys with `kv.tenant_key(org_id, ...)`; `kv.global_key` only for data that is not tenant scoped. New tables need explicit grants and, if tenant scoped, the `tenant_isolation` policy and composite `(org_id, id)` foreign keys. Migrations must be safe to run against the previous code version.
+- **Key Value**: build tenant keys with `kv.tenant_key(org_id, ...)`; `kv.global_key` only for data that is not tenant scoped.
+- **Console routes**: depend on `console_identity` (any active member) or `require_admin`; both bind the unit of work to the verified org. Privilege always comes from our database. Every mutation writes an audit row (`app/api/console/common.audit`).
+- **Identity changes** (invite, privilege, removal) go to Clerk: apply through the identity function in an `identity_tx`, call Clerk inside it, commit only if Clerk succeeded. Never write `org_memberships` from request code.
+- **Identity functions** take the event time; events older than a membership's `identity_event_at` are ignored (webhooks arrive late or out of order).
+- **External service stand-ins** live in `fakes/` and mirror the real HTTP API shapes; code under test only sees base URLs. Update the stand-in when the code starts using another endpoint. New tables need explicit grants and, if tenant scoped, the `tenant_isolation` policy and composite `(org_id, id)` foreign keys. Migrations must be safe to run against the previous code version.
 - **Adding a tool adapter**: arrives in phase 8.
 - **Adding a playbook**: arrives in phase 7.
 - **Web**: TypeScript strict, ESLint + Prettier, components in `PascalCase.tsx`, tests next to code as `*.test.tsx`.
@@ -122,3 +128,8 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - Tracing is configured once per process (`configure_tracing` is idempotent); tests configure it first in `tests/conftest.py` with an in-memory exporter (`SPANS`).
 - Use `httpx.ASGITransport(app=..., raise_app_exceptions=False)` in API tests, or unhandled exceptions are re-raised instead of returning the 500 the server would send.
 - Jaeger v2 dropped the legacy `/api/traces` query API; use `/api/v3/traces/<trace id>`.
+- `app.model_tier[]` is a domain array psycopg returns as a string: select it as `::text[]`.
+- `pydantic.EmailStr` rejects reserved domains such as `.test`; the console validates emails with a plain pattern.
+- Clerk Core 3 (`@clerk/react` v6) removed `SignedIn`/`SignedOut`; the console uses `useAuth()` state.
+- Webhook lag: right after signup or accepting an invitation `/api/me` can answer `not_a_member` for a moment; the console retries those codes for a few seconds.
+- Playwright `globalSetup` resets the Clerk stand-in (`POST /_admin/reset`, signing key kept) and re-runs the seed; e2e tests use unique emails and org names.

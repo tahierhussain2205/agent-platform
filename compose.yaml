@@ -32,6 +32,13 @@ x-backend: &backend
     S3_BUCKET: artifacts
     S3_ACCESS_KEY_ID: local-access-key
     S3_SECRET_ACCESS_KEY: local-secret-key
+    # Clerk stand-in (fakes service). Real Clerk: issuer = Frontend API URL, JWKS from it.
+    CONSOLE_ORIGINS: http://localhost:5173
+    CLERK_ISSUER: http://localhost:4100/clerk
+    CLERK_JWKS_URL: http://fakes:4100/clerk/.well-known/jwks.json
+    CLERK_API_URL: http://fakes:4100/clerk/v1
+    CLERK_SECRET_KEY: sk_test_local
+    CLERK_WEBHOOK_SECRET: whsec_bG9jYWwtY2xlcmstd2ViaG9vay1zZWNyZXQtMDAwMQ==
   restart: "no"
 
 services:
@@ -112,6 +119,28 @@ services:
     image: jaegertracing/jaeger:latest
     ports: ["16686:16686", "4317:4317", "4318:4318"]
 
+  # Local stand-ins for external SaaS (Clerk for now). Never deployed.
+  fakes:
+    build:
+      context: ./fakes
+    image: agentplatform-fakes:local
+    environment:
+      CONSOLE_ORIGINS: http://localhost:5173
+      CLERK_ISSUER: http://localhost:4100/clerk
+      CLERK_SECRET_KEY: sk_test_local
+      CLERK_WEBHOOK_URL: http://api:8000/webhooks/clerk
+      CLERK_WEBHOOK_SECRET: whsec_bG9jYWwtY2xlcmstd2ViaG9vay1zZWNyZXQtMDAwMQ==
+      FAKES_SEED_FIXTURE: /seed/fixture.json
+    ports: ["4100:4100"]
+    volumes:
+      - fakesdata:/data
+      - ./backend/app/seed/fixture.json:/seed/fixture.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4100/healthz', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
   # ------------------------------------------------------------------ one shot jobs
 
   # Mirrors Render's preDeployCommand: the API only starts after migrations succeed.
@@ -172,6 +201,8 @@ services:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
       CI: "1"
       npm_config_store_dir: /pnpm-store
+      VITE_API_URL: http://localhost:8000
+      VITE_DEV_AUTH_URL: http://localhost:4100/clerk
     ports: ["5173:5173"]
     volumes:
       - ./web:/app
@@ -184,6 +215,7 @@ services:
       retries: 60
 
 volumes:
+  fakesdata:
   pgdata:
   temporaldata:
   objectdata:

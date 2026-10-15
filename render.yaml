@@ -130,6 +130,17 @@ projects:
               # OTLP/HTTP collector; empty until the tracing backend is chosen (phase 7).
               - key: OTEL_EXPORTER_OTLP_ENDPOINT
                 sync: false
+              # Clerk: issuer = the instance's Frontend API URL; JWKS from it (or /v1/jwks).
+              - key: CONSOLE_ORIGINS
+                sync: false
+              - key: CLERK_ISSUER
+                sync: false
+              - key: CLERK_JWKS_URL
+                sync: false
+              - key: CLERK_SECRET_KEY
+                sync: false
+              - key: CLERK_WEBHOOK_SECRET
+                sync: false
 
           # Temporal workers: agent tasks, schedules, approvals.
           - type: worker
@@ -251,6 +262,9 @@ projects:
               # Public URL of api-staging; a Blueprint cannot reference another web service's
               # public URL, so it is entered once in the dashboard.
               - key: VITE_API_URL
+                sync: false
+              # Clerk publishable key: switches the console from the dev sign in to Clerk.
+              - key: VITE_CLERK_PUBLISHABLE_KEY
                 sync: false
 
           # Redis compatible store: dedupe keys, locks, rate counters, membership cache.

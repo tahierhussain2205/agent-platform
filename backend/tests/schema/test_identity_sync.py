@@ -315,3 +315,49 @@ def test_identity_sync_cannot_call_internal_audit_helper(world: World) -> None:
 def test_console_resolvers_are_for_the_api_only(world: World, role: str) -> None:
     with tx(world.url, role) as conn, pytest.raises(psycopg.errors.InsufficientPrivilege):
         conn.execute("select * from app.resolve_console_identity('user_alice', 'org_acme')")
+
+
+# ------------------------------------------------------------------ out of order events
+
+
+def test_a_late_invitation_event_cannot_undo_a_revocation(world: World) -> None:
+    with tx(world.url, SYNC) as conn:
+        conn.execute(
+            "select app.identity_invite('org_acme', 'late@acme.test', 'org:member', null, now() - interval '10 seconds')"
+        )
+        conn.execute("select app.identity_revoke_invitation('org_acme', 'late@acme.test', now())")
+        # The original "created" event arrives again (Svix retry) or late: older than the revocation.
+        conn.execute(
+            "select app.identity_invite('org_acme', 'late@acme.test', 'org:member', null, now() - interval '10 seconds')"
+        )
+        assert membership(conn, "org_acme", "late@acme.test")[0] == "removed"  # type: ignore[index]
+        # A genuinely new invitation (newer event) is applied.
+        conn.execute(
+            "select app.identity_invite('org_acme', 'late@acme.test', 'org:admin', null, now() + interval '1 second')"
+        )
+        assert membership(conn, "org_acme", "late@acme.test")[:2] == ("invited", "admin")  # type: ignore[index]
+
+
+def test_stale_membership_events_are_ignored(world: World) -> None:
+    with tx(world.url, SYNC) as conn:
+        conn.execute("select app.identity_remove_membership('org_acme', 'user_bob', now())")
+        stale = "now() - interval '5 seconds'"
+        conn.execute(
+            f"select app.identity_upsert_membership('org_acme', 'Acme Corp', 'user_bob', 'bob@acme.test', 'Bob', 'org:member', {stale})"
+        )
+        assert membership(conn, "org_acme", "bob@acme.test")[0] == "removed"  # type: ignore[index]
+        conn.execute(f"select app.identity_set_privilege('org_acme', 'user_quinn', 'org:admin', {stale})")
+        conn.execute("select app.identity_set_privilege('org_acme', 'user_quinn', 'org:admin', now())")
+        conn.execute(f"select app.identity_set_privilege('org_acme', 'user_quinn', 'org:member', {stale})")
+        # The older demotion lost.
+        assert membership(conn, "org_acme", "quinn@acme.test")[1] == "admin"  # type: ignore[index]
+        conn.execute(f"select app.identity_remove_membership('org_acme', 'user_quinn', {stale})")
+        assert membership(conn, "org_acme", "quinn@acme.test")[0] == "active"  # type: ignore[index]
+
+
+def test_the_staleness_helper_is_internal(world: World) -> None:
+    with (
+        tx(world.url, "app_user", world.acme.id) as conn,
+        pytest.raises(psycopg.errors.InsufficientPrivilege),
+    ):
+        conn.execute("select app.identity_is_stale(gen_random_uuid(), gen_random_uuid(), now())")

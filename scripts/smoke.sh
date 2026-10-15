@@ -45,7 +45,7 @@ echo "s3.bucket.list" | docker compose exec -T objectstore weed shell 2>/dev/nul
 psql_q() { docker compose exec -T postgres psql -U postgres -d agent -tAc "$1"; }
 [[ $(psql_q "select count(*) from public.schema_migrations where version = '001'") == 1 ]] \
   && pass "migration 001 recorded" || fail "migration 001 not recorded"
-[[ $(psql_q "select string_agg(name, ',' order by name) from app.orgs") == "Acme Corp,Globex Inc" ]] \
+[[ $(psql_q "select count(*) from app.orgs where clerk_org_id in ('org_acme', 'org_globex')") == 2 ]] \
   && pass "seed orgs present" || fail "seed orgs missing"
 
 echo "All smoke checks passed"

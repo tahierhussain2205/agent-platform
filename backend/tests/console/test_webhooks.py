@@ -343,3 +343,24 @@ async def _kv_up() -> bool:
         return False
     finally:
         await client.aclose()
+
+
+async def test_a_late_event_does_not_resurrect_a_revoked_invitation(
+    console: httpx.AsyncClient, module_world: World
+) -> None:
+    email = f"late-{uuid.uuid4().hex[:6]}@acme.test"
+    created = invitation_event("organizationInvitation.created", "org_acme", email)
+    created["timestamp"] = int(time.time() * 1000) - 5_000
+    revoked = invitation_event("organizationInvitation.revoked", "org_acme", email)
+    revoked["timestamp"] = int(time.time() * 1000)
+    await send(console, created)
+    await send(console, revoked)
+    # Svix delivers the creation again (a retry with a new message id), after the revocation.
+    assert (await send(console, created)).status_code == 200
+    assert member_state(module_world, "org_acme", email)[0] == "removed"
+
+
+async def test_oversized_payloads_are_refused_before_verification(console: httpx.AsyncClient) -> None:
+    body, headers = signed({"type": "user.created", "data": {"padding": "x" * (1024 * 1024 + 10)}})
+    response = await console.post("/webhooks/clerk", content=body, headers=headers)
+    assert response.status_code == 413

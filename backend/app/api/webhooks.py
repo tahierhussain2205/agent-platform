@@ -15,6 +15,7 @@ from app.settings import get_settings
 log = logging.getLogger(__name__)
 router = APIRouter()
 
+MAX_BODY_BYTES = 1024 * 1024  # Clerk events are a few KB; refuse anything absurd before reading it
 PROCESSING_TTL = 60  # a delivery in flight; a concurrent retry is told to come back later
 DONE_TTL = 24 * 3600  # Svix retries for about a day
 
@@ -22,7 +23,16 @@ DONE_TTL = 24 * 3600  # Svix retries for about a day
 @router.post("/webhooks/clerk", include_in_schema=False)
 async def clerk_webhook(request: Request) -> JSONResponse:
     res = resources(request)
+    declared = request.headers.get("content-length")
+    if declared is not None and (not declared.isdigit() or int(declared) > MAX_BODY_BYTES):
+        return JSONResponse(
+            {"error": {"code": "too_large", "message": "Payload too large."}}, status_code=413
+        )
     body = await request.body()
+    if len(body) > MAX_BODY_BYTES:
+        return JSONResponse(
+            {"error": {"code": "too_large", "message": "Payload too large."}}, status_code=413
+        )
     headers = request.headers
     try:
         svix.verify(

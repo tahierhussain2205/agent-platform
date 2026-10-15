@@ -7,6 +7,7 @@ unexport VIRTUAL_ENV
 export COREPACK_ENABLE_DOWNLOAD_PROMPT := 0
 
 UV  := cd backend && uv run
+FAKES := cd fakes && uv run
 WEB := pnpm --dir web
 E2E := pnpm --dir e2e
 
@@ -17,6 +18,7 @@ help: ## Show this help
 .PHONY: install
 install: ## Install backend and web dependencies
 	cd backend && uv sync --frozen
+	cd fakes && uv sync --frozen
 	$(WEB) install --frozen-lockfile
 	$(E2E) install --frozen-lockfile
 	$(E2E) exec playwright install chromium
@@ -31,6 +33,8 @@ hooks: ## Install the git commit hooks
 lint: ## Lint and format-check backend and web
 	$(UV) ruff check . ../scripts
 	$(UV) ruff format --check . ../scripts
+	$(FAKES) ruff check .
+	$(FAKES) ruff format --check .
 	$(WEB) lint
 	$(WEB) format:check
 
@@ -38,18 +42,25 @@ lint: ## Lint and format-check backend and web
 fmt: ## Format backend and web
 	$(UV) ruff check --fix . ../scripts
 	$(UV) ruff format . ../scripts
+	$(FAKES) ruff check --fix .
+	$(FAKES) ruff format .
 	$(WEB) format
 
 .PHONY: typecheck
 typecheck: ## Type check backend (mypy) and web (tsc)
 	$(UV) mypy app tests
+	$(FAKES) mypy fakes
 	$(WEB) typecheck
 	$(E2E) exec tsc --noEmit -p .
 
 ## ---------------------------------------------------------------- tests
 
 .PHONY: test
-test: test-backend test-web ## Run all unit and integration tests
+test: test-backend test-fakes test-web ## Run all unit and integration tests
+
+.PHONY: test-fakes
+test-fakes: ## Run the SaaS stand-in tests
+	$(FAKES) pytest
 
 .PHONY: test-backend
 test-backend: infra ## Run backend tests (starts Postgres and Temporal first)
@@ -73,7 +84,7 @@ ci: lint typecheck test test-mutations build-web ## Run every CI step locally
 ## ---------------------------------------------------------------- local stack
 
 COMPOSE := docker compose
-INFRA   := postgres pgbouncer valkey temporal objectstore jaeger
+INFRA   := postgres pgbouncer valkey temporal objectstore jaeger fakes
 
 .PHONY: dev
 dev: ## Build and start the whole stack, wait until healthy

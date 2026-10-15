@@ -48,3 +48,12 @@ What each phase delivered. Decisions and blockers are in [spec/decisions_and_blo
 - Key Value helpers, shared Temporal client (tracing interceptor), envelope encryption with per tenant keys and rotation, tenant scoped object storage, `/readyz`.
 - Compose: PgBouncer (transaction mode, `auth_query`); API and worker connect through it. CI: PgBouncer, Valkey and SeaweedFS in the backend job.
 - Verified: 535 backend tests (unit of work suite runs both direct and through PgBouncer), smoke checks including `/readyz` through PgBouncer and the request's trace in Jaeger, `make render-sim` (readiness with generated credentials).
+
+## Phase 5: Identity and admin console foundations (done locally; staging and Clerk blocked by B-001, B-003)
+
+- Migration 002: identity sync functions (security definer, `app_identity_sync` only) with out of order protection (`identity_event_at`), console resolvers for `app_user`.
+- API: Clerk token verification, console identity (privilege from the database), Svix verified webhook sync with dedupe, Clerk Backend API client, console routes (me, orgs, org, members and invitations, roles and primary assignment, settings, audit, access requests), CORS, uniform error shape.
+- `fakes` service with a Clerk stand-in (Backend API, v2 tokens, JWKS, Svix webhooks with retries, dev sign in API).
+- Web console: dev and Clerk auth adapters, sign in/up, create org, invitations, overview, members, roles, settings, audit, org switcher, read only view for members.
+- Tests: 120+ new backend tests (identity functions, verifier attacks, webhooks, console API incl. Clerk failure rollback and last admin), 13 stand-in tests, 19 web unit tests, 11 Playwright end to end flows (signup to admin, invite and accept, promote/demote, last admin refused, removal, revoke, roles with primary, settings validation, audit, member view, org switcher).
+- Bugs found by testing and fixed: org name blanked by an upsert, late webhooks resurrecting revoked invitations, confirmations not advancing the event stamp, `httpx` missing from the runtime image, tier arrays returned as strings, the settings "saved" message lost on remount, a wasted unauthenticated `/api/me` call.
