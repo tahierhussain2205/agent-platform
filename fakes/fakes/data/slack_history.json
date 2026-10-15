@@ -1,0 +1,23 @@
+{
+  "T0ACME": {
+    "C0BUGS": [
+      {"user": "U0QUINN", "text": "Checkout fails with a 500 when the cart has more than 20 items. Started after this morning's deploy. Order IDs: 4411, 4413.", "minutes_ago": 300},
+      {"user": "U0BOB", "text": "Looking at logs: `TypeError: cannot read properties of undefined (reading 'price')` in cart-service, line 142.", "minutes_ago": 290, "reply_to": 0},
+      {"user": "U0ALICE", "text": "Customers in EU also report slow search since yesterday, p95 above 4s.", "minutes_ago": 200},
+      {"user": "U0QUINN", "text": "Login with SSO loops back to the sign in page on Safari 17. Repro: sign in with Okta, accept, lands on /login again.", "minutes_ago": 120},
+      {"user": "U0BOB", "text": "The checkout bug also happens with exactly 20 items, not only more than 20.", "minutes_ago": 60, "reply_to": 0}
+    ],
+    "C0GENERAL": [
+      {"user": "U0ALICE", "text": "Reminder: release freeze starts Thursday at 18:00 UTC.", "minutes_ago": 400},
+      {"user": "U0FRANKA", "text": "The staging database will be restarted tonight at 22:00 UTC for maintenance.", "minutes_ago": 100}
+    ],
+    "C0LEADS": [
+      {"user": "U0ALICE", "text": "Confidential: we are planning a reorg of the platform team next quarter.", "minutes_ago": 500}
+    ]
+  },
+  "T0GLOBEX": {
+    "C0GXINCIDENT": [
+      {"user": "U0DAVE", "text": "INC-17: payment webhooks delayed by 15 minutes, provider status page shows degraded.", "minutes_ago": 50}
+    ]
+  }
+}

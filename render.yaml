@@ -141,6 +141,19 @@ projects:
                 sync: false
               - key: CLERK_WEBHOOK_SECRET
                 sync: false
+              # Slack app (slack/manifest.yaml). API_PUBLIC_URL builds the OAuth redirect URL.
+              - key: API_PUBLIC_URL
+                sync: false
+              - key: CONSOLE_URL
+                sync: false
+              - key: SLACK_CLIENT_ID
+                sync: false
+              - key: SLACK_CLIENT_SECRET
+                sync: false
+              - key: SLACK_SIGNING_SECRET
+                sync: false
+              - key: SLACK_STATE_SECRET
+                generateValue: true
 
           # Temporal workers: agent tasks, schedules, approvals.
           - type: worker
@@ -171,6 +184,8 @@ projects:
                   property: connectionPoolString
               - key: WORKER_GRACEFUL_SHUTDOWN_SECONDS
                 value: 100
+              - key: CONSOLE_URL
+                sync: false
               - key: REDIS_URL
                 fromService:
                   type: keyvalue
@@ -213,6 +228,13 @@ projects:
             envVars:
               - fromGroup: backend-staging
               - fromGroup: db-maintenance-staging
+              # Starts Slack membership reconciliations through Temporal.
+              - key: TEMPORAL_ADDRESS
+                sync: false
+              - key: TEMPORAL_NAMESPACE
+                sync: false
+              - key: TEMPORAL_API_KEY
+                sync: false
               - key: DATABASE_URL
                 fromDatabase:
                   name: db-staging

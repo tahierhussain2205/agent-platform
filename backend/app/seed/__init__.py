@@ -2,8 +2,9 @@
 
 Runs as ``app_owner`` over the direct migration connection (the owner is not subject to RLS, which
 works whether or not managed Postgres allows BYPASSRLS), and is idempotent: every row is upserted
-by its natural key, so running it twice changes nothing. The same fixture feeds the local Clerk and
-Slack stand-ins, so people and channels line up.
+by its natural key, so running it twice changes nothing. Fixture orgs are put back to the fixture:
+members it does not declare are removed and pending access requests are dismissed. The same
+fixture feeds the local Clerk and Slack stand-ins, so people and channels line up.
 """
 
 import json
@@ -31,8 +32,14 @@ def _one(cur: psycopg.Cursor[Any], query: str, params: tuple[Any, ...]) -> UUID:
     return value
 
 
-def seed(database_url: str, fixture: dict[str, Any] | None = None) -> dict[str, UUID]:
-    """Load the fixture. Returns org key -> org id."""
+def local_bot_token(team_id: str) -> str:
+    """The bot token the local Slack stand-in issues for a seeded workspace."""
+    return f"xoxb-local-{team_id}"
+
+
+def seed(database_url: str, fixture: dict[str, Any] | None = None, envelope: Any = None) -> dict[str, UUID]:
+    """Load the fixture. Returns org key -> org id. With an envelope, the seeded workspaces also
+    get their Slack connection and (encrypted) bot token, so they work without the install flow."""
     data = fixture or load_fixture()
     org_ids: dict[str, UUID] = {}
     with psycopg.connect(database_url) as conn, conn.cursor() as cur:
@@ -63,6 +70,8 @@ def seed(database_url: str, fixture: dict[str, Any] | None = None) -> dict[str, 
             )
             org_ids[org["key"]] = org_id
             _seed_org(cur, org_id, org, user_ids)
+            if envelope is not None:
+                _seed_slack_connection(cur, envelope, org_id, org["workspace"]["external_id"])
 
         conn.commit()
     log.info("seeded %d orgs and %d users", len(org_ids), len(data["users"]))
@@ -149,6 +158,19 @@ def _seed_org(cur: psycopg.Cursor[Any], org_id: UUID, org: dict[str, Any], user_
                 (org_id, membership_id, workspace_id, member["slack_user_id"], member["email"]),
             )
 
+    # Back to the fixture: people added since (invited from the console or from Slack) are removed,
+    # and open access requests are dismissed, so a reseed gives tests a known starting point.
+    cur.execute(
+        "update app.org_memberships set status = 'removed' "
+        "where org_id = %s and status <> 'removed' and not (user_id = any(%s))",
+        (org_id, [user_ids[m["email"]] for m in org["members"]]),
+    )
+    cur.execute(
+        "update app.access_requests set status = 'dismissed', resolved_at = now() "
+        "where org_id = %s and status = 'pending'",
+        (org_id,),
+    )
+
     for channel in org["channels"]:
         channel_id = _one(
             cur,
@@ -224,3 +246,35 @@ def _seed_member_roles(
             """,
             (org_id, membership_id, role_ids[key], key == member["primary_role"]),
         )
+
+
+def _seed_slack_connection(cur: psycopg.Cursor[Any], envelope: Any, org_id: UUID, team_id: str) -> None:
+    cur.execute(
+        "insert into app.org_integrations (org_id, integration_key, kind, enabled) values (%s, 'slack', "
+        "'native', true) "
+        "on conflict (org_id, integration_key) do update set enabled = true",
+        (org_id,),
+    )
+    existing = cur.execute(
+        "select id from app.connections where org_id = %s and integration_key = 'slack' and scope = "
+        "'org' and status = 'active'",
+        (org_id,),
+    ).fetchone()
+    if existing:
+        connection_id = existing[0]
+    else:
+        connection_id = _one(
+            cur,
+            "insert into app.connections (org_id, integration_key, scope, external_account_id, "
+            "granted_scopes) "
+            "values (%s, 'slack', 'org', %s, %s) returning id",
+            (org_id, team_id, ["chat:write", "users:read", "users:read.email", "app_mentions:read"]),
+        )
+    sealed = envelope.seal(org_id, local_bot_token(team_id).encode(), f"connection_secrets:{connection_id}")
+    cur.execute(
+        "insert into app.connection_secrets (connection_id, org_id, ciphertext, kms_key_id) values (%s, "
+        "%s, %s, %s) "
+        "on conflict (connection_id) do update set ciphertext = excluded.ciphertext, kms_key_id = "
+        "excluded.kms_key_id",
+        (connection_id, org_id, sealed.ciphertext, sealed.kms_key_id),
+    )

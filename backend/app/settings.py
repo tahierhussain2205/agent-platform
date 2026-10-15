@@ -52,6 +52,19 @@ class Settings(BaseSettings):
     # Svix endpoint secret(s), "whsec_...", comma separated during rotation.
     clerk_webhook_secret: SecretStr | None = None
 
+    # Public URLs (OAuth redirects and links back to the console).
+    api_public_url: str = "http://localhost:8000"
+    console_url: str = "http://localhost:5173"
+
+    # Slack app (or the local stand-in).
+    slack_api_url: str = "https://slack.com/api"
+    slack_authorize_url: str = "https://slack.com/oauth/v2/authorize"
+    slack_client_id: str | None = None
+    slack_client_secret: SecretStr | None = None
+    slack_signing_secret: SecretStr | None = None
+    # Signs the OAuth `state` parameter (install flow).
+    slack_state_secret: SecretStr | None = None
+
     # Key Value (Redis compatible).
     redis_url: SecretStr | None = None
 
@@ -86,6 +99,9 @@ class Settings(BaseSettings):
         "clerk_jwks_url",
         "clerk_secret_key",
         "clerk_webhook_secret",
+        "slack_client_secret",
+        "slack_signing_secret",
+        "slack_state_secret",
         mode="before",
     )
     @classmethod

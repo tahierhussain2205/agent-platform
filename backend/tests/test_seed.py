@@ -186,3 +186,40 @@ def test_seed_refused_outside_local(
     monkeypatch.setenv("MIGRATION_DATABASE_URL", "postgresql://nobody@127.0.0.1:1/none")
     assert cli.main(["seed"]) == 2
     assert "refusing" in capsys.readouterr().err
+
+
+def test_reseed_puts_fixture_orgs_back(seeded_db: str) -> None:
+    """People invited since the last seed are removed and open access requests are dismissed, so
+    end to end runs start from the fixture. Declared members are untouched. (Runs last: it adds rows.)"""
+    acme = _org_id(seeded_db, "org_acme")
+    with psycopg.connect(seeded_db) as conn:
+        conn.execute("set role app_owner")
+        user = conn.execute(
+            "insert into app.users (email, name) values ('extra@acme.test', 'Extra') returning id"
+        ).fetchone()
+        assert user is not None
+        conn.execute(
+            "insert into app.org_memberships (org_id, user_id, status) values (%s, %s, 'invited')",
+            (acme, user[0]),
+        )
+        workspace = conn.execute("select id from app.workspaces where org_id = %s", (acme,)).fetchone()
+        assert workspace is not None
+        conn.execute(
+            "insert into app.access_requests (org_id, workspace_id, external_user_id, email) "
+            "values (%s, %s, 'U0MALLORY', 'mallory@acme.test')",
+            (acme, workspace[0]),
+        )
+        conn.commit()
+    seed(seeded_db)
+    with psycopg.connect(seeded_db) as conn:
+        statuses: dict[str, str] = dict(
+            conn.execute(
+                "select u.email, m.status from app.org_memberships m join app.users u on u.id = m.user_id "
+                "where m.org_id = %s",
+                (acme,),
+            ).fetchall()
+        )
+        pending = conn.execute("select count(*) from app.access_requests where status = 'pending'").fetchone()
+    assert statuses.pop("extra@acme.test") == "removed"
+    assert statuses == {m["email"]: m["status"] for m in FIXTURE["orgs"][0]["members"]}
+    assert pending == (0,)

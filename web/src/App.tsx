@@ -9,6 +9,7 @@ import { MembersPage } from './pages/Members'
 import { OverviewPage } from './pages/Overview'
 import { RolesPage } from './pages/Roles'
 import { SettingsPage } from './pages/Settings'
+import { SlackPage } from './pages/Slack'
 
 const clerkPages = () => import('./auth/ClerkPages')
 const ClerkSignIn = lazy(() => clerkPages().then((m) => ({ default: m.ClerkSignIn })))
@@ -49,6 +50,7 @@ const router = createBrowserRouter([
       { index: true, element: <OverviewPage /> },
       { path: 'members', element: <MembersPage /> },
       { path: 'roles', element: <RolesPage /> },
+      { path: 'slack', element: <SlackPage /> },
       {
         path: 'settings',
         element: (

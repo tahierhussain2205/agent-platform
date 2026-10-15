@@ -92,6 +92,39 @@ export interface AuditEntry {
   metadata: Record<string, unknown>
 }
 
+export interface SlackChannel {
+  id: string
+  external_id: string
+  name: string | null
+  is_private: boolean
+  is_allowlisted: boolean
+  bot_is_member: boolean
+  archived: boolean
+  members: number
+  schedules: number
+}
+
+export interface SlackStatus {
+  workspace: {
+    id: string
+    external_id: string
+    name: string | null
+    bot_user_id: string | null
+    installed_at: string
+  } | null
+  channels: SlackChannel[]
+  install_configured: boolean
+}
+
+export interface AccessRequest {
+  id: string
+  external_user_id: string
+  email: string | null
+  status: 'pending' | 'approved' | 'dismissed'
+  created_at: string
+  resolved_at: string | null
+}
+
 /** fetch bound to the current session token. */
 export function useApi() {
   const { getToken } = useAuth()
@@ -166,6 +199,22 @@ export function useAudit(filters: {
     queryKey: [org, 'audit', params.toString()],
     queryFn: () =>
       api<{ items: AuditEntry[]; next_before: string | null }>(`/api/audit?${params.toString()}`),
+  })
+}
+
+export function useSlack() {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({ queryKey: [org, 'slack'], queryFn: () => api<SlackStatus>('/api/slack') })
+}
+
+export function useAccessRequests(enabled: boolean) {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'access-requests'],
+    queryFn: () => api<AccessRequest[]>('/api/access-requests'),
+    enabled,
   })
 }
 

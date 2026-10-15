@@ -63,6 +63,11 @@ DASHBOARD_SECRETS = {
     "CLERK_SECRET_KEY": "",
     "CLERK_WEBHOOK_SECRET": "",
     "VITE_CLERK_PUBLISHABLE_KEY": "",
+    "API_PUBLIC_URL": f"http://localhost:{RENDER_PORT}",
+    "CONSOLE_URL": "http://localhost:5173",
+    "SLACK_CLIENT_ID": "",
+    "SLACK_CLIENT_SECRET": "",
+    "SLACK_SIGNING_SECRET": "",
 }
 
 # Render's stand-in default database user: owns the database, can create roles, not a superuser.

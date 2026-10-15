@@ -39,6 +39,15 @@ x-backend: &backend
     CLERK_API_URL: http://fakes:4100/clerk/v1
     CLERK_SECRET_KEY: sk_test_local
     CLERK_WEBHOOK_SECRET: whsec_bG9jYWwtY2xlcmstd2ViaG9vay1zZWNyZXQtMDAwMQ==
+    # Slack stand-in (fakes service). The authorize URL is opened by the browser.
+    API_PUBLIC_URL: http://localhost:8000
+    CONSOLE_URL: http://localhost:5173
+    SLACK_API_URL: http://fakes:4100/slack/api
+    SLACK_AUTHORIZE_URL: http://localhost:4100/slack/oauth/v2/authorize
+    SLACK_CLIENT_ID: local.client
+    SLACK_CLIENT_SECRET: local-slack-client-secret
+    SLACK_SIGNING_SECRET: local-slack-signing-secret
+    SLACK_STATE_SECRET: local-slack-state-secret
   restart: "no"
 
 services:
@@ -119,7 +128,7 @@ services:
     image: jaegertracing/jaeger:latest
     ports: ["16686:16686", "4317:4317", "4318:4318"]
 
-  # Local stand-ins for external SaaS (Clerk for now). Never deployed.
+  # Local stand-ins for external SaaS (Clerk, Slack). Never deployed. Slack UI: http://localhost:4100/slack/ui
   fakes:
     build:
       context: ./fakes
@@ -131,6 +140,12 @@ services:
       CLERK_WEBHOOK_URL: http://api:8000/webhooks/clerk
       CLERK_WEBHOOK_SECRET: whsec_bG9jYWwtY2xlcmstd2ViaG9vay1zZWNyZXQtMDAwMQ==
       FAKES_SEED_FIXTURE: /seed/fixture.json
+      SLACK_PUBLIC_URL: http://localhost:4100/slack
+      SLACK_EVENTS_URL: http://api:8000/slack/events
+      SLACK_INTERACTIONS_URL: http://api:8000/slack/interactions
+      SLACK_CLIENT_ID: local.client
+      SLACK_CLIENT_SECRET: local-slack-client-secret
+      SLACK_SIGNING_SECRET: local-slack-signing-secret
     ports: ["4100:4100"]
     volumes:
       - fakesdata:/data

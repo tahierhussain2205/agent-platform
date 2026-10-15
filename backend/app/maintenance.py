@@ -5,10 +5,12 @@ through security definer functions, so it does not depend on BYPASSRLS (see migr
 Each job is isolated: one failure is reported and the rest still run.
 """
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import psycopg
 
@@ -55,8 +57,48 @@ def run_all(dsn: str, jobs: Sequence[Job] | None = None) -> list[JobResult]:
     return results
 
 
+def slack_reconcile_job(settings: Settings) -> Job:
+    """Start a membership reconciliation per active Slack workspace (events can be missed).
+    Workflow ids are hourly, so overlapping cron runs do not duplicate work."""
+
+    def run(conn: psycopg.Connection) -> str:
+        rows = conn.execute(
+            "select org_id, workspace_id, external_id from app.maintenance_active_workspaces() where "
+            "platform = 'slack'"
+        ).fetchall()
+        if not rows:
+            return "no active workspaces"
+        hour = datetime.now(UTC).strftime("%Y%m%d%H")
+
+        async def start_all() -> int:
+            from temporalio.exceptions import WorkflowAlreadyStartedError
+
+            from app.temporal import connect_temporal
+            from app.workflows.slack_types import SyncRequest
+
+            client = await connect_temporal(settings, attempts=3, delay=0.5)
+            started = 0
+            for org_id, workspace_id, team_id in rows:
+                try:
+                    await client.start_workflow(
+                        "SyncWorkspaceWorkflow",
+                        SyncRequest(str(org_id), str(workspace_id), team_id),
+                        id=f"slack-reconcile-{workspace_id}-{hour}",
+                        task_queue=settings.temporal_task_queue,
+                    )
+                    started += 1
+                except WorkflowAlreadyStartedError:
+                    pass
+            return started
+
+        started = asyncio.run(start_all())
+        return f"{started} reconciliation(s) started for {len(rows)} workspace(s)"
+
+    return ("slack_reconcile", run)
+
+
 def run_jobs(settings: Settings) -> int:
-    results = run_all(settings.component_dsn("maintenance"))
+    results = run_all(settings.component_dsn("maintenance"), [*JOBS, slack_reconcile_job(settings)])
     for r in results:
         status = "ok" if r.ok else "FAILED"
         print(f"{r.name}: {status} ({r.detail}) in {r.seconds:.2f}s")

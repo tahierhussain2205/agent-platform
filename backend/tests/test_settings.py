@@ -41,3 +41,14 @@ def test_secrets_are_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
     text = repr(Settings()) + str(Settings().model_dump())
     assert "tk-very-secret" not in text
     assert "hunter2" not in text
+
+
+def test_every_setting_is_documented_in_env_example() -> None:
+    """`.env.example` is the reference for operators and Render's dashboard values."""
+    import re
+    from pathlib import Path
+
+    example = (Path(__file__).parents[2] / ".env.example").read_text()
+    documented = set(re.findall(r"^#? ?([A-Z][A-Z0-9_]+)=", example, re.MULTILINE))
+    missing = {name.upper() for name in Settings.model_fields} - documented
+    assert not missing, f"add to .env.example: {sorted(missing)}"

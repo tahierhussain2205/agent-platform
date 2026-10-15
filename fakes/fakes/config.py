@@ -27,3 +27,16 @@ class Config:
         )
     )
     clerk_token_ttl: int = field(default_factory=lambda: int(os.environ.get("CLERK_TOKEN_TTL", "60")))
+    # Slack
+    slack_public_url: str = field(
+        default_factory=lambda: os.environ.get("SLACK_PUBLIC_URL", "http://localhost:4100/slack")
+    )
+    slack_client_id: str = field(default_factory=lambda: os.environ.get("SLACK_CLIENT_ID", "local.client"))
+    slack_client_secret: str = field(
+        default_factory=lambda: os.environ.get("SLACK_CLIENT_SECRET", "local-slack-client-secret")
+    )
+    slack_signing_secret: str = field(
+        default_factory=lambda: os.environ.get("SLACK_SIGNING_SECRET", "local-slack-signing-secret")
+    )
+    slack_events_url: str | None = field(default_factory=lambda: os.environ.get("SLACK_EVENTS_URL") or None)
+    slack_interactions_url: str | None = field(default_factory=lambda: os.environ.get("SLACK_INTERACTIONS_URL") or None)

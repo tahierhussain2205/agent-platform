@@ -15,11 +15,12 @@ A multi tenant AI agent that works as a teammate inside Slack. Each customer is 
 | Component | Where |
 |---|---|
 | Console API, Slack ingress, health | `backend/app/api/` (FastAPI) |
+| Slack client, rate limiter, Block Kit adapter, install/channel services | `backend/app/slack/` |
 | Temporal workers (agent tasks, schedules, approvals) | `backend/app/` `worker` command |
 | Maintenance jobs (partitions, retention, reconciliation) | `backend/app/` `maintenance` command |
 | SQL migrations | `backend/migrations/NNN_*.sql` |
 | Admin console | `web/` (React, TypeScript, Vite, React Router, TanStack Query, Tailwind) |
-| Local SaaS stand-ins (Clerk, later Slack, Jira, ...) | `fakes/` (own image, Compose only, never deployed) |
+| Local SaaS stand-ins (Clerk, Slack, later Jira, ...) | `fakes/` (own image, Compose only, never deployed) |
 
 **One image, many commands.** `backend/Dockerfile` builds one image; `app <api|worker|maintenance|migrate|seed|check>` (console script, same as `python -m app`) selects the process. The image has no `ENTRYPOINT`; `CMD` is `app api` and every caller passes a full command. On Render ([render.yaml](render.yaml), runbook [docs/runbooks/deploy.md](docs/runbooks/deploy.md)): `api-staging` web service (migrations in `preDeployCommand`), `worker-staging` background worker, `maintenance-staging` cron job, `web-staging` static site, `db-staging` Render Postgres (PgBouncer pool), `kv-staging` Render Key Value. Production is an empty project until phase 13.
 
@@ -62,7 +63,7 @@ A change never weakens one of these to make something work. If an invariant bloc
 Backend only: `cd backend && uv run pytest -k name`, `uv run python -m app api`.
 Web only: `pnpm --dir web dev`.
 
-Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173 (seeded accounts: alice@acme.test, bob@acme.test, frank@both.test, dave@globex.test; password `password123`), fakes http://localhost:4100 (Clerk stand-in at `/clerk`, test admin at `/_admin`), Temporal UI http://localhost:8233,
+Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173 (seeded accounts: alice@acme.test, bob@acme.test, frank@both.test, dave@globex.test; password `password123`), fakes http://localhost:4100 (Clerk stand-in at `/clerk`, Slack stand-in at `/slack` with a Slack-like UI at http://localhost:4100/slack/ui, test admin at `/_admin`), Temporal UI http://localhost:8233,
 Jaeger http://localhost:16686, Postgres `localhost:55432` (postgres/postgres, db `agent`), PgBouncer `localhost:56432`,
 Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 
@@ -87,6 +88,9 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - **Identity changes** (invite, privilege, removal) go to Clerk: apply through the identity function in an `identity_tx`, call Clerk inside it, commit only if Clerk succeeded. Never write `org_memberships` from request code.
 - **Identity functions** take the event time; events older than a membership's `identity_event_at` are ignored (webhooks arrive late or out of order).
 - **External service stand-ins** live in `fakes/` and mirror the real HTTP API shapes; code under test only sees base URLs. Update the stand-in when the code starts using another endpoint. New tables need explicit grants and, if tenant scoped, the `tenant_isolation` policy and composite `(org_id, id)` foreign keys. Migrations must be safe to run against the previous code version.
+- **Slack ingress** (`app/api/slack.py`): verify the signature on the raw body first, claim the event id in Key Value (release it and return 500 if starting the workflow fails), answer within 3 seconds, and start workflows with an id derived from the event id. Workflow inputs carry references only (team, channel, ts, user, event id), never message text (invariant 7).
+- **Talking to Slack** from activities: `ChannelAdapter.send(team, token, intent)` with an intent from `app/slack/adapter.py` (Block Kit rendering and limits, rate limiting and coalescing are handled there); raw `SlackClient.call` only for reads. Get the token with `service.bot_token(pool, vault, org_id)`. Turn permanent Slack errors into non retryable `ApplicationError`s (`slack_activities.permanent`). Mark sends idempotent (the activity can run twice).
+- **Activities** open their own tenant transactions with `tenant_tx(pool, org_id)` (sets `app.org_id` first); never share a connection across awaits on Slack.
 - **Adding a tool adapter**: arrives in phase 8.
 - **Adding a playbook**: arrives in phase 7.
 - **Web**: TypeScript strict, ESLint + Prettier, components in `PascalCase.tsx`, tests next to code as `*.test.tsx`.
@@ -132,4 +136,8 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - `pydantic.EmailStr` rejects reserved domains such as `.test`; the console validates emails with a plain pattern.
 - Clerk Core 3 (`@clerk/react` v6) removed `SignedIn`/`SignedOut`; the console uses `useAuth()` state.
 - Webhook lag: right after signup or accepting an invitation `/api/me` can answer `not_a_member` for a moment; the console retries those codes for a few seconds.
-- Playwright `globalSetup` resets the Clerk stand-in (`POST /_admin/reset`, signing key kept) and re-runs the seed; e2e tests use unique emails and org names.
+- Playwright `globalSetup` resets the stand-ins (`POST /_admin/reset`: Clerk with its signing key kept, and Slack) and re-runs the seed, which also puts fixture orgs back (undeclared members removed, pending access requests dismissed); e2e tests use unique emails, org names and Slack teams.
+- The running Compose stack answers every Slack event the stand-in delivers, including those from backend tests that post into seeded workspaces: tests that call our ingress directly should post without mentioning the bot, or expect a second reply. Create a fresh team with `POST /_admin/slack/teams` when a test needs an uninstalled workspace. Backend tests share the stand-in's state with the dev stack and the e2e suite (which, for example, adds the bot to #random): a test that relies on stand-in state sets it up itself.
+- Store the bot token only after the install transaction commits: the vault's connection must see the new `connections` row (foreign key).
+- A controlled checkbox that waits for a mutation flips back for one render (TanStack Query reports `isPending` a tick late); keep the requested value in local state set in `onChange`.
+- In the Slack stand-in's UI, typing `@agent` posts a real mention (`<@BOT>`).

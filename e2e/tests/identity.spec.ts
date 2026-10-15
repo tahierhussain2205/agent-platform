@@ -33,14 +33,18 @@ test('invite, accept, promote, demote, last admin rule, remove', async ({ browse
   await expect(invitee.getByRole('heading', { name: 'Invitations' })).toBeVisible()
   await expect(invitee.getByText(orgName)).toBeVisible()
   await invitee.getByRole('button', { name: 'Accept' }).click()
-  await expect(invitee.getByRole('heading', { level: 1, name: orgName })).toBeVisible({ timeout: 20_000 })
+  await expect(invitee.getByRole('heading', { level: 1, name: orgName })).toBeVisible({
+    timeout: 20_000,
+  })
   await expect(invitee.getByText('Member', { exact: true })).toBeVisible()
   await expect(invitee.getByRole('link', { name: 'Settings' })).toHaveCount(0)
 
   // The admin sees them active (the membership arrives through Clerk's webhook).
   await expect(async () => {
     await admin.page.reload()
-    await expect(memberRow(admin.page, inviteeEmail).getByText('Active')).toBeVisible({ timeout: 1_000 })
+    await expect(memberRow(admin.page, inviteeEmail).getByText('Active')).toBeVisible({
+      timeout: 1_000,
+    })
   }).toPass({ timeout: 20_000 })
 
   // Promote, then demote.
@@ -53,7 +57,9 @@ test('invite, accept, promote, demote, last admin rule, remove', async ({ browse
   // The founder is the only admin: demoting themselves is refused, with the request id shown.
   const self = memberRow(admin.page, admin.email)
   await self.getByRole('button', { name: 'Make member' }).click()
-  await expect(self.getByRole('alert')).toContainText('An organization must keep at least one active admin.')
+  await expect(self.getByRole('alert')).toContainText(
+    'An organization must keep at least one active admin.',
+  )
   await expect(self.getByRole('alert')).toContainText('Request ID:')
 
   // Remove the invitee; they lose access.
@@ -63,7 +69,9 @@ test('invite, accept, promote, demote, last admin rule, remove', async ({ browse
   // Removed in Clerk too: they belong to no org now, so they are asked to set one up and cannot
   // see the team's data any more.
   await invitee.reload()
-  await expect(invitee.getByRole('heading', { name: 'Set up your organization' })).toBeVisible({ timeout: 20_000 })
+  await expect(invitee.getByRole('heading', { name: 'Set up your organization' })).toBeVisible({
+    timeout: 20_000,
+  })
   await invitee.goto('/members')
   await expect(invitee.getByRole('heading', { name: 'Set up your organization' })).toBeVisible()
 
@@ -137,8 +145,12 @@ test('settings: validation and saving', async ({ page }) => {
   await page.getByLabel('Retention (days)').fill('0')
   await page.getByRole('button', { name: 'Save settings' }).click()
   // Shown under the field, and in the form notice together with the request id.
-  await expect(page.getByRole('alert').filter({ hasText: /^Input should be greater than or equal to 1$/ })).toBeVisible()
-  await expect(page.getByRole('alert').filter({ hasText: 'Request ID:' })).toContainText('Input should be greater than or equal to 1')
+  await expect(
+    page.getByRole('alert').filter({ hasText: /^Input should be greater than or equal to 1$/ }),
+  ).toBeVisible()
+  await expect(page.getByRole('alert').filter({ hasText: 'Request ID:' })).toContainText(
+    'Input should be greater than or equal to 1',
+  )
   await page.getByLabel('Retention (days)').fill('120')
   await page.getByRole('button', { name: 'Save settings' }).click()
   await expect(page.getByText('Settings saved.')).toBeVisible()
@@ -168,7 +180,8 @@ test('audit log shows console changes', async ({ page }) => {
 test('members who are not admins get a read only console', async ({ page }) => {
   await signIn(page, 'bob@acme.test')
   await expect(page.getByText('Member', { exact: true })).toBeVisible()
-  for (const name of ['Settings', 'Audit log']) await expect(page.getByRole('link', { name })).toHaveCount(0)
+  for (const name of ['Settings', 'Audit log'])
+    await expect(page.getByRole('link', { name })).toHaveCount(0)
   await page.goto('/settings')
   await expect(page.getByRole('heading', { level: 1, name: 'Acme Corp' })).toBeVisible()
   await page.getByRole('link', { name: 'Members' }).click()

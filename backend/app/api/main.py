@@ -20,17 +20,23 @@ from app import kv
 from app.api.console import members as console_members
 from app.api.console import org as console_org
 from app.api.console import roles as console_roles
+from app.api.console import slack as console_slack
 from app.api.errors import ApiError
 from app.api.middleware import RequestContextMiddleware
+from app.api.slack import router as slack_router
 from app.api.webhooks import router as webhooks_router
 from app.auth.clerk import AuthError, ClerkVerifier
 from app.context import request_id_var
+from app.crypto import Envelope, LocalKeyProvider
 from app.db.errors import error_body, map_db_error
 from app.db.pool import open_pool
 from app.db.uow import OrgBindingError, UnitOfWorkClosedError, UnitOfWorkMiddleware
 from app.identity.clerk_api import ClerkClient
 from app.settings import Settings, get_settings
+from app.slack.client import SlackClient
+from app.slack.limiter import SlackRateLimiter
 from app.telemetry import configure_tracing, shutdown_tracing, strip_query_strings
+from app.vault import Vault
 
 log = logging.getLogger(__name__)
 
@@ -41,9 +47,13 @@ class Resources:
 
     db_pool: AsyncConnectionPool | None = None  # api_service: request paths
     identity_pool: AsyncConnectionPool | None = None  # identity_service: Clerk mirror
+    vault_pool: AsyncConnectionPool | None = None  # vault_service: connection secrets only
+    vault: Vault | None = None
     kv: Any = None  # redis.asyncio.Redis
     clerk_verifier: ClerkVerifier | None = None
     clerk_client: ClerkClient | None = None
+    slack: SlackClient | None = None
+    temporal: Any = None  # temporalio Client, connected on first use
     owned: list[Callable[[], Awaitable[None]]] = field(default_factory=list)
 
 
@@ -73,6 +83,22 @@ async def build_resources(settings: Settings, res: Resources) -> None:
     if settings.redis_url:
         res.kv = kv.make_client(settings.redis_url.get_secret_value())
         res.owned.append(res.kv.aclose)
+    if (
+        settings.database_url
+        and settings.db_vault_password
+        and settings.encryption_keys
+        and settings.encryption_active_key
+    ):
+        res.vault_pool = await open_pool(settings.component_dsn("vault"), "vault", min_size=0, max_size=4)
+        res.owned.append(res.vault_pool.close)
+        provider = LocalKeyProvider.from_config(
+            settings.encryption_keys.get_secret_value(), settings.encryption_active_key
+        )
+        res.vault = Vault(res.vault_pool, Envelope(provider))
+    res.slack = SlackClient(
+        settings.slack_api_url, limiter=SlackRateLimiter(res.kv) if res.kv is not None else None
+    )
+    res.owned.append(res.slack.aclose)
     if settings.clerk_issuer and settings.clerk_jwks_url:
         bearer = (
             settings.clerk_secret_key.get_secret_value()
@@ -220,4 +246,6 @@ def create_app(settings: Settings | None = None, resources: Resources | None = N
     app.include_router(console_org.router)
     app.include_router(console_members.router)
     app.include_router(console_roles.router)
+    app.include_router(console_slack.router)
+    app.include_router(slack_router)
     return app

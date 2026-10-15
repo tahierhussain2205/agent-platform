@@ -69,7 +69,17 @@ def run_seed(_: argparse.Namespace) -> int:
     if get_settings().env in ("staging", "production"):
         print("refusing to seed a staging or production database", file=sys.stderr)
         return 2
-    org_ids = seed(get_settings().require_migration_database_url())
+    settings = get_settings()
+    envelope = None
+    if settings.encryption_keys and settings.encryption_active_key:
+        from app.crypto import Envelope, LocalKeyProvider
+
+        envelope = Envelope(
+            LocalKeyProvider.from_config(
+                settings.encryption_keys.get_secret_value(), settings.encryption_active_key
+            )
+        )
+    org_ids = seed(settings.require_migration_database_url(), envelope=envelope)
     print(f"seeded orgs: {', '.join(org_ids)}")
     return 0
 

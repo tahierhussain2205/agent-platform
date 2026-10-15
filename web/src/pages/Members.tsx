@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react'
 import {
   json,
+  useAccessRequests,
   useApiMutation,
   useMembers,
   useRoles,
+  type AccessRequest,
   type Member,
   type Privilege,
 } from '../api/hooks'
@@ -290,6 +292,66 @@ function MemberRow({
   )
 }
 
+function AccessRequestRow({ request }: { request: AccessRequest }) {
+  const invite = useApiMutation(
+    (api, id: string) => api(`/api/access-requests/${id}/invite`, { method: 'POST' }),
+    ['access-requests', 'members', 'org'],
+  )
+  const dismiss = useApiMutation(
+    (api, id: string) => api(`/api/access-requests/${id}/dismiss`, { method: 'POST' }),
+    ['access-requests'],
+  )
+  return (
+    <li
+      className="flex flex-wrap items-start justify-between gap-3 py-3"
+      data-testid={`access-request-${request.email ?? request.external_user_id}`}
+    >
+      <div>
+        <p className="text-sm font-medium">{request.email ?? 'Unknown email'}</p>
+        <p className="text-xs text-slate-500">
+          Slack user {request.external_user_id} · asked{' '}
+          {new Date(request.created_at).toLocaleString()}
+        </p>
+        <div className="mt-1">
+          <ErrorNotice error={invite.error ?? dismiss.error} />
+        </div>
+      </div>
+      <div className="flex gap-1">
+        <Button
+          busy={invite.isPending}
+          disabled={!request.email}
+          onClick={() => invite.mutate(request.id)}
+        >
+          Invite
+        </Button>
+        <Button variant="ghost" busy={dismiss.isPending} onClick={() => dismiss.mutate(request.id)}>
+          Dismiss
+        </Button>
+      </div>
+    </li>
+  )
+}
+
+function AccessRequests() {
+  const requests = useAccessRequests(true)
+  const pending = (requests.data ?? []).filter((r) => r.status === 'pending')
+  if (requests.isPending || pending.length === 0) return null
+  return (
+    <div className="mb-6">
+      <Card title={`Access requests (${pending.length})`}>
+        <p className="text-sm text-slate-600">
+          People who mentioned the agent in Slack without being invited.
+        </p>
+        <ul className="divide-y divide-slate-200">
+          {pending.map((request) => (
+            <AccessRequestRow key={request.id} request={request} />
+          ))}
+        </ul>
+      </Card>
+    </div>
+  )
+}
+
 export function MembersPage() {
   const me = useMember()
   const members = useMembers()
@@ -302,6 +364,7 @@ export function MembersPage() {
         title="Members"
         description="People who can use the agent in Slack and this console."
       />
+      {isAdmin && <AccessRequests />}
       {isAdmin && (
         <div className="mb-6">
           <Card title="Invite someone">

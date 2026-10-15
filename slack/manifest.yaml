@@ -1,0 +1,67 @@
+# Slack app manifest. Create the app from this file (api.slack.com/apps > Create New App > From an
+# app manifest), then replace api.example.com with the public URL of the API service.
+# Minimal scopes: each one is justified in docs/slack/marketplace.md.
+_metadata:
+  major_version: 2
+  minor_version: 1
+
+display_information:
+  name: Agent
+  description: A teammate in Slack that works within your own access.
+  long_description: >-
+    Agent reads the threads and channels you point it at, works with your tools (Jira, GitHub, logs)
+    and reports back in the thread. It only reads channels your admins allow and that you are a
+    member of, acts with your own linked accounts, and asks before changing anything unless you
+    choose otherwise. Admins configure channels, tools, models and limits in the web console.
+  background_color: "#3f0e40"
+
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: agent
+    always_online: true
+
+oauth_config:
+  redirect_urls:
+    - https://api.example.com/slack/oauth/callback
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:read
+      - groups:read
+      - channels:history
+      - groups:history
+      - im:history
+      - chat:write
+      - users:read
+      - users:read.email
+
+settings:
+  event_subscriptions:
+    request_url: https://api.example.com/slack/events
+    bot_events:
+      - app_mention
+      - message.im
+      - member_joined_channel
+      - member_left_channel
+      - channel_created
+      - channel_rename
+      - channel_archive
+      - channel_unarchive
+      - channel_deleted
+      - group_rename
+      - group_archive
+      - group_unarchive
+      - group_deleted
+      - app_home_opened
+      - app_uninstalled
+      - tokens_revoked
+  interactivity:
+    is_enabled: true
+    request_url: https://api.example.com/slack/interactions
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

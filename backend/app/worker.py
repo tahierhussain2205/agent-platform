@@ -1,26 +1,90 @@
-"""Temporal worker process (``python -m app worker``)."""
+"""Temporal worker process (``app worker``)."""
 
 import asyncio
 import logging
 import signal
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from typing import Any
 
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+from app import kv
+from app.crypto import Envelope, LocalKeyProvider
+from app.db.pool import open_pool
 from app.settings import Settings
+from app.slack.client import SlackClient
+from app.slack.limiter import SlackRateLimiter
 from app.temporal import connect_temporal
+from app.vault import Vault
 from app.workflows.ping import PingWorkflow, ping
+from app.workflows.slack import AgentRequestWorkflow, PublishHomeWorkflow, SyncWorkspaceWorkflow
+from app.workflows.slack_activities import SlackActivities, SlackDeps
 
 log = logging.getLogger(__name__)
 
 
-def build_worker(client: Client, settings: Settings) -> Worker:
+async def build_slack_activities(
+    settings: Settings, closers: list[Callable[[], Awaitable[None]]]
+) -> SlackActivities | None:
+    """Slack activities need the worker's and the vault's database users and the encryption keys."""
+    if not (
+        settings.database_url
+        and settings.db_worker_password
+        and settings.db_vault_password
+        and settings.encryption_keys
+        and settings.encryption_active_key
+    ):
+        log.warning("database, vault or encryption not configured: Slack activities disabled")
+        return None
+    pool = await open_pool(
+        settings.component_dsn("worker"), "worker", min_size=1, max_size=settings.db_pool_max_size
+    )
+    vault_pool = await open_pool(settings.component_dsn("vault"), "vault", min_size=0, max_size=4)
+    closers += [pool.close, vault_pool.close]
+    kv_client: Any = kv.make_client(settings.redis_url.get_secret_value()) if settings.redis_url else None
+    if kv_client is not None:
+        closers.append(kv_client.aclose)
+    slack = SlackClient(
+        settings.slack_api_url, limiter=SlackRateLimiter(kv_client) if kv_client is not None else None
+    )
+    closers.append(slack.aclose)
+    envelope = Envelope(
+        LocalKeyProvider.from_config(
+            settings.encryption_keys.get_secret_value(), settings.encryption_active_key
+        )
+    )
+    return SlackActivities(
+        SlackDeps(
+            pool=pool,
+            vault=Vault(vault_pool, envelope),
+            slack=slack,
+            kv=kv_client,
+            console_url=settings.console_url,
+        )
+    )
+
+
+def build_worker(client: Client, settings: Settings, slack: SlackActivities | None = None) -> Worker:
+    workflows: list[type] = [PingWorkflow]
+    activities: list[Callable[..., Any]] = [ping]
+    if slack is not None:
+        workflows += [AgentRequestWorkflow, SyncWorkspaceWorkflow, PublishHomeWorkflow]
+        activities += [
+            slack.identify_requester,
+            slack.request_access,
+            slack.check_channel,
+            slack.explain_refusal,
+            slack.acknowledge,
+            slack.sync_workspace,
+            slack.publish_home,
+        ]
     return Worker(
         client,
         task_queue=settings.temporal_task_queue,
-        workflows=[PingWorkflow],
-        activities=[ping],
+        workflows=workflows,
+        activities=activities,
         graceful_shutdown_timeout=timedelta(seconds=settings.worker_graceful_shutdown_seconds),
     )
 
@@ -30,22 +94,27 @@ async def run_worker(settings: Settings) -> int:
 
     configure_tracing("agent-worker", settings.otel_exporter_otlp_endpoint, settings.env)
     client = await connect_temporal(settings)
-    worker = build_worker(client, settings)
+    closers: list[Callable[[], Awaitable[None]]] = []
+    worker = build_worker(client, settings, await build_slack_activities(settings, closers))
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
 
-    async with worker:  # leaving the block stops polling and waits for in-flight activities
-        log.info(
-            "worker polling task queue %r on %s (namespace %s)",
-            settings.temporal_task_queue,
-            settings.temporal_address,
-            settings.temporal_namespace,
-        )
-        await stop.wait()
-        log.info("shutdown requested; draining in-flight activities")
+    try:
+        async with worker:  # leaving the block stops polling and waits for in-flight activities
+            log.info(
+                "worker polling task queue %r on %s (namespace %s)",
+                settings.temporal_task_queue,
+                settings.temporal_address,
+                settings.temporal_namespace,
+            )
+            await stop.wait()
+            log.info("shutdown requested; draining in-flight activities")
+    finally:
+        for close in reversed(closers):
+            await close()
     shutdown_tracing()
     log.info("worker stopped")
     return 0

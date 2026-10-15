@@ -15,14 +15,14 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.console.common import audit, clerk, fetch_all, fetch_one, identity_tx
 from app.api.errors import ApiError
-from app.auth.console import ConsoleIdentity, console_identity, require_admin
+from app.auth.console import ConsoleIdentity, console_identity, require_admin, resources
 from app.db.uow import UnitOfWork, get_uow
 from app.identity.clerk_api import ClerkError
+from app.identity.invite import CLERK_ROLE, InviteError, invite_member
 
 router = APIRouter(prefix="/api/members")
 
 Privilege = Literal["admin", "user"]
-CLERK_ROLE = {"admin": "org:admin", "user": "org:member"}
 LAST_ADMIN = ApiError(409, "last_admin", "An organization must keep at least one active admin.")
 
 MEMBERS_SQL = """
@@ -106,24 +106,15 @@ async def invite(
         raise ApiError(409, "already_member", "This person is already a member.")
     if existing and existing["status"] == "invited":
         raise ApiError(409, "already_invited", "This person already has a pending invitation.")
-    async with identity_tx(request) as conn:
-        cur = await conn.execute(
-            "select app.identity_invite(%s, %s, %s, %s)",
-            (identity.clerk_org_id, email, CLERK_ROLE[body.privilege], identity.clerk_user_id),
+    pool = resources(request).identity_pool
+    if pool is None:
+        raise ApiError(503, "identity_unavailable", "Identity management is not available.")
+    try:
+        membership_id = await invite_member(
+            pool, clerk(request), identity.clerk_org_id, email, body.privilege, identity.clerk_user_id
         )
-        row = await cur.fetchone()
-        assert row is not None
-        membership_id: UUID = row[0]
-        try:
-            await clerk(request).create_invitation(
-                identity.clerk_org_id, email, CLERK_ROLE[body.privilege], identity.clerk_user_id
-            )
-        except ClerkError as exc:
-            if exc.status in (400, 409, 422):
-                raise ApiError(
-                    409, "invitation_refused", f"The identity provider refused the invitation: {exc.message}"
-                ) from exc
-            raise ApiError(502, "clerk_failed", "Could not send the invitation. Try again.") from exc
+    except InviteError as exc:
+        raise ApiError(exc.status, exc.code, exc.message) from exc
     await audit(uow.connection, identity, "member.invited", email, {"privilege": body.privilege})
     return await _member(uow.connection, membership_id)
 

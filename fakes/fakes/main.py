@@ -6,11 +6,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from starlette.middleware.cors import CORSMiddleware
 
 from fakes.clerk import Clerk, build_router, clerk_error_handler
 from fakes.config import Config
+from fakes.slack import Slack, SlackDeliverer
+from fakes.slack import build_admin_router as build_slack_admin_router
+from fakes.slack import build_router as build_slack_router
 from fakes.store import Store
 from fakes.svix import Deliverer
 
@@ -22,6 +25,8 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     store = Store(config.state_dir / "state.json" if persist else None)
     deliverer = Deliverer(config.clerk_webhook_url, config.clerk_webhook_secret)
     clerk = Clerk(config, store, deliverer)
+    slack_deliverer = SlackDeliverer(config.slack_signing_secret)
+    slack = Slack(config, store, slack_deliverer)
 
     def fixture() -> dict[str, Any] | None:
         return json.loads(config.seed_fixture.read_text()) if config.seed_fixture.exists() else None
@@ -31,14 +36,17 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
             key = store.data.get("clerk", {}).get("key")
             store.data = {}
             clerk.reset(fixture(), keep_key=key)
+            slack.reset(fixture())
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if not store.load() or "clerk" not in store.data:
+        if not store.load() or "clerk" not in store.data or "slack" not in store.data:
             reset()
         deliverer.start()
+        slack_deliverer.start()
         yield
         await deliverer.stop()
+        await slack_deliverer.stop()
 
     app = FastAPI(title="fakes", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.add_middleware(
@@ -50,8 +58,16 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     )
     app.add_exception_handler(HTTPException, clerk_error_handler)  # type: ignore[arg-type]
     app.include_router(build_router(clerk))
+    app.include_router(build_slack_router(slack))
+    app.include_router(build_slack_admin_router(slack))
     app.state.clerk = clerk
     app.state.deliverer = deliverer
+    app.state.slack = slack
+    app.state.slack_deliverer = slack_deliverer
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        return Response(status_code=204)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -60,8 +76,10 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     @app.post("/_admin/reset")
     async def admin_reset() -> dict[str, str]:
         await deliverer.drain()
+        await slack_deliverer.drain()
         reset()
         deliverer.log.clear()
+        slack_deliverer.log.clear()
         return {"status": "reset"}
 
     @app.get("/_admin/clerk/webhooks")

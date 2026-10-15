@@ -31,7 +31,8 @@ for _ in $(seq 1 20); do
 done
 [[ -n $found ]] && pass "request trace $trace_id exported to Jaeger ($found)" || fail "trace $trace_id not in Jaeger"
 
-out=$(docker compose exec -T worker python -m app check temporal 2>&1) && [[ $out == "pong: smoke" ]] \
+# Last line only: connection retries during startup may log before the answer.
+out=$(docker compose exec -T worker python -m app check temporal 2>&1 | tail -1) && [[ $out == "pong: smoke" ]] \
   && pass "worker connected to Temporal (PingWorkflow -> $out)" || fail "PingWorkflow: $out"
 
 curl -fsS "$WEB_URL/" | grep -q '<div id="root">' && pass "web console served" || fail "web console"
