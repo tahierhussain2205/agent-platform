@@ -1,0 +1,27 @@
+# Installed with `make hooks`. Every hook runs the project's own pinned tools.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: bash -c 'cd backend && uv run ruff check --fix --exit-non-zero-on-fix "${@#backend/}"' --
+        language: system
+        types: [python]
+        files: ^backend/
+      - id: ruff-format
+        name: ruff format
+        entry: bash -c 'cd backend && uv run ruff format "${@#backend/}"' --
+        language: system
+        types: [python]
+        files: ^backend/
+      - id: prettier
+        name: prettier
+        entry: bash -c 'cd web && pnpm exec prettier --write --ignore-unknown "${@#web/}"' --
+        language: system
+        files: ^web/
+        exclude: ^web/pnpm-lock\.yaml$
+      - id: eslint
+        name: eslint
+        entry: bash -c 'cd web && pnpm exec eslint --max-warnings=0 "${@#web/}"' --
+        language: system
+        files: ^web/.*\.(ts|tsx)$
