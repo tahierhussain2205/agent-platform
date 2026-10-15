@@ -14,14 +14,20 @@ cleanup
 
 echo "Checking image $IMAGE"
 
+docker run -d --name img-test-api -e PORT=9122 "$IMAGE" >/dev/null
+for _ in $(seq 1 50); do docker exec img-test-api python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9122/healthz')" 2>/dev/null && break; sleep 0.2; done
+docker exec img-test-api python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9122/healthz')" \
+  && pass "default command starts the api" || fail "default command"
+docker rm -f img-test-api >/dev/null
+
 [[ $(docker run --rm --entrypoint id "$IMAGE" -u) == 10001 ]] && pass "runs as uid 10001" || fail "runs as root"
 docker run --rm --entrypoint sh "$IMAGE" -c 'test ! -e /app/tests && test ! -e /app/.env' \
   && pass "no tests or .env in the image" || fail "tests or .env baked into the image"
-set +e; docker run --rm "$IMAGE" maintenance >/dev/null 2>&1; rc=$?; set -e
+set +e; docker run --rm "$IMAGE" app maintenance >/dev/null 2>&1; rc=$?; set -e
 [[ $rc == 2 ]] && pass "unbuilt command exits 2" || fail "placeholder exit code $rc"
 
 # API: custom PORT, health, graceful stop well within the grace period.
-docker run -d --name img-test-api -e PORT=9123 -p 9123:9123 "$IMAGE" api >/dev/null
+docker run -d --name img-test-api -e PORT=9123 -p 9123:9123 "$IMAGE" app api >/dev/null
 for _ in $(seq 1 50); do curl -fsS localhost:9123/healthz >/dev/null 2>&1 && break; sleep 0.2; done
 curl -fsS localhost:9123/healthz | grep -q ok && pass "api listens on \$PORT=9123" || fail "api not on 9123"
 start=$(date +%s); docker stop -t 30 img-test-api >/dev/null; took=$(( $(date +%s) - start ))
@@ -31,7 +37,7 @@ docker logs img-test-api 2>&1 | grep -q "Application shutdown complete" && (( to
 
 # Worker: connects to Temporal, stops polling and exits 0 on SIGTERM.
 docker run -d --name img-test-worker --network "$NETWORK" -e TEMPORAL_ADDRESS=temporal:7233 \
-  -e TEMPORAL_TASK_QUEUE=img-test -e WORKER_GRACEFUL_SHUTDOWN_SECONDS=5 "$IMAGE" worker >/dev/null
+  -e TEMPORAL_TASK_QUEUE=img-test -e WORKER_GRACEFUL_SHUTDOWN_SECONDS=5 "$IMAGE" app worker >/dev/null
 for _ in $(seq 1 60); do docker logs img-test-worker 2>&1 | grep -q "worker polling" && break; sleep 0.5; done
 docker logs img-test-worker 2>&1 | grep -q "worker polling" && pass "worker connects to Temporal" || fail "worker did not connect"
 start=$(date +%s); docker stop -t 30 img-test-worker >/dev/null; took=$(( $(date +%s) - start ))

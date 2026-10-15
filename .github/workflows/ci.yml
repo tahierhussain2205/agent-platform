@@ -107,6 +107,11 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
           pnpm test
+      - uses: astral-sh/setup-uv@v5
+      - name: Render simulation
+        run: |
+          cd backend && uv sync --frozen && cd ..
+          make render-sim
       - name: Logs on failure
         if: failure()
         run: docker compose logs --no-color

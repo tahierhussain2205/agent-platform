@@ -30,6 +30,7 @@ ENV PATH=/app/.venv/bin:$PATH \
     PORT=8000
 USER 10001:10001
 EXPOSE 8000
-# Exec form: Python is PID 1 and receives SIGTERM directly; each command handles it.
-ENTRYPOINT ["python", "-m", "app"]
-CMD ["api"]
+# No ENTRYPOINT on purpose: Render's dockerCommand / preDeployCommand and Compose's `command`
+# replace CMD with a full command (`app worker`, `app migrate`, ...). Exec form, so the process
+# is PID 1 and receives SIGTERM directly; each command handles it.
+CMD ["app", "api"]

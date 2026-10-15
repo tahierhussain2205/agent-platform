@@ -29,15 +29,15 @@ hooks: ## Install the git commit hooks
 
 .PHONY: lint
 lint: ## Lint and format-check backend and web
-	$(UV) ruff check .
-	$(UV) ruff format --check .
+	$(UV) ruff check . ../scripts
+	$(UV) ruff format --check . ../scripts
 	$(WEB) lint
 	$(WEB) format:check
 
 .PHONY: fmt
 fmt: ## Format backend and web
-	$(UV) ruff check --fix .
-	$(UV) ruff format .
+	$(UV) ruff check --fix . ../scripts
+	$(UV) ruff format . ../scripts
 	$(WEB) format
 
 .PHONY: typecheck
@@ -115,6 +115,10 @@ test-image: ## Check the backend image (non root, $$PORT, SIGTERM); needs `make 
 .PHONY: e2e
 e2e: ## Run Playwright browser tests against the running stack
 	$(E2E) test
+
+.PHONY: render-sim
+render-sim: ## Execute render.yaml locally the way Render would (no Render account needed)
+	$(UV) python ../scripts/render_sim.py
 
 .PHONY: test-stack
 test-stack: dev smoke test-image e2e ## Start the stack and run every stack level check

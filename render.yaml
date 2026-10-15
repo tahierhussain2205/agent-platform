@@ -1,0 +1,200 @@
+# Render Blueprint: every Render resource for this product lives here.
+# Spec: https://render.com/docs/blueprint-spec  Schema: dev/schemas/render.schema.json
+# Checked by backend/tests/test_render_blueprint.py and exercised by `make render-sim`.
+#
+# Secrets are `sync: false`: Render prompts for them once, in the dashboard, when the Blueprint
+# is first created. They never appear in this file. See docs/runbooks/deploy.md.
+
+previews:
+  generation: manual
+  expireAfterDays: 3
+
+projects:
+  - name: agent-platform-staging
+    environments:
+      - name: staging
+        networking:
+          isolation: enabled
+
+        envVarGroups:
+          # Shared, non secret settings for every backend process.
+          - name: backend-staging
+            envVars:
+              - key: ENV
+                value: staging
+              - key: LOG_LEVEL
+                value: INFO
+              - key: TEMPORAL_TASK_QUEUE
+                value: agent-tasks
+
+        databases:
+          - name: db-staging
+            region: oregon
+            plan: basic-256mb
+            previewPlan: basic-256mb
+            postgresMajorVersion: "16"
+            databaseName: agent
+            connectionPool: pgbouncer
+            ipAllowList: []
+
+        services:
+          # FastAPI: Slack ingress (/slack/*), console API (/api/*), health (/healthz).
+          - type: web
+            name: api-staging
+            runtime: docker
+            region: oregon
+            plan: starter
+            branch: main
+            autoDeployTrigger: checksPass
+            dockerContext: ./backend
+            dockerfilePath: ./backend/Dockerfile
+            dockerCommand: app api
+            # Migrations block the deploy if they fail, instead of breaking a running version.
+            preDeployCommand: app migrate
+            healthCheckPath: /healthz
+            maxShutdownDelaySeconds: 30
+            numInstances: 1
+            buildFilter:
+              paths: ["backend/**", "render.yaml"]
+            previews:
+              plan: starter
+              numInstances: 1
+            envVars:
+              - fromGroup: backend-staging
+              - key: MIGRATION_DATABASE_URL
+                fromDatabase:
+                  name: db-staging
+                  property: connectionString
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: kv-staging
+                  property: connectionString
+              - key: TEMPORAL_ADDRESS
+                sync: false
+              - key: TEMPORAL_NAMESPACE
+                sync: false
+              - key: TEMPORAL_API_KEY
+                sync: false
+
+          # Temporal workers: agent tasks, schedules, approvals.
+          - type: worker
+            name: worker-staging
+            runtime: docker
+            region: oregon
+            plan: starter
+            branch: main
+            autoDeployTrigger: checksPass
+            dockerContext: ./backend
+            dockerfilePath: ./backend/Dockerfile
+            dockerCommand: app worker
+            # Workers stop polling on SIGTERM and drain in-flight activities (100 s below).
+            maxShutdownDelaySeconds: 120
+            numInstances: 1
+            buildFilter:
+              paths: ["backend/**", "render.yaml"]
+            previews:
+              plan: starter
+              numInstances: 1
+            envVars:
+              - fromGroup: backend-staging
+              - key: WORKER_GRACEFUL_SHUTDOWN_SECONDS
+                value: 100
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: kv-staging
+                  property: connectionString
+              - key: TEMPORAL_ADDRESS
+                sync: false
+              - key: TEMPORAL_NAMESPACE
+                sync: false
+              - key: TEMPORAL_API_KEY
+                sync: false
+
+          # Partition creation, retention pruning, Slack membership reconciliation.
+          - type: cron
+            name: maintenance-staging
+            runtime: docker
+            region: oregon
+            plan: starter
+            branch: main
+            autoDeployTrigger: checksPass
+            schedule: "17 3 * * *"
+            dockerContext: ./backend
+            dockerfilePath: ./backend/Dockerfile
+            dockerCommand: app maintenance
+            buildFilter:
+              paths: ["backend/**", "render.yaml"]
+            envVars:
+              - fromGroup: backend-staging
+              - key: MIGRATION_DATABASE_URL
+                fromDatabase:
+                  name: db-staging
+                  property: connectionString
+
+          # React console, built by Render, served as a single page app.
+          - type: web
+            name: web-staging
+            runtime: static
+            branch: main
+            autoDeployTrigger: checksPass
+            buildCommand: cd web && corepack pnpm install --frozen-lockfile && corepack pnpm build
+            staticPublishPath: ./web/dist
+            buildFilter:
+              paths: ["web/**"]
+            previews:
+              generation: manual
+            routes:
+              - type: rewrite
+                source: /*
+                destination: /index.html
+            headers:
+              - path: /*
+                name: X-Frame-Options
+                value: DENY
+              - path: /*
+                name: X-Content-Type-Options
+                value: nosniff
+              - path: /*
+                name: Referrer-Policy
+                value: strict-origin-when-cross-origin
+              - path: /*
+                name: Permissions-Policy
+                value: camera=(), microphone=(), geolocation=()
+              - path: /*
+                name: Strict-Transport-Security
+                value: max-age=31536000; includeSubDomains
+              - path: /assets/*
+                name: Cache-Control
+                value: public, max-age=31536000, immutable
+              - path: /index.html
+                name: Cache-Control
+                value: no-cache
+            envVars:
+              - key: COREPACK_ENABLE_DOWNLOAD_PROMPT
+                value: "0"
+              # Public URL of api-staging; a Blueprint cannot reference another web service's
+              # public URL, so it is entered once in the dashboard.
+              - key: VITE_API_URL
+                sync: false
+
+          # Redis compatible store: dedupe keys, locks, rate counters, membership cache.
+          - type: keyvalue
+            name: kv-staging
+            region: oregon
+            plan: starter
+            previewPlan: starter
+            # Locks and dedupe keys must never be evicted silently.
+            maxmemoryPolicy: noeviction
+            # Empty list: reachable only on the private network.
+            ipAllowList: []
+
+  # Production is created empty now and filled in phase 13 from this same file.
+  - name: agent-platform-production
+    environments:
+      - name: production
+        networking:
+          isolation: enabled
+        permissions:
+          protection: enabled

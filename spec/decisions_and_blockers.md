@@ -11,7 +11,7 @@ Running log kept while implementing `implementation_plan.md`. Every decision mad
 
 | # | Blocker | Phases affected | Workaround in place | Needed to resolve |
 |---|---|---|---|---|
-| B-001 | No Render account or API key | 2, 3, 4, 5, 6, 7, 13 (all "on staging" checks) | `render.yaml` written and checked locally; a local "Render simulation" runs the same image the same way Render would (see D-020) | A Render workspace (Pro or higher for autoscaling), a connected GitHub repo, and the secrets listed in `.env.example` entered as `sync: false` values |
+| B-001 | No Render account or API key | 2, 3, 4, 5, 6, 7, 13 (all "on staging" checks) | `render.yaml` validated against Render's schema plus semantic tests; `make render-sim` executes the Blueprint locally with Docker (D-031). Unverified on Render: previews with projects, `checksPass`, how `dockerCommand`/`preDeployCommand` treat the image, `corepack pnpm` in Render's static build image | A Render workspace (Pro or higher for autoscaling), a connected GitHub repo, and the secrets listed in `.env.example` entered as `sync: false` values |
 | B-002 | No GitHub remote, so GitHub Actions cannot run | 0 onward | The CI workflow is written; `make ci` runs the same steps locally against real Postgres | A GitHub repository; push, and check the first Actions run |
 | B-003 | No Clerk instance | 5 onward | Local Clerk stand-in in the `fakes` service (see D-004) | A Clerk application (publishable and secret keys, webhook signing secret, allowed origins) |
 | B-004 | No Slack app or test workspace | 6 onward | Local Slack stand-in with a small Slack-like UI in the `fakes` service | A Slack app created from `slack/manifest.yaml`, a test workspace, client ID/secret and signing secret; Marketplace submission |
@@ -60,3 +60,18 @@ Running log kept while implementing `implementation_plan.md`. Every decision mad
 | D-019 | Backend hot reload is not set up in Compose; `make dev` rebuilds the image (about 15 seconds), and `make infra` + `uv run` on the host is the fast loop. The web container does hot reload. | Keeps the containers identical to Render; no Compose only entrypoints. |
 | D-020 | `python -m app check temporal` runs `PingWorkflow` end to end and is the smoke check that a worker is connected and polling. | A worker can be "up" without polling the right queue; only a real round trip proves it. |
 | D-021 | Browser tests live in a separate `e2e/` package (Playwright) because they exercise the whole stack, not just the console. | Later phases add the Slack stand-in UI to the same suite. |
+
+## Phase 2: First Render deployment
+
+| # | Decision | Reason |
+|---|---|---|
+| D-022 | One `api` service serves Slack ingress and the console API. | Plan recommendation; can split later by deploying the same image twice. |
+| D-023 | Region `oregon` for staging. | Render's default US region; matches the `us` default on `orgs.region`. Per region projects come with residency work. |
+| D-024 | `render.yaml` declares two projects: `agent-platform-staging` (environment `staging`, every resource) and `agent-platform-production` (environment `production`, empty, protection on). Resource names carry the environment suffix (`api-staging`). | The plan wants separate staging and production projects from the same file; Blueprint names must be unique within the file, so suffixes avoid a rename when production is added in phase 13. |
+| D-025 | The image has no `ENTRYPOINT`; `CMD ["app", "api"]` with an `app` console script, and every Render command is a full command (`app worker`). | Render documents only that `dockerCommand` replaces `CMD`; without an `ENTRYPOINT` the command works whichever way Render applies it. |
+| D-026 | Staging deploys use `autoDeployTrigger: checksPass` on `main`, with build filters (`backend/**` + `render.yaml` for Docker services, `web/**` for the static site). | Deploy only after CI passes; avoid rebuilding services whose code did not change. |
+| D-027 | Key Value uses `maxmemoryPolicy: noeviction` and an empty IP allow list. | Dedupe keys and locks must never disappear silently; memory pressure should surface as errors. Private network only. |
+| D-028 | Temporal Cloud settings are `sync: false` secrets; the worker gains API key + TLS support (`TEMPORAL_API_KEY`). Empty optional secrets are treated as unset. | Ready for Temporal Cloud without code changes; an unset dashboard value must not switch on TLS against the dev server. |
+| D-029 | The static site's `VITE_API_URL` is a `sync: false` build variable. | Blueprints cannot reference another web service's public URL. Entered once after `api-staging` exists. |
+| D-030 | The cron job (`app maintenance`) is in the Blueprint now even though the command arrives in phase 3; it exits 2 until then. | The walking skeleton should include every resource; a failing cron is visible rather than silently missing. |
+| D-031 | Render's JSON schema is vendored in `dev/schemas/render.schema.json` and the Blueprint is validated in the backend tests, plus a local Render simulation (`make render-sim`). | Workaround for B-001: proves the Blueprint is valid and coherent with the image and code. Refresh the schema with `curl -fsSL https://render.com/schema/render.yaml.json`. |

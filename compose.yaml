@@ -85,13 +85,13 @@ services:
     <<: *backend
     build:
       context: ./backend
-    command: ["migrate"]
+    command: ["app", "migrate"]
     depends_on:
       postgres: { condition: service_healthy }
 
   seed:
     <<: *backend
-    command: ["seed"]
+    command: ["app", "seed"]
     depends_on:
       migrate: { condition: service_completed_successfully }
 
@@ -99,7 +99,7 @@ services:
 
   api:
     <<: *backend
-    command: ["api"]
+    command: ["app", "api"]
     environment:
       <<: *backend-env
       PORT: "8000"
@@ -121,7 +121,7 @@ services:
 
   worker:
     <<: *backend
-    command: ["worker"]
+    command: ["app", "worker"]
     restart: unless-stopped
     stop_grace_period: 90s
     depends_on:

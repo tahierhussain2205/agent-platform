@@ -20,7 +20,7 @@ A multi tenant AI agent that works as a teammate inside Slack. Each customer is 
 | SQL migrations | `backend/migrations/NNN_*.sql` |
 | Admin console | `web/` (React, TypeScript, Vite) |
 
-**One image, many commands.** `backend/Dockerfile` builds one image; `python -m app <api|worker|maintenance|migrate|seed>` selects the process. On Render: `api` web service (migrations in `preDeployCommand`), `worker` background worker, `maintenance` cron job, `web` static site, Render Postgres (PgBouncer pool), Render Key Value.
+**One image, many commands.** `backend/Dockerfile` builds one image; `app <api|worker|maintenance|migrate|seed|check>` (console script, same as `python -m app`) selects the process. The image has no `ENTRYPOINT`; `CMD` is `app api` and every caller passes a full command. On Render ([render.yaml](render.yaml), runbook [docs/runbooks/deploy.md](docs/runbooks/deploy.md)): `api-staging` web service (migrations in `preDeployCommand`), `worker-staging` background worker, `maintenance-staging` cron job, `web-staging` static site, `db-staging` Render Postgres (PgBouncer pool), `kv-staging` Render Key Value. Production is an empty project until phase 13.
 
 ## Invariants every phase must keep
 
@@ -53,6 +53,7 @@ A change never weakens one of these to make something work. If an invariant bloc
 | `make migrate` / `make seed` | Apply migrations / load the dev fixture into the running stack |
 | `make smoke` / `make test-image` / `make e2e` | Stack smoke checks / image checks / Playwright |
 | `make test-stack` | `dev` + every stack level check |
+| `make render-sim` | Execute `render.yaml` locally with Docker the way Render would |
 
 Backend only: `cd backend && uv run pytest -k name`, `uv run python -m app api`.
 Web only: `pnpm --dir web dev`.
@@ -100,3 +101,6 @@ S3 (SeaweedFS) http://localhost:8333.
 - Integration tests skip (with a reason) when Postgres or Temporal are not reachable; `make test-backend` starts them.
 - DB tests create a throwaway database per test or module (`tests/conftest.py`); roles are cluster wide and shared.
 - `test_initial_migration_matches_spec_schema...` fails if `001_initial_schema.sql` drifts from `spec/schema.sql`.
+- Every env var `render.yaml` sets for a backend service must be a `Settings` field (`tests/test_render_blueprint.py`); add the field first.
+- Empty optional secrets (`KEY=`) are treated as unset by `Settings`.
+- Docker Desktop does not share `/tmp` with its VM; scripts that bind mount use `~/.cache/...`.

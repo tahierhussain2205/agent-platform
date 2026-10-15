@@ -19,7 +19,13 @@ async def connect_temporal(settings: Settings, attempts: int = 30, delay: float 
     last_error: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
-            return await Client.connect(settings.temporal_address, namespace=settings.temporal_namespace)
+            api_key = settings.temporal_api_key.get_secret_value() if settings.temporal_api_key else None
+            return await Client.connect(
+                settings.temporal_address,
+                namespace=settings.temporal_namespace,
+                api_key=api_key,
+                tls=api_key is not None,
+            )
         except Exception as exc:  # the SDK raises RuntimeError subclasses for connection failures
             last_error = exc
             log.warning("temporal not reachable (attempt %d/%d): %s", attempt, attempts, exc)

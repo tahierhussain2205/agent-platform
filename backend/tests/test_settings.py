@@ -27,3 +27,17 @@ def test_invalid_port_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PORT", "70000")
     with pytest.raises(ValidationError):
         Settings()
+
+
+@pytest.mark.parametrize("var", ["TEMPORAL_API_KEY", "MIGRATION_DATABASE_URL", "REDIS_URL"])
+def test_empty_optional_secrets_are_unset(monkeypatch: pytest.MonkeyPatch, var: str) -> None:
+    monkeypatch.setenv(var, "  ")
+    assert getattr(Settings(), var.lower()) is None
+
+
+def test_secrets_are_not_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TEMPORAL_API_KEY", "tk-very-secret")
+    monkeypatch.setenv("MIGRATION_DATABASE_URL", "postgresql://u:hunter2@h/db")
+    text = repr(Settings()) + str(Settings().model_dump())
+    assert "tk-very-secret" not in text
+    assert "hunter2" not in text
