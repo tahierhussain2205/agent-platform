@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +13,21 @@ class Settings(BaseSettings):
     env: Literal["local", "test", "staging", "production"] = "local"
     port: int = Field(default=8000, ge=1, le=65535)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+
+    # Direct (non pooled) connection used only by `migrate` and `seed`. It holds a session
+    # advisory lock, so it must never point at PgBouncer.
+    migration_database_url: SecretStr | None = None
+
+    temporal_address: str = "localhost:7233"
+    temporal_namespace: str = "default"
+    temporal_task_queue: str = "agent-tasks"
+    # How long a stopping worker waits for in-flight activities before cancelling them.
+    worker_graceful_shutdown_seconds: int = Field(default=60, ge=0, le=290)
+
+    def require_migration_database_url(self) -> str:
+        if self.migration_database_url is None:
+            raise RuntimeError("MIGRATION_DATABASE_URL is not set")
+        return self.migration_database_url.get_secret_value()
 
 
 @lru_cache

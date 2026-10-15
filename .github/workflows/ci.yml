@@ -30,8 +30,18 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       TEST_DATABASE_ADMIN_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      TEST_TEMPORAL_ADDRESS: localhost:7233
     steps:
       - uses: actions/checkout@v4
+      # Service containers cannot take a command, so the Temporal dev server is started here.
+      - name: Start Temporal dev server
+        run: |
+          docker run -d --name temporal -p 7233:7233 temporalio/temporal:latest server start-dev --ip 0.0.0.0
+          for _ in $(seq 1 60); do
+            docker exec temporal temporal operator cluster health --address 127.0.0.1:7233 && exit 0
+            sleep 2
+          done
+          exit 1
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -72,3 +82,31 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
+
+  # Boots the whole Compose stack and checks it the way a developer would after `make dev`.
+  stack:
+    runs-on: ubuntu-latest
+    needs: [backend, web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: e2e/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Start the stack
+        run: docker compose up -d --build --wait
+      - name: Smoke checks
+        run: ./scripts/smoke.sh
+      - name: Image checks
+        run: ./scripts/test_image.sh
+      - name: Playwright
+        working-directory: e2e
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec playwright install --with-deps chromium
+          pnpm test
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color

@@ -1,0 +1,90 @@
+{
+  "users": [
+    { "email": "alice@acme.test", "name": "Alice Admin", "clerk_user_id": "user_alice" },
+    { "email": "bob@acme.test", "name": "Bob Builder", "clerk_user_id": "user_bob" },
+    { "email": "carol@acme.test", "name": "Carol Invited", "clerk_user_id": null },
+    { "email": "quinn@acme.test", "name": "Quinn Tester", "clerk_user_id": "user_quinn" },
+    { "email": "frank@both.test", "name": "Frank Twoorgs", "clerk_user_id": "user_frank" },
+    { "email": "dave@globex.test", "name": "Dave Globex", "clerk_user_id": "user_dave" },
+    { "email": "erin@globex.test", "name": "Erin Engineer", "clerk_user_id": "user_erin" }
+  ],
+  "orgs": [
+    {
+      "key": "acme",
+      "clerk_org_id": "org_acme",
+      "name": "Acme Corp",
+      "settings": {
+        "default_model_tier": "standard",
+        "allowed_model_tiers": ["fast", "standard", "advanced"],
+        "user_daily_token_limit": 200000,
+        "org_monthly_token_limit": 20000000,
+        "max_concurrent_tasks": 10,
+        "max_schedules": 25,
+        "retention_days": 90
+      },
+      "autonomy_ceiling": "auto",
+      "roles": [
+        { "key": "engineer", "title": "Engineer", "description": "Be precise and technical. Include file paths, error signatures and commands. Skip business context unless asked." },
+        { "key": "manager", "title": "Manager", "description": "Lead with impact and status. Keep it short, group by owner, and call out risks and decisions needed." },
+        { "key": "qa", "title": "QA", "description": "Focus on reproduction steps, affected versions and test coverage. Use checklists." }
+      ],
+      "members": [
+        { "email": "alice@acme.test", "privilege": "admin", "status": "active", "slack_user_id": "U0ALICE", "roles": ["manager", "engineer"], "primary_role": "manager", "mode": "auto" },
+        { "email": "bob@acme.test", "privilege": "user", "status": "active", "slack_user_id": "U0BOB", "roles": ["engineer"], "primary_role": "engineer", "mode": "ask" },
+        { "email": "carol@acme.test", "privilege": "user", "status": "invited", "slack_user_id": null, "roles": [], "primary_role": null },
+        { "email": "quinn@acme.test", "privilege": "user", "status": "active", "slack_user_id": "U0QUINN", "roles": ["qa"], "primary_role": "qa" },
+        { "email": "frank@both.test", "privilege": "user", "status": "active", "slack_user_id": "U0FRANKA", "roles": [], "primary_role": null }
+      ],
+      "workspace": {
+        "external_id": "T0ACME",
+        "name": "Acme",
+        "bot_user_id": "U0ACMEBOT",
+        "slack_only_users": [
+          { "slack_user_id": "U0CAROL", "email": "carol@acme.test", "name": "Carol Invited" },
+          { "slack_user_id": "U0MALLORY", "email": "mallory@acme.test", "name": "Mallory Outsider" }
+        ]
+      },
+      "channels": [
+        { "external_id": "C0GENERAL", "name": "general", "is_private": false, "is_allowlisted": true, "bot_is_member": true, "archived": false, "members": ["U0ALICE", "U0BOB", "U0QUINN", "U0FRANKA", "U0CAROL", "U0MALLORY"] },
+        { "external_id": "C0BUGS", "name": "bugs", "is_private": false, "is_allowlisted": true, "bot_is_member": true, "archived": false, "members": ["U0ALICE", "U0BOB", "U0QUINN"] },
+        { "external_id": "C0LEADS", "name": "leads-private", "is_private": true, "is_allowlisted": true, "bot_is_member": true, "archived": false, "members": ["U0ALICE"] },
+        { "external_id": "C0RANDOM", "name": "random", "is_private": false, "is_allowlisted": false, "bot_is_member": false, "archived": false, "members": ["U0ALICE", "U0BOB", "U0QUINN", "U0FRANKA"] },
+        { "external_id": "C0OLDPROJ", "name": "old-project", "is_private": false, "is_allowlisted": true, "bot_is_member": true, "archived": true, "members": ["U0ALICE", "U0BOB"] }
+      ]
+    },
+    {
+      "key": "globex",
+      "clerk_org_id": "org_globex",
+      "name": "Globex Inc",
+      "settings": {
+        "default_model_tier": "fast",
+        "allowed_model_tiers": ["fast", "standard"],
+        "user_daily_token_limit": 50000,
+        "org_monthly_token_limit": 2000000,
+        "max_concurrent_tasks": 3,
+        "max_schedules": 5,
+        "retention_days": 30
+      },
+      "autonomy_ceiling": "ask",
+      "roles": [
+        { "key": "engineer", "title": "Engineer", "description": "Technical and terse." },
+        { "key": "sre", "title": "SRE", "description": "Lead with blast radius, timelines and mitigations." }
+      ],
+      "members": [
+        { "email": "dave@globex.test", "privilege": "admin", "status": "active", "slack_user_id": "U0DAVE", "roles": ["sre"], "primary_role": "sre" },
+        { "email": "erin@globex.test", "privilege": "user", "status": "active", "slack_user_id": "U0ERIN", "roles": ["engineer", "sre"], "primary_role": "engineer", "mode": "auto" },
+        { "email": "frank@both.test", "privilege": "user", "status": "active", "slack_user_id": "U0FRANKG", "roles": ["engineer"], "primary_role": "engineer" }
+      ],
+      "workspace": {
+        "external_id": "T0GLOBEX",
+        "name": "Globex",
+        "bot_user_id": "U0GLOBEXBOT",
+        "slack_only_users": []
+      },
+      "channels": [
+        { "external_id": "C0GXGENERAL", "name": "general", "is_private": false, "is_allowlisted": true, "bot_is_member": true, "archived": false, "members": ["U0DAVE", "U0ERIN", "U0FRANKG"] },
+        { "external_id": "C0GXINCIDENT", "name": "incidents", "is_private": false, "is_allowlisted": true, "bot_is_member": false, "archived": false, "members": ["U0DAVE", "U0ERIN"] }
+      ]
+    }
+  ]
+}

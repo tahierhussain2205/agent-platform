@@ -19,6 +19,7 @@ Running log kept while implementing `implementation_plan.md`. Every decision mad
 | B-006 | No Temporal Cloud namespace | 1 onward | Temporal dev server in Compose (the plan's local equivalent) | A Temporal Cloud namespace, mTLS cert or API key |
 | B-007 | No Jira, GitHub or Google accounts | 8 onward | Local stand-ins for the subset of each API we use | OAuth apps / a GitHub App for each provider, plus test accounts |
 | B-008 | No managed sandbox provider account | 11, 12 | To be decided in phase 11 | A provider account (open question 18.2.3) |
+| B-009 | MinIO no longer publishes container images, so the plan's local object store cannot be pulled | 1 onward (local only) | SeaweedFS (`chrislusf/seaweedfs`, `mini` mode) as the local S3 compatible store (D-015) | Nothing for production (S3 or R2 per the plan). Revisit only if SeaweedFS behaves differently from S3 for an operation we use |
 
 ---
 
@@ -44,3 +45,18 @@ Running log kept while implementing `implementation_plan.md`. Every decision mad
 | D-009 | CLI subcommands that are not built yet (`worker`, `maintenance`, `migrate`, `seed`) exit with status 2 and a message naming the phase that adds them. | Nobody mistakes a placeholder for a working command, and a deploy using one fails loudly. |
 | D-010 | `GET /healthz` is the only route in phase 0; the OpenAPI docs routes are disabled. | The API is not public documentation; fewer exposed routes. Docs can be enabled for local use later if wanted. |
 | D-011 | After SIGTERM the API exits with status 143 (uvicorn drains requests, then re-raises the signal). Accepted as is. | Standard behavior for a process stopped by SIGTERM; Render and Docker treat it as a normal stop. |
+
+## Phase 1: Dockerization and local environment
+
+| # | Decision | Reason |
+|---|---|---|
+| D-012 | A minimal migration runner (`python -m app migrate`) is built in phase 1 instead of phase 3. It applies `NNN_*.sql` files in order, each inside one transaction with its bookkeeping row in `public.schema_migrations`, refuses edited migrations (checksum), rejects files with top level `begin`/`commit`, and takes a session advisory lock. Phase 3 adds Render compatibility, login users and the ported schema tests. | The seed script needs the schema; Compose needs the same "migrate before start" step Render uses. |
+| D-013 | `001_initial_schema.sql` is `spec/schema.sql` with only its top level `begin;` and `commit;` lines replaced by comments. A test fails if anything else drifts. | The runner owns the transaction so the bookkeeping row commits atomically with the schema. |
+| D-014 | `psycopg` 3 (with `psycopg_pool`) is the database driver; SQL is written by hand (no ORM). | The schema is SQL first with RLS, triggers and security definer functions; raw SQL keeps that visible. psycopg 3 runs multi statement scripts and supports `prepare_threshold=None` for PgBouncer transaction mode. |
+| D-015 | SeaweedFS replaces MinIO as the local S3 compatible store (B-009). It creates the `artifacts` bucket at startup. | MinIO images are no longer pullable; SeaweedFS is mature, Apache licensed and S3 compatible. |
+| D-016 | Jaeger (v2, OTLP) is the local tracing backend for now. The LLM trace backend decision stays with phase 7. | The plan lists Jaeger or Langfuse locally; Jaeger is one light container and the instrumentation is OpenTelemetry either way. |
+| D-017 | Seed data lives in one JSON fixture (`backend/app/seed/fixture.json`) that later Clerk and Slack stand-ins load too. The seed runs as `app_maintenance` over the migration connection, upserts by natural keys, and refuses to run when `ENV` is staging or production. | One source for people, orgs and channels keeps the fakes and the database consistent; running as the maintenance role exercises its grants rather than superuser powers. |
+| D-018 | Compose host ports are offset (Postgres 55432, Valkey 56379) to avoid clashing with databases already on developer machines. | This machine already runs Postgres 14 and MySQL locally. |
+| D-019 | Backend hot reload is not set up in Compose; `make dev` rebuilds the image (about 15 seconds), and `make infra` + `uv run` on the host is the fast loop. The web container does hot reload. | Keeps the containers identical to Render; no Compose only entrypoints. |
+| D-020 | `python -m app check temporal` runs `PingWorkflow` end to end and is the smoke check that a worker is connected and polling. | A worker can be "up" without polling the right queue; only a real round trip proves it. |
+| D-021 | Browser tests live in a separate `e2e/` package (Playwright) because they exercise the whole stack, not just the console. | Later phases add the Slack stand-in UI to the same suite. |

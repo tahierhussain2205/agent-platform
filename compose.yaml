@@ -1,0 +1,155 @@
+# Local environment: `make dev` starts everything, `make infra` only the dependencies.
+# The backend services run the same image (backend/Dockerfile) and commands as Render.
+# Host ports are offset (55432, 56379, ...) to avoid clashing with services already running locally.
+
+name: agentplatform
+
+x-backend: &backend
+  # Built once by the `migrate` service; the other backend services reuse the tag.
+  image: agentplatform-backend:local
+  pull_policy: never
+  environment: &backend-env
+    ENV: local
+    LOG_LEVEL: INFO
+    MIGRATION_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/agent
+    TEMPORAL_ADDRESS: temporal:7233
+    TEMPORAL_NAMESPACE: default
+    TEMPORAL_TASK_QUEUE: agent-tasks
+  restart: "no"
+
+services:
+  # ------------------------------------------------------------------ infrastructure
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: agent
+    ports: ["55432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports: ["56379:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  temporal:
+    image: temporalio/temporal:latest
+    command:
+      - server
+      - start-dev
+      - --ip=0.0.0.0
+      - --ui-port=8233
+      - --db-filename=/home/temporal/temporal.db
+    ports: ["7233:7233", "8233:8233"]
+    volumes: [temporaldata:/home/temporal]
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "127.0.0.1:7233"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  # S3 compatible object storage (stands in for AWS S3 or Cloudflare R2).
+  objectstore:
+    image: chrislusf/seaweedfs:latest
+    command: ["mini", "-dir=/data", "-bucket=artifacts", "-s3.config=/etc/seaweedfs/s3.json", "-admin.ui=false"]
+    ports: ["8333:8333"]
+    volumes:
+      - objectdata:/data
+      - ./dev/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8333/status || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # Traces (OpenTelemetry over OTLP); UI on 16686.
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    ports: ["16686:16686", "4317:4317", "4318:4318"]
+
+  # ------------------------------------------------------------------ one shot jobs
+
+  # Mirrors Render's preDeployCommand: the API only starts after migrations succeed.
+  migrate:
+    <<: *backend
+    build:
+      context: ./backend
+    command: ["migrate"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  seed:
+    <<: *backend
+    command: ["seed"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  # ------------------------------------------------------------------ application
+
+  api:
+    <<: *backend
+    command: ["api"]
+    environment:
+      <<: *backend-env
+      PORT: "8000"
+    ports: ["8000:8000"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      valkey: { condition: service_healthy }
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ[\"PORT\"]}/healthz', timeout=2)"
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    <<: *backend
+    command: ["worker"]
+    restart: unless-stopped
+    stop_grace_period: 90s
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      temporal: { condition: service_healthy }
+
+  web:
+    image: node:22-slim
+    working_dir: /app
+    command: ["sh", "-c", "corepack enable && pnpm install --frozen-lockfile && pnpm dev"]
+    environment:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      CI: "1"
+      npm_config_store_dir: /pnpm-store
+    ports: ["5173:5173"]
+    volumes:
+      - ./web:/app
+      - web_node_modules:/app/node_modules
+      - pnpm_store:/pnpm-store
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:5173/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
+volumes:
+  pgdata:
+  temporaldata:
+  objectdata:
+  web_node_modules:
+  pnpm_store:

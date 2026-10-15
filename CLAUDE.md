@@ -47,21 +47,29 @@ A change never weakens one of these to make something work. If an invariant bloc
 | `make test` | All backend and web tests |
 | `make ci` | Every CI step locally |
 | `make hooks` | Install commit hooks |
-| `make dev` / `down` / `reset` / `seed` | Local stack (phase 1) |
-| `make migrate` | Apply migrations (phase 3) |
+| `make dev` | Build and start the whole local stack (Compose), wait until healthy |
+| `make infra` | Start only Postgres, Valkey, Temporal, object store, Jaeger |
+| `make down` / `make reset` | Stop (keep data) / wipe all local data and start again |
+| `make migrate` / `make seed` | Apply migrations / load the dev fixture into the running stack |
+| `make smoke` / `make test-image` / `make e2e` | Stack smoke checks / image checks / Playwright |
+| `make test-stack` | `dev` + every stack level check |
 
 Backend only: `cd backend && uv run pytest -k name`, `uv run python -m app api`.
 Web only: `pnpm --dir web dev`.
 
+Local URLs: API http://localhost:8000, console http://localhost:5173, Temporal UI http://localhost:8233,
+Jaeger http://localhost:16686, Postgres `localhost:55432` (postgres/postgres, db `agent`), Valkey `localhost:56379`,
+S3 (SeaweedFS) http://localhost:8333.
+
 ## Code conventions
 
 - **Python 3.12**, `uv` for dependencies (commit `uv.lock`), `ruff` (lint and format, line length 110), `mypy --strict` on `app/`.
-- **Layout** (grows per phase): `app/api/` HTTP layer only, `app/settings.py` the one typed settings object (environment only, never files in the image).
+- **Layout** (grows per phase): `app/api/` HTTP layer only, `app/settings.py` the one typed settings object (environment only, never files in the image), `app/db/` database access and the migration runner, `app/workflows/` Temporal workflows and activities, `app/worker.py` the worker process, `app/seed/` the dev fixture.
 - **Naming**: modules and functions `snake_case`, classes `PascalCase`, SQL identifiers `snake_case`, tables plural.
 - **Typing**: full annotations; no `Any` in public signatures unless wrapping untyped JSON.
 - **Errors**: raise domain exceptions in services; the API layer maps them to HTTP responses. Never put secrets or tokens in exception messages.
 - **Logging**: structured JSON logs (phase 4). Never log tokens, secrets or raw Slack message text.
-- **Migrations**: add `backend/migrations/NNN_description.sql`; never edit an applied migration. New tables need explicit grants and, if tenant scoped, the `tenant_isolation` policy and composite `(org_id, id)` foreign keys. Migrations must be safe to run against the previous code version.
+- **Migrations**: add `backend/migrations/NNN_description.sql`; never edit an applied migration (the runner checks checksums). Files must not contain top level `begin`/`commit`: the runner wraps each file and its bookkeeping row in one transaction. New tables need explicit grants and, if tenant scoped, the `tenant_isolation` policy and composite `(org_id, id)` foreign keys. Migrations must be safe to run against the previous code version.
 - **Adding a tool adapter**: arrives in phase 8.
 - **Adding a playbook**: arrives in phase 7.
 - **Web**: TypeScript strict, ESLint + Prettier, components in `PascalCase.tsx`, tests next to code as `*.test.tsx`.
@@ -87,3 +95,8 @@ Web only: `pnpm --dir web dev`.
 - A stray `VIRTUAL_ENV` in the shell makes `uv` warn; the Makefile unexports it. Run uv commands from `backend/`.
 - Starlette's test client wants `httpx2` installed (it is a dev dependency).
 - The Vite template now ships oxlint; this repo uses ESLint + Prettier per the plan.
+- MinIO no longer publishes images; the local S3 stand-in is SeaweedFS (`objectstore` service, bucket `artifacts`).
+- Backend Compose services share one image built by the `migrate` service (`pull_policy: never` on the rest).
+- Integration tests skip (with a reason) when Postgres or Temporal are not reachable; `make test-backend` starts them.
+- DB tests create a throwaway database per test or module (`tests/conftest.py`); roles are cluster wide and shared.
+- `test_initial_migration_matches_spec_schema...` fails if `001_initial_schema.sql` drifts from `spec/schema.sql`.

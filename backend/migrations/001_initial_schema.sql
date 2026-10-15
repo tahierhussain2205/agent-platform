@@ -25,7 +25,7 @@
      psql -v ON_ERROR_STOP=1 -f schema.sql
 */
 
-begin;
+-- (transaction managed by the migration runner; see app/db/migrate.py)
 
 /* ================================================================== ROLES */
 
@@ -1127,7 +1127,7 @@ grant execute on function app.resolve_task_links(text, text)       to app_user, 
 
 select app.ensure_monthly_partitions(3);
 
-commit;
+-- (end of transaction)
 
 /*
   DEPLOYMENT NOTES

@@ -8,6 +8,7 @@ export COREPACK_ENABLE_DOWNLOAD_PROMPT := 0
 
 UV  := cd backend && uv run
 WEB := pnpm --dir web
+E2E := pnpm --dir e2e
 
 .PHONY: help
 help: ## Show this help
@@ -17,6 +18,8 @@ help: ## Show this help
 install: ## Install backend and web dependencies
 	cd backend && uv sync --frozen
 	$(WEB) install --frozen-lockfile
+	$(E2E) install --frozen-lockfile
+	$(E2E) exec playwright install chromium
 
 .PHONY: hooks
 hooks: ## Install the git commit hooks
@@ -41,6 +44,7 @@ fmt: ## Format backend and web
 typecheck: ## Type check backend (mypy) and web (tsc)
 	$(UV) mypy app tests
 	$(WEB) typecheck
+	$(E2E) exec tsc --noEmit -p .
 
 ## ---------------------------------------------------------------- tests
 
@@ -48,7 +52,7 @@ typecheck: ## Type check backend (mypy) and web (tsc)
 test: test-backend test-web ## Run all unit and integration tests
 
 .PHONY: test-backend
-test-backend: ## Run backend tests
+test-backend: infra ## Run backend tests (starts Postgres and Temporal first)
 	$(UV) pytest
 
 .PHONY: test-web
@@ -62,10 +66,55 @@ build-web: ## Build the web console
 .PHONY: ci
 ci: lint typecheck test build-web ## Run every CI step locally
 
-## ---------------------------------------------------------------- local stack (phase 1)
+## ---------------------------------------------------------------- local stack
 
-.PHONY: dev down reset seed migrate
-dev down reset seed: ## Local stack commands (arrive in phase 1)
-	@echo "'make $@' arrives in phase 1" && exit 2
-migrate: ## Apply migrations (arrives in phase 3)
-	@echo "'make migrate' arrives in phase 3" && exit 2
+COMPOSE := docker compose
+INFRA   := postgres valkey temporal objectstore jaeger
+
+.PHONY: dev
+dev: ## Build and start the whole stack, wait until healthy
+	$(COMPOSE) up -d --build --wait
+
+.PHONY: infra
+infra: ## Start only the infrastructure (run api/worker on the host with uv)
+	$(COMPOSE) up -d --wait $(INFRA)
+
+.PHONY: down
+down: ## Stop the stack, keep data
+	$(COMPOSE) down
+
+.PHONY: reset
+reset: ## Stop the stack, delete all local data, start again
+	$(COMPOSE) down --volumes --remove-orphans
+	$(MAKE) dev
+
+.PHONY: migrate
+migrate: ## Apply migrations to the local database
+	$(COMPOSE) run --rm migrate
+
+.PHONY: seed
+seed: ## Load local development data
+	$(COMPOSE) run --rm seed
+
+.PHONY: logs
+logs: ## Follow logs (S=service to pick one)
+	$(COMPOSE) logs -f $(S)
+
+.PHONY: ps
+ps: ## Show stack status
+	$(COMPOSE) ps -a
+
+.PHONY: smoke
+smoke: ## Check the running stack end to end
+	./scripts/smoke.sh
+
+.PHONY: test-image
+test-image: ## Check the backend image (non root, $$PORT, SIGTERM); needs `make dev`
+	./scripts/test_image.sh
+
+.PHONY: e2e
+e2e: ## Run Playwright browser tests against the running stack
+	$(E2E) test
+
+.PHONY: test-stack
+test-stack: dev smoke test-image e2e ## Start the stack and run every stack level check
