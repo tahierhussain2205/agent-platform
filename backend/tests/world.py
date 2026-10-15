@@ -203,27 +203,40 @@ def _org(conn: psycopg.Connection[Any], key: str, clerk: str, admin: str, user: 
     )
 
 
+def create_world(url: str) -> World:
+    """Migrate, seed and populate an empty database."""
+    migrate(url)
+    if mutation := os.environ.get("SCHEMA_MUTATION"):
+        # Used by scripts/schema_mutations.sh to prove the suite fails when a guarantee breaks.
+        with psycopg.connect(url) as conn:
+            conn.execute(mutation)
+    seed(url)
+    with psycopg.connect(url) as conn:
+        acme = _org(conn, "acme", "org_acme", "alice@acme.test", "bob@acme.test", "bugs")
+        globex = _org(conn, "globex", "org_globex", "dave@globex.test", "erin@globex.test", "general")
+        builtin = _one(
+            conn,
+            "insert into app.playbooks (org_id, key, version, title, instructions) "
+            "values (null, 'qa_summary', 1, 'Q&A and summaries', 'Answer with sources') returning id",
+        )
+        _populate(conn, acme)
+        _populate(conn, globex)
+        conn.commit()
+    return World(url=url, acme=acme, globex=globex, builtin_playbook=builtin)
+
+
 @pytest.fixture(scope="session")
 def world(postgres: None) -> Iterator[World]:
+    """Shared by read mostly tests; changes must be rolled back (use ``tx``)."""
     with throwaway_database("world") as url:
-        migrate(url)
-        if mutation := os.environ.get("SCHEMA_MUTATION"):
-            # Used by scripts/schema_mutations.sh to prove the suite fails when a guarantee breaks.
-            with psycopg.connect(url) as conn:
-                conn.execute(mutation)
-        seed(url)
-        with psycopg.connect(url) as conn:
-            acme = _org(conn, "acme", "org_acme", "alice@acme.test", "bob@acme.test", "bugs")
-            globex = _org(conn, "globex", "org_globex", "dave@globex.test", "erin@globex.test", "general")
-            builtin = _one(
-                conn,
-                "insert into app.playbooks (org_id, key, version, title, instructions) "
-                "values (null, 'qa_summary', 1, 'Q&A and summaries', 'Answer with sources') returning id",
-            )
-            _populate(conn, acme)
-            _populate(conn, globex)
-            conn.commit()
-        yield World(url=url, acme=acme, globex=globex, builtin_playbook=builtin)
+        yield create_world(url)
+
+
+@pytest.fixture(scope="module")
+def module_world(postgres: None) -> Iterator[World]:
+    """A private world per test module, for tests that commit changes."""
+    with throwaway_database("mworld") as url:
+        yield create_world(url)
 
 
 @contextmanager

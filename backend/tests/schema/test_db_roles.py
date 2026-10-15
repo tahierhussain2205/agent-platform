@@ -11,7 +11,7 @@ from psycopg import sql
 from pydantic import SecretStr
 
 from app.db import roles
-from app.db.migrate import ensure_login_users, migrate
+from app.db.migrate import discover, ensure_login_users, migrate
 from app.db.roles import LoginUser, ensure_login_user, scram_sha256_verifier
 from app.settings import Settings
 from tests.conftest import ADMIN_URL, database_url
@@ -243,7 +243,7 @@ def test_migrations_apply_as_a_render_like_user(
             "select rolsuper, rolbypassrls, rolcreaterole from pg_roles where rolname = current_user"
         ).fetchone()
     assert flags == (False, False, True)
-    assert migrate(render_like_db) == ["001"]
+    assert migrate(render_like_db) == [m.version for m in discover()]
     assert "skipped, needs a superuser: alter role app_identity_sync bypassrls" in caplog.text
     assert migrate(render_like_db) == []
     with psycopg.connect(render_like_db) as conn:

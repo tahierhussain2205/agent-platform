@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     # How long a stopping worker waits for in-flight activities before cancelling them.
     worker_graceful_shutdown_seconds: int = Field(default=60, ge=0, le=290)
 
+    # Console: browser origins allowed to call the API and to obtain session tokens (Clerk `azp`).
+    console_origins: str = "http://localhost:5173"
+
+    # Clerk (or the local stand-in). Issuer = the instance's Frontend API URL.
+    clerk_issuer: str | None = None
+    clerk_jwks_url: str | None = None
+    clerk_api_url: str = "https://api.clerk.com/v1"
+    clerk_secret_key: SecretStr | None = None
+    # Svix endpoint secret(s), "whsec_...", comma separated during rotation.
+    clerk_webhook_secret: SecretStr | None = None
+
     # Key Value (Redis compatible).
     redis_url: SecretStr | None = None
 
@@ -71,6 +82,10 @@ class Settings(BaseSettings):
         "s3_secret_access_key",
         "otel_exporter_otlp_endpoint",
         "s3_endpoint_url",
+        "clerk_issuer",
+        "clerk_jwks_url",
+        "clerk_secret_key",
+        "clerk_webhook_secret",
         mode="before",
     )
     @classmethod
@@ -84,6 +99,16 @@ class Settings(BaseSettings):
         if self.migration_database_url is None:
             raise RuntimeError("MIGRATION_DATABASE_URL is not set")
         return self.migration_database_url.get_secret_value()
+
+    @property
+    def console_origin_list(self) -> list[str]:
+        return [o.strip().rstrip("/") for o in self.console_origins.split(",") if o.strip()]
+
+    @property
+    def clerk_webhook_secrets(self) -> list[str]:
+        if self.clerk_webhook_secret is None:
+            return []
+        return [s.strip() for s in self.clerk_webhook_secret.get_secret_value().split(",") if s.strip()]
 
     def db_password(self, component: str) -> str | None:
         secret: SecretStr | None = getattr(self, f"db_{component}_password")
