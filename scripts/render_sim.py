@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import http.server
 import os
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -49,6 +50,11 @@ DASHBOARD_SECRETS = {
     "TEMPORAL_API_KEY": "",  # the local dev server needs none; Temporal Cloud would
     "VITE_API_URL": f"http://localhost:{RENDER_PORT}",
 }
+
+# Render's stand-in default database user: owns the database, can create roles, not a superuser.
+RENDER_DB_USER, RENDER_DB_PASSWORD = "render_default", "render-default-password"
+# generateValue: Render generates each value once and shares it across referencing services.
+GENERATED: dict[str, str] = {}
 
 failures: list[str] = []
 
@@ -94,7 +100,8 @@ def resolve_env(service: dict[str, Any], env: dict[str, Any]) -> dict[str, str]:
         if "fromDatabase" in var:
             db = databases[var["fromDatabase"]["name"]]
             prop = var["fromDatabase"]["property"]
-            url = f"postgresql://postgres:postgres@{PREFIX}-db:5432/{db.get('databaseName', 'postgres')}"
+            creds = f"{RENDER_DB_USER}:{RENDER_DB_PASSWORD}"
+            url = f"postgresql://{creds}@{PREFIX}-db:5432/{db.get('databaseName', 'postgres')}"
             out[key] = {"connectionString": url, "connectionPoolString": url}[prop]
         elif "fromService" in var:
             ref = var["fromService"]
@@ -104,6 +111,8 @@ def resolve_env(service: dict[str, Any], env: dict[str, Any]) -> dict[str, str]:
                 raise SystemExit(f"render_sim: unsupported reference {ref}")
         elif var.get("sync") is False:
             out[key] = DASHBOARD_SECRETS[key]
+        elif var.get("generateValue"):
+            out[key] = GENERATED.setdefault(key, secrets.token_urlsafe(32))
         else:
             out[key] = str(var["value"])
 
@@ -130,7 +139,21 @@ def cleanup() -> None:
     if names:
         docker("rm", "-f", *names, check=False)
     docker("network", "rm", NETWORK, check=False)
-    shutil.rmtree(WORKDIR, ignore_errors=True)
+    if WORKDIR.exists():
+        # Files written by the build container may be owned by a uid this user cannot delete
+        # (root on native Docker, a remapped uid on Docker Desktop); delete them from a container.
+        docker(
+            "run",
+            "--rm",
+            "-v",
+            f"{WORKDIR}:/w",
+            "node:22-slim",
+            "sh",
+            "-c",
+            "rm -rf /w/* /w/.[!.]*",
+            check=False,
+        )
+        shutil.rmtree(WORKDIR, ignore_errors=True)
 
 
 def wait_for(predicate: Any, timeout: float, interval: float = 0.5) -> bool:
@@ -163,10 +186,16 @@ def start_stores(env: dict[str, Any]) -> None:
         "run", "-d", "--name", f"{PREFIX}-temporal", "--network", NETWORK,
         "temporalio/temporal:latest", "server", "start-dev", "--ip=0.0.0.0",
     )  # fmt: skip
-    pg_ready = wait_for(
-        lambda: docker("exec", f"{PREFIX}-db", "pg_isready", "-U", "postgres", check=False).returncode == 0,
-        60,
-    )
+
+    # The image runs a temporary server during initdb, then restarts: wait for the real one.
+    def pg_ready() -> bool:
+        result = docker("logs", f"{PREFIX}-db", check=False)
+        if "PostgreSQL init process complete" not in result.stdout + result.stderr:
+            return False
+        probe = ("exec", f"{PREFIX}-db", "psql", "-U", "postgres", "-tAc", "select 1")
+        return docker(*probe, check=False).returncode == 0
+
+    postgres_up = wait_for(pg_ready, 90)
     temporal_ready = wait_for(
         lambda: docker(
             "exec", f"{PREFIX}-temporal", "temporal", "operator", "cluster", "health",
@@ -174,10 +203,24 @@ def start_stores(env: dict[str, Any]) -> None:
         ).returncode == 0,
         90,
     )  # fmt: skip
-    if pg_ready and temporal_ready:
-        ok(f"stand-ins up: postgres {db['postgresMajorVersion']}, key value, temporal")
-    else:
+    if not (postgres_up and temporal_ready):
         raise SystemExit("render_sim: stand-in stores did not start")
+    psql(
+        f"create role {RENDER_DB_USER} login createrole createdb password '{RENDER_DB_PASSWORD}'; "
+        f"alter database {db.get('databaseName', 'postgres')} owner to {RENDER_DB_USER};"
+    )
+    ok(
+        f"stand-ins up: postgres {db['postgresMajorVersion']} (Render-like owner, not superuser), "
+        "key value, temporal"
+    )
+
+
+def psql(query: str) -> str:
+    db = staging()["databases"][0]
+    return docker(
+        "exec", f"{PREFIX}-db", "psql", "-U", "postgres", "-d", db.get("databaseName", "postgres"),
+        "-v", "ON_ERROR_STOP=1", "-tAc", query,
+    ).stdout.strip()  # fmt: skip
 
 
 def run_command(service: dict[str, Any], field: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -207,6 +250,13 @@ def simulate_backend(env: dict[str, Any]) -> None:
     else:
         bad(f"preDeployCommand failed: {result.stderr.strip()[-500:]}")
         return
+    users = psql(
+        "select string_agg(rolname, ',' order by rolname) from pg_roles where rolname like '%\\_service'"
+    )
+    if users == "api_service,identity_service,maintenance_service,vault_service,worker_service":
+        ok("preDeployCommand created every component login user")
+    else:
+        bad(f"login users after preDeployCommand: {users}")
     again = run_command(api, "preDeployCommand", api_env)
     if again.returncode == 0 and "none pending" in again.stdout:
         ok("preDeployCommand is idempotent on the next deploy")
@@ -239,12 +289,16 @@ def simulate_backend(env: dict[str, Any]) -> None:
 
     cron = services["maintenance-staging"]
     result = run_command(cron, "dockerCommand", resolve_env(cron, env))
-    if result.returncode == 0:
-        ok(f"maintenance-staging ran: {result.stdout.strip()[-200:]}")
-    elif result.returncode == 2 and "not implemented yet" in result.stderr:
-        note(f"maintenance-staging: {result.stderr.strip()}")
+    partitions = psql(
+        "select count(*) from pg_tables where schemaname = 'app' and tablename ~ '_[0-9]{4}_[0-9]{2}$'"
+    )
+    if result.returncode == 0 and "partitions: ok" in result.stdout and int(partitions) >= 8:
+        ok(
+            f"maintenance-staging ran as maintenance_service: {result.stdout.strip()} "
+            f"({partitions} partitions)"
+        )
     else:
-        bad(f"maintenance-staging exited {result.returncode}: {result.stderr[-300:]}")
+        bad(f"maintenance-staging exited {result.returncode}: {result.stdout[-300:]} {result.stderr[-300:]}")
 
     for name, container in (("api-staging", f"{PREFIX}-api"), ("worker-staging", f"{PREFIX}-worker")):
         delay = services[name].get("maxShutdownDelaySeconds", 30)

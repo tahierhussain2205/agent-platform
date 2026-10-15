@@ -45,11 +45,21 @@ def run_worker(_: argparse.Namespace) -> int:
 
 
 def run_migrate(_: argparse.Namespace) -> int:
-    from app.db.migrate import migrate
+    from app.db.migrate import ensure_login_users, migrate
 
-    applied = migrate(get_settings().require_migration_database_url())
+    settings = get_settings()
+    url = settings.require_migration_database_url()
+    applied = migrate(url)
     print(f"applied {len(applied)} migration(s): {', '.join(applied) or 'none pending'}")
+    users = ensure_login_users(url, settings)
+    print(f"login users ensured: {', '.join(users) or 'none configured'}")
     return 0
+
+
+def run_maintenance(_: argparse.Namespace) -> int:
+    from app.maintenance import run_jobs
+
+    return run_jobs(get_settings())
 
 
 def run_seed(_: argparse.Namespace) -> int:
@@ -75,21 +85,10 @@ def run_check(args: argparse.Namespace) -> int:
     return 0
 
 
-def _placeholder(command: str, phase: int) -> Callable[[argparse.Namespace], int]:
-    def run(_: argparse.Namespace) -> int:
-        print(f"'{command}' is not implemented yet (arrives in phase {phase}).", file=sys.stderr)
-        return 2
-
-    return run
-
-
 COMMANDS: dict[str, tuple[str, Callable[[argparse.Namespace], int]]] = {
     "api": ("Run the HTTP API (Slack ingress, console API, health).", run_api),
     "worker": ("Run the Temporal workers.", run_worker),
-    "maintenance": (
-        "Run maintenance jobs (partitions, retention, reconciliation).",
-        _placeholder("maintenance", 3),
-    ),
+    "maintenance": ("Run maintenance jobs (partitions, retention, reconciliation).", run_maintenance),
     "migrate": ("Apply database migrations.", run_migrate),
     "seed": ("Load local development data (refused on staging and production).", run_seed),
     "check": ("Check connectivity to a dependency.", run_check),

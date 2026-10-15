@@ -15,6 +15,9 @@ from pathlib import Path
 import psycopg
 from psycopg import sql
 
+from app.db.roles import LOGIN_USERS, ensure_login_user
+from app.settings import Settings
+
 log = logging.getLogger(__name__)
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
@@ -83,6 +86,8 @@ def migrate(database_url: str, directory: Path = MIGRATIONS_DIR) -> list[str]:
     migrations = discover(directory)
     applied_now: list[str] = []
     with psycopg.connect(database_url, autocommit=True) as conn:
+        # Surface notices (e.g. role attributes skipped on managed Postgres) in the deploy log.
+        conn.add_notice_handler(lambda diag: log.info("postgres notice: %s", diag.message_primary))
         conn.execute("select pg_advisory_lock(%s)", (_LOCK_KEY,))
         try:
             _ensure_bookkeeping(conn)
@@ -107,3 +112,17 @@ def migrate(database_url: str, directory: Path = MIGRATIONS_DIR) -> list[str]:
         finally:
             conn.execute("select pg_advisory_unlock(%s)", (_LOCK_KEY,))
     return applied_now
+
+
+def ensure_login_users(database_url: str, settings: Settings) -> list[str]:
+    """Create or update the login user of every component whose password is configured."""
+    done: list[str] = []
+    with psycopg.connect(database_url, autocommit=True) as conn:
+        for component, user in LOGIN_USERS.items():
+            password = settings.db_password(component)
+            if password is None:
+                continue
+            with conn.transaction():
+                ensure_login_user(conn, user, password)
+            done.append(user.username)
+    return done

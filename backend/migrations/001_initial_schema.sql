@@ -39,10 +39,38 @@ begin
   end loop;
 end $$;
 
-alter role app_user          nobypassrls;
-alter role app_vault         nobypassrls;
-alter role app_identity_sync bypassrls;
-alter role app_maintenance   bypassrls;
+-- [render-compat begin] Replaces the four `alter role ... bypassrls` lines of spec/schema.sql.
+-- Only a superuser (or a role holding BYPASSRLS) may change BYPASSRLS. On managed Postgres the
+-- migrating user may lack it; the application never relies on BYPASSRLS (identity sync and
+-- maintenance go through security definer functions), so a refused change is reported and
+-- skipped. app_user and app_vault must never bypass RLS: that is checked, fail closed.
+do $$
+declare
+  stmt text;
+begin
+  foreach stmt in array array[
+    'alter role app_user          nobypassrls',
+    'alter role app_vault         nobypassrls',
+    'alter role app_identity_sync bypassrls',
+    'alter role app_maintenance   bypassrls'] loop
+    begin
+      execute stmt;
+    exception when insufficient_privilege then
+      raise notice 'skipped, needs a superuser: %', stmt;
+    end;
+  end loop;
+
+  if exists (select 1 from pg_roles where rolname in ('app_user', 'app_vault') and rolbypassrls) then
+    raise exception 'app_user and app_vault must not have BYPASSRLS';
+  end if;
+
+  -- A non superuser migrator holds ADMIN on the roles it created (PostgreSQL 16) but needs SET
+  -- to create the schema owned by app_owner and to `set role app_owner` in later migrations.
+  if not (select rolsuper from pg_roles where rolname = current_user) then
+    grant app_owner to current_user with set true, inherit false;
+  end if;
+end $$;
+-- [render-compat end]
 
 create schema app authorization app_owner;
 set local role app_owner;

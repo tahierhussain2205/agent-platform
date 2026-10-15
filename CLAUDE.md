@@ -54,6 +54,8 @@ A change never weakens one of these to make something work. If an invariant bloc
 | `make smoke` / `make test-image` / `make e2e` | Stack smoke checks / image checks / Playwright |
 | `make test-stack` | `dev` + every stack level check |
 | `make render-sim` | Execute `render.yaml` locally with Docker the way Render would |
+| `make maintenance` | Run the maintenance jobs once (partitions; later reconciliation, retention) |
+| `make test-mutations` | Weaken each DB guarantee in turn; the schema suite must catch every one |
 
 Backend only: `cd backend && uv run pytest -k name`, `uv run python -m app api`.
 Web only: `pnpm --dir web dev`.
@@ -70,7 +72,8 @@ S3 (SeaweedFS) http://localhost:8333.
 - **Typing**: full annotations; no `Any` in public signatures unless wrapping untyped JSON.
 - **Errors**: raise domain exceptions in services; the API layer maps them to HTTP responses. Never put secrets or tokens in exception messages.
 - **Logging**: structured JSON logs (phase 4). Never log tokens, secrets or raw Slack message text.
-- **Migrations**: add `backend/migrations/NNN_description.sql`; never edit an applied migration (the runner checks checksums). Files must not contain top level `begin`/`commit`: the runner wraps each file and its bookkeeping row in one transaction. New tables need explicit grants and, if tenant scoped, the `tenant_isolation` policy and composite `(org_id, id)` foreign keys. Migrations must be safe to run against the previous code version.
+- **Migrations**: add `backend/migrations/NNN_description.sql`; never edit an applied migration (the runner checks checksums). Files must not contain top level `begin`/`commit`: the runner wraps each file and its bookkeeping row in one transaction. Start with `set local role app_owner;` so objects are owned by `app_owner`. Migrations run as a non superuser (Render-like `agent_admin` locally): never rely on BYPASSRLS; cross tenant work goes through `security definer` functions owned by `app_owner` with `execute` granted only to the role that needs it.
+- **Database access by component**: each component connects as its own login user via `Settings.component_dsn("api" | "worker" | "vault" | "identity" | "maintenance")`; never use `MIGRATION_DATABASE_URL` outside `app migrate` / `app seed`. New tables need explicit grants and, if tenant scoped, the `tenant_isolation` policy and composite `(org_id, id)` foreign keys. Migrations must be safe to run against the previous code version.
 - **Adding a tool adapter**: arrives in phase 8.
 - **Adding a playbook**: arrives in phase 7.
 - **Web**: TypeScript strict, ESLint + Prettier, components in `PascalCase.tsx`, tests next to code as `*.test.tsx`.
@@ -78,7 +81,8 @@ S3 (SeaweedFS) http://localhost:8333.
 ## Testing rules
 
 - Real Postgres for anything touching the database. Never mock row level security.
-- Every new tenant table gets an isolation test (org A cannot read, insert, update, link or delete org B's rows; no context means no rows).
+- Every new tenant table gets an isolation test (org A cannot read, insert, update, link or delete org B's rows; no context means no rows): add it to `TENANT_TABLES` in `tests/schema/conftest.py` and give the `world` fixture a row for it; the generic suite in `tests/schema/test_isolation.py` then covers it (a meta test fails until you do).
+- New database guarantees get a test in `tests/schema/test_guarantees.py` and, ideally, a mutation in `scripts/schema_mutations.sh`.
 - Tests for security properties assert the denial, not just the happy path.
 - Browser flows are tested end to end with Playwright.
 
@@ -103,4 +107,7 @@ S3 (SeaweedFS) http://localhost:8333.
 - `test_initial_migration_matches_spec_schema...` fails if `001_initial_schema.sql` drifts from `spec/schema.sql`.
 - Every env var `render.yaml` sets for a backend service must be a `Settings` field (`tests/test_render_blueprint.py`); add the field first.
 - Empty optional secrets (`KEY=`) are treated as unset by `Settings`.
-- Docker Desktop does not share `/tmp` with its VM; scripts that bind mount use `~/.cache/...`.
+- Docker Desktop does not share `/tmp` with its VM; scripts that bind mount use `~/.cache/...`. Files a container writes there may be owned by a remapped uid: delete them from a container.
+- Roles are cluster wide. Tests create login users with unique names and drop them; never touch the real `*_service` users from tests (the running dev stack uses them).
+- After changing `dev/postgres/init/` or editing migration 001, run `make reset` (init scripts run only on an empty volume; edited migrations fail the checksum).
+- A CREATEROLE non superuser cannot mention `SUPERUSER`/`BYPASSRLS` in `ALTER ROLE`; `app/db/roles.py` verifies attributes instead.

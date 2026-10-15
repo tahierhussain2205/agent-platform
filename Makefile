@@ -55,6 +55,10 @@ test: test-backend test-web ## Run all unit and integration tests
 test-backend: infra ## Run backend tests (starts Postgres and Temporal first)
 	$(UV) pytest
 
+.PHONY: test-mutations
+test-mutations: infra ## Weaken each DB guarantee in turn and check the schema suite catches it
+	./scripts/schema_mutations.sh
+
 .PHONY: test-web
 test-web: ## Run web unit tests
 	$(WEB) test
@@ -64,7 +68,7 @@ build-web: ## Build the web console
 	$(WEB) build
 
 .PHONY: ci
-ci: lint typecheck test build-web ## Run every CI step locally
+ci: lint typecheck test test-mutations build-web ## Run every CI step locally
 
 ## ---------------------------------------------------------------- local stack
 
@@ -95,6 +99,10 @@ migrate: ## Apply migrations to the local database
 .PHONY: seed
 seed: ## Load local development data
 	$(COMPOSE) run --rm seed
+
+.PHONY: maintenance
+maintenance: ## Run the maintenance jobs once (what the Render cron job does daily)
+	$(COMPOSE) run --rm --no-deps seed app maintenance
 
 .PHONY: logs
 logs: ## Follow logs (S=service to pick one)

@@ -27,6 +27,29 @@ projects:
               - key: TEMPORAL_TASK_QUEUE
                 value: agent-tasks
 
+          # One generated password per component login user (created by `app migrate`).
+          # Render generates each value once; services only reference the groups they need.
+          - name: db-api-staging
+            envVars:
+              - key: DB_API_PASSWORD
+                generateValue: true
+          - name: db-worker-staging
+            envVars:
+              - key: DB_WORKER_PASSWORD
+                generateValue: true
+          - name: db-vault-staging
+            envVars:
+              - key: DB_VAULT_PASSWORD
+                generateValue: true
+          - name: db-identity-staging
+            envVars:
+              - key: DB_IDENTITY_PASSWORD
+                generateValue: true
+          - name: db-maintenance-staging
+            envVars:
+              - key: DB_MAINTENANCE_PASSWORD
+                generateValue: true
+
         databases:
           - name: db-staging
             region: oregon
@@ -61,10 +84,21 @@ projects:
               numInstances: 1
             envVars:
               - fromGroup: backend-staging
+              # `app migrate` (preDeployCommand) creates every component's login user, so this
+              # service references every password group.
+              - fromGroup: db-api-staging
+              - fromGroup: db-worker-staging
+              - fromGroup: db-vault-staging
+              - fromGroup: db-identity-staging
+              - fromGroup: db-maintenance-staging
               - key: MIGRATION_DATABASE_URL
                 fromDatabase:
                   name: db-staging
                   property: connectionString
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: db-staging
+                  property: connectionPoolString
               - key: REDIS_URL
                 fromService:
                   type: keyvalue
@@ -98,6 +132,12 @@ projects:
               numInstances: 1
             envVars:
               - fromGroup: backend-staging
+              - fromGroup: db-worker-staging
+              - fromGroup: db-vault-staging
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: db-staging
+                  property: connectionPoolString
               - key: WORKER_GRACEFUL_SHUTDOWN_SECONDS
                 value: 100
               - key: REDIS_URL
@@ -128,10 +168,11 @@ projects:
               paths: ["backend/**", "render.yaml"]
             envVars:
               - fromGroup: backend-staging
-              - key: MIGRATION_DATABASE_URL
+              - fromGroup: db-maintenance-staging
+              - key: DATABASE_URL
                 fromDatabase:
                   name: db-staging
-                  property: connectionString
+                  property: connectionPoolString
 
           # React console, built by Render, served as a single page app.
           - type: web

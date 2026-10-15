@@ -179,10 +179,12 @@ def test_secrets_are_never_literal(service: dict[str, Any]) -> None:
             assert "value" not in var, f"{key} must be sync: false or a reference, never a literal"
 
 
-def test_groups_hold_no_secrets() -> None:
+def test_groups_hold_secrets_only_as_generated_values() -> None:
     for group in GROUPS.values():
         for var in group["envVars"]:
-            assert not SECRET_NAME.search(var["key"]), var["key"]
+            if SECRET_NAME.search(var["key"]):
+                assert var.get("generateValue") is True, var["key"]
+                assert "value" not in var, var["key"]
 
 
 def test_references_resolve_within_the_environment() -> None:
@@ -206,9 +208,31 @@ def test_temporal_cloud_settings_are_prompted_secrets() -> None:
 
 
 def test_migrations_use_the_direct_connection_not_the_pool() -> None:
-    for name in ("api-staging", "maintenance-staging"):
-        ref = _env_keys(SERVICES[name])["MIGRATION_DATABASE_URL"]["fromDatabase"]
-        assert ref["property"] == "connectionString"
+    ref = _env_keys(SERVICES["api-staging"])["MIGRATION_DATABASE_URL"]["fromDatabase"]
+    assert ref["property"] == "connectionString"
+
+
+def test_only_the_service_running_migrations_holds_the_admin_url() -> None:
+    holders = {name for name, svc in SERVICES.items() if "MIGRATION_DATABASE_URL" in _env_keys(svc)}
+    assert holders == {"api-staging"}
+
+
+@pytest.mark.parametrize("name", ["api-staging", "worker-staging", "maintenance-staging"])
+def test_application_traffic_uses_the_pool(name: str) -> None:
+    assert _env_keys(SERVICES[name])["DATABASE_URL"]["fromDatabase"]["property"] == "connectionPoolString"
+
+
+@pytest.mark.parametrize(
+    ("name", "passwords"),
+    [
+        ("api-staging", {"API", "WORKER", "VAULT", "IDENTITY", "MAINTENANCE"}),  # runs `app migrate`
+        ("worker-staging", {"WORKER", "VAULT"}),
+        ("maintenance-staging", {"MAINTENANCE"}),
+    ],
+)
+def test_each_service_gets_only_the_db_passwords_it_needs(name: str, passwords: set[str]) -> None:
+    keys = {k for k in _env_keys(SERVICES[name]) if k.startswith("DB_") and k.endswith("_PASSWORD")}
+    assert keys == {f"DB_{p}_PASSWORD" for p in passwords}
 
 
 # ------------------------------------------------------------------ data stores

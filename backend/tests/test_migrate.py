@@ -25,12 +25,23 @@ def test_repository_migrations_are_valid() -> None:
     assert [m.version for m in migrations] == sorted(m.version for m in migrations)
 
 
-def test_initial_migration_matches_spec_schema_apart_from_transaction_lines() -> None:
-    """001 is spec/schema.sql verbatim except the top level begin/commit the runner owns."""
-    spec = (MIGRATIONS_DIR.parents[1] / "spec" / "schema.sql").read_text().splitlines()
-    ours = (MIGRATIONS_DIR / "001_initial_schema.sql").read_text().splitlines()
-    differing = [(a, b) for a, b in zip(spec, ours, strict=True) if a != b]
-    assert [a for a, _ in differing] == ["begin;", "commit;"]
+def test_initial_migration_matches_spec_schema_apart_from_documented_patches() -> None:
+    """001 is spec/schema.sql verbatim except: the top level begin/commit (the runner owns the
+    transaction) and the role attribute block marked render-compat (managed Postgres)."""
+    spec = (MIGRATIONS_DIR.parents[1] / "spec" / "schema.sql").read_text()
+    ours = (MIGRATIONS_DIR / "001_initial_schema.sql").read_text()
+    start, end = ours.index("-- [render-compat begin]"), ours.index("-- [render-compat end]\n")
+    original_roles = (
+        "alter role app_user          nobypassrls;\n"
+        "alter role app_vault         nobypassrls;\n"
+        "alter role app_identity_sync bypassrls;\n"
+        "alter role app_maintenance   bypassrls;\n"
+    )
+    restored = ours[:start] + original_roles + ours[end + len("-- [render-compat end]\n") :]
+    restored = restored.replace(
+        "-- (transaction managed by the migration runner; see app/db/migrate.py)", "begin;"
+    ).replace("-- (end of transaction)", "commit;")
+    assert restored == spec
 
 
 @pytest.mark.parametrize("name", ["1_short.sql", "001-dash.sql", "001_Upper.sql", "abc_name.sql"])

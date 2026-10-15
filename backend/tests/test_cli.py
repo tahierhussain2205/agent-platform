@@ -19,12 +19,6 @@ def test_missing_command_fails() -> None:
     assert result.returncode != 0
 
 
-@pytest.mark.parametrize("command", ["maintenance"])
-def test_placeholders_exit_nonzero_with_message(command: str, capsys: pytest.CaptureFixture[str]) -> None:
-    assert cli.main([command]) == 2
-    assert "not implemented yet" in capsys.readouterr().err
-
-
 def test_api_binds_all_interfaces_on_port_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PORT", "12345")
     config = cli.uvicorn_config()

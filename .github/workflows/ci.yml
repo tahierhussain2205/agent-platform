@@ -55,6 +55,8 @@ jobs:
         run: uv run mypy app tests
       - name: Tests
         run: uv run pytest
+      - name: Schema mutation check
+        run: ../scripts/schema_mutations.sh
 
   web:
     runs-on: ubuntu-latest

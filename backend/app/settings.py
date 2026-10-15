@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,6 +18,14 @@ class Settings(BaseSettings):
     # Direct (non pooled) connection used only by `migrate` and `seed`. It holds a session
     # advisory lock, so it must never point at PgBouncer.
     migration_database_url: SecretStr | None = None
+    # Application traffic (Render: the PgBouncer connectionPoolString). Its user and password are
+    # replaced by each component's own login user; see component_dsn().
+    database_url: SecretStr | None = None
+    db_api_password: SecretStr | None = None
+    db_worker_password: SecretStr | None = None
+    db_vault_password: SecretStr | None = None
+    db_identity_password: SecretStr | None = None
+    db_maintenance_password: SecretStr | None = None
 
     temporal_address: str = "localhost:7233"
     temporal_namespace: str = "default"
@@ -29,7 +38,18 @@ class Settings(BaseSettings):
     # Key Value (Redis compatible). Used from phase 4.
     redis_url: SecretStr | None = None
 
-    @field_validator("migration_database_url", "temporal_api_key", "redis_url", mode="before")
+    @field_validator(
+        "migration_database_url",
+        "database_url",
+        "db_api_password",
+        "db_worker_password",
+        "db_vault_password",
+        "db_identity_password",
+        "db_maintenance_password",
+        "temporal_api_key",
+        "redis_url",
+        mode="before",
+    )
     @classmethod
     def _empty_secret_is_unset(cls, value: object) -> object:
         # An empty `sync: false` variable (or `KEY=` in a .env file) means "not configured".
@@ -41,6 +61,29 @@ class Settings(BaseSettings):
         if self.migration_database_url is None:
             raise RuntimeError("MIGRATION_DATABASE_URL is not set")
         return self.migration_database_url.get_secret_value()
+
+    def db_password(self, component: str) -> str | None:
+        secret: SecretStr | None = getattr(self, f"db_{component}_password")
+        return secret.get_secret_value() if secret else None
+
+    def component_dsn(self, component: str) -> str:
+        """DATABASE_URL with the component's own login user and password."""
+        from app.db.roles import LOGIN_USERS
+
+        if self.database_url is None:
+            raise RuntimeError("DATABASE_URL is not set")
+        user = LOGIN_USERS[component]  # type: ignore[index]
+        password = self.db_password(component)
+        if password is None:
+            raise RuntimeError(f"DB_{component.upper()}_PASSWORD is not set")
+        parts = urlsplit(self.database_url.get_secret_value())
+        host = parts.hostname or ""
+        if ":" in host:  # IPv6 literal
+            host = f"[{host}]"
+        netloc = f"{quote(user.username, safe='')}:{quote(password, safe='')}@{host}"
+        if parts.port:
+            netloc += f":{parts.port}"
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 @lru_cache

@@ -30,3 +30,12 @@ What each phase delivered. Decisions and blockers are in [spec/decisions_and_blo
 - `make render-sim`: executes the Blueprint locally (stand-in stores, `preDeployCommand`, PORT 10000 health, worker round trip, SIGTERM within limits, cron, clean checkout static build with SPA rewrite and headers). Passing.
 - `docs/runbooks/deploy.md`.
 - Not verified: an actual Render deploy, preview environment, or `checksPass` trigger (B-001, B-002).
+
+## Phase 3: Database and migrations (done locally; staging blocked by B-001)
+
+- Migration 001 runs as a non superuser with CREATEROLE (assumed Render default user, B-010); BYPASSRLS changes are skipped with a notice and isolation fails closed. Compose's Postgres mirrors this with `agent_admin`.
+- Login users per component created by `app migrate` (SCRAM verifiers, attributes verified); `Settings.component_dsn()`.
+- `app maintenance` (partitions job) as `maintenance_service`; `make maintenance`.
+- Schema test suite: generic isolation for every tenant table (231 tests), spec 13.4 guarantees, login users, Render-like migrations, maintenance. Mutation check: 10 of 10 weakened guarantees caught.
+- `render.yaml`: pooled `DATABASE_URL`, generated password groups per component; `make render-sim` now migrates as a Render-like user and runs the cron.
+- Verified: 400 backend tests, mutation check, `make reset` + smoke, `make render-sim` all pass.

@@ -40,7 +40,7 @@ def _snapshot(url: str) -> dict[str, list[Any]]:
                 )
             ]
             col_list = ", ".join(cols)
-            out[table] = conn.execute(f"select {col_list} from app.{table} order by 1, 2").fetchall()  # noqa: S608
+            out[table] = conn.execute(f"select {col_list} from app.{table} order by 1, 2").fetchall()
     return out
 
 

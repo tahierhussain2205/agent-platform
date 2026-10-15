@@ -1,8 +1,9 @@
 """Local development data, loaded from ``fixture.json``.
 
-Runs as ``app_maintenance`` (the trusted jobs role) over the direct migration connection, and is
-idempotent: every row is upserted by its natural key, so running it twice changes nothing.
-The same fixture feeds the local Clerk and Slack stand-ins, so people and channels line up.
+Runs as ``app_owner`` over the direct migration connection (the owner is not subject to RLS, which
+works whether or not managed Postgres allows BYPASSRLS), and is idempotent: every row is upserted
+by its natural key, so running it twice changes nothing. The same fixture feeds the local Clerk and
+Slack stand-ins, so people and channels line up.
 """
 
 import json
@@ -35,7 +36,7 @@ def seed(database_url: str, fixture: dict[str, Any] | None = None) -> dict[str, 
     data = fixture or load_fixture()
     org_ids: dict[str, UUID] = {}
     with psycopg.connect(database_url) as conn, conn.cursor() as cur:
-        cur.execute("set local role app_maintenance")
+        cur.execute("set local role app_owner")
 
         user_ids: dict[str, UUID] = {}
         for user in data["users"]:

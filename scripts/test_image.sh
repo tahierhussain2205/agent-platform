@@ -23,8 +23,9 @@ docker rm -f img-test-api >/dev/null
 [[ $(docker run --rm --entrypoint id "$IMAGE" -u) == 10001 ]] && pass "runs as uid 10001" || fail "runs as root"
 docker run --rm --entrypoint sh "$IMAGE" -c 'test ! -e /app/tests && test ! -e /app/.env' \
   && pass "no tests or .env in the image" || fail "tests or .env baked into the image"
-set +e; docker run --rm "$IMAGE" app maintenance >/dev/null 2>&1; rc=$?; set -e
-[[ $rc == 2 ]] && pass "unbuilt command exits 2" || fail "placeholder exit code $rc"
+set +e; out=$(docker run --rm "$IMAGE" app maintenance 2>&1); rc=$?; set -e
+[[ $rc != 0 ]] && grep -q "DATABASE_URL is not set" <<<"$out" \
+  && pass "unconfigured command fails loudly (exit $rc)" || fail "unconfigured maintenance: exit $rc"
 
 # API: custom PORT, health, graceful stop well within the grace period.
 docker run -d --name img-test-api -e PORT=9123 -p 9123:9123 "$IMAGE" app api >/dev/null
