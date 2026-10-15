@@ -18,7 +18,7 @@ SPANS = InMemorySpanExporter()
 configure_tracing("agent-test", None, "test", extra_exporters=[SPANS])
 
 # The populated two-org database (`world`) and helpers, shared by every database-backed test.
-pytest_plugins = ["tests.world"]
+pytest_plugins = ["tests.world", "tests.stack"]
 
 # Admin connection to a Postgres server used for throwaway test databases.
 # Local: the Compose Postgres (`make infra`). CI: the Postgres service container.

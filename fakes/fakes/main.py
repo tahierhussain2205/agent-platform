@@ -9,6 +9,8 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Response
 from starlette.middleware.cors import CORSMiddleware
 
+from fakes.anthropic import Anthropic
+from fakes.anthropic import build_router as build_anthropic_router
 from fakes.clerk import Clerk, build_router, clerk_error_handler
 from fakes.config import Config
 from fakes.slack import Slack, SlackDeliverer
@@ -27,6 +29,7 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     clerk = Clerk(config, store, deliverer)
     slack_deliverer = SlackDeliverer(config.slack_signing_secret)
     slack = Slack(config, store, slack_deliverer)
+    anthropic = Anthropic(config)
 
     def fixture() -> dict[str, Any] | None:
         return json.loads(config.seed_fixture.read_text()) if config.seed_fixture.exists() else None
@@ -37,6 +40,7 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
             store.data = {}
             clerk.reset(fixture(), keep_key=key)
             slack.reset(fixture())
+        anthropic.reset()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -60,10 +64,12 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     app.include_router(build_router(clerk))
     app.include_router(build_slack_router(slack))
     app.include_router(build_slack_admin_router(slack))
+    app.include_router(build_anthropic_router(anthropic))
     app.state.clerk = clerk
     app.state.deliverer = deliverer
     app.state.slack = slack
     app.state.slack_deliverer = slack_deliverer
+    app.state.anthropic = anthropic
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> Response:

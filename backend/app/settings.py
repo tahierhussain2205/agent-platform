@@ -65,6 +65,23 @@ class Settings(BaseSettings):
     # Signs the OAuth `state` parameter (install flow).
     slack_state_secret: SecretStr | None = None
 
+    # Model provider (Anthropic Messages API, or the local stand-in). An optional fallback route
+    # (another endpoint or region) is tried when the primary keeps failing.
+    anthropic_api_url: str = "https://api.anthropic.com"
+    anthropic_api_key: SecretStr | None = None
+    anthropic_fallback_api_url: str | None = None
+    anthropic_fallback_api_key: SecretStr | None = None
+    # Model per tier (admins choose tiers, not models).
+    model_fast: str = "claude-haiku-4-5-20251001"
+    model_standard: str = "claude-sonnet-5"
+    model_advanced: str = "claude-opus-5-5"
+    # Model requests per minute per org: interactive lane, and the smaller batch lane (schedules).
+    llm_org_rpm: int = Field(default=120, ge=1, le=100_000)
+    llm_org_batch_rpm: int = Field(default=30, ge=1, le=100_000)
+    # Default token budget of one task, and how long an approval request stays open.
+    task_token_budget: int = Field(default=300_000, ge=1_000)
+    approval_ttl_hours: int = Field(default=24, ge=1, le=24 * 30)
+
     # Key Value (Redis compatible).
     redis_url: SecretStr | None = None
 
@@ -102,6 +119,9 @@ class Settings(BaseSettings):
         "slack_client_secret",
         "slack_signing_secret",
         "slack_state_secret",
+        "anthropic_api_key",
+        "anthropic_fallback_api_url",
+        "anthropic_fallback_api_key",
         mode="before",
     )
     @classmethod

@@ -527,7 +527,9 @@ class Slack:
             for m in c["messages"]
             if (not m.get("thread_ts") or m["thread_ts"] == m["ts"]) and oldest <= float(m["ts"]) <= latest
         ]
-        newest_first = sorted((self._with_replies(c, m) for m in top), key=lambda m: float(m["ts"]), reverse=True)
+        newest_first = sorted(
+            (self._visible(self._with_replies(c, m), p) for m in top), key=lambda m: float(m["ts"]), reverse=True
+        )
         page, meta = self._page(newest_first, p)
         return {"messages": page, "has_more": bool(meta["response_metadata"]["next_cursor"]), **meta}
 
@@ -546,8 +548,8 @@ class Slack:
             raise SlackApiError("thread_not_found")
         replies = [r for r in c["messages"] if r.get("thread_ts") == ts and r["ts"] != ts]
         items = [
-            self._with_replies(c, parent),
-            *({**r, "type": "message"} for r in sorted(replies, key=lambda r: float(r["ts"]))),
+            self._visible(self._with_replies(c, parent), p),
+            *(self._visible({**r, "type": "message"}, p) for r in sorted(replies, key=lambda r: float(r["ts"]))),
         ]
         page, meta = self._page(items, p)
         return {"messages": page, "has_more": bool(meta["response_metadata"]["next_cursor"]), **meta}
@@ -584,9 +586,25 @@ class Slack:
             "text": p.get("text", ""),
             "blocks": self._blocks(p),
             **({"thread_ts": p["thread_ts"]} if p.get("thread_ts") else {}),
+            **({"metadata": self._metadata(p)} if p.get("metadata") else {}),
         }
         target["messages"].append(message)
         return {"channel": target["id"], "ts": message["ts"], "message": message}
+
+    @staticmethod
+    def _metadata(p: dict[str, Any]) -> dict[str, Any]:
+        raw = p["metadata"]
+        value = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(value, dict) or not value.get("event_type"):
+            raise SlackApiError("invalid_metadata_format")
+        return value
+
+    @staticmethod
+    def _visible(m: dict[str, Any], p: dict[str, Any]) -> dict[str, Any]:
+        """Message metadata is only returned with ``include_all_metadata``."""
+        if m.get("metadata") and str(p.get("include_all_metadata", "")).lower() not in ("true", "1"):
+            return {k: v for k, v in m.items() if k != "metadata"}
+        return m
 
     def m_chat_update(self, team: dict[str, Any], bot: str, p: dict[str, Any], token: str | None) -> dict[str, Any]:
         target = self._target(team, bot, p.get("channel", ""))

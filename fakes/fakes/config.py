@@ -40,3 +40,10 @@ class Config:
     )
     slack_events_url: str | None = field(default_factory=lambda: os.environ.get("SLACK_EVENTS_URL") or None)
     slack_interactions_url: str | None = field(default_factory=lambda: os.environ.get("SLACK_INTERACTIONS_URL") or None)
+    # Anthropic
+    anthropic_api_key: str = field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY", "sk-ant-local-key"))
+    anthropic_models: list[str] = field(
+        default_factory=lambda: _list(
+            os.environ.get("ANTHROPIC_MODELS", "claude-haiku-4-5-20251001,claude-sonnet-5,claude-opus-5-5")
+        )
+    )

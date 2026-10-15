@@ -162,6 +162,19 @@ def test_history_threads_and_replies(client: TestClient) -> None:
     assert [m["user"] for m in replies] == ["U0QUINN", "U0BOB", "U0BOB"]
 
 
+def test_message_metadata_round_trip(client: TestClient) -> None:
+    """Posts can carry metadata (we put idempotency keys there); reads return it only on request."""
+    meta = {"event_type": "agent_post", "event_payload": {"key": "task:1:report"}}
+    root = api(client, "chat.postMessage", channel="C0BUGS", text="root").json()["ts"]
+    api(client, "chat.postMessage", channel="C0BUGS", text="reply", thread_ts=root, metadata=meta)
+    replies = api(client, "conversations.replies", channel="C0BUGS", ts=root, include_all_metadata="true").json()
+    assert replies["messages"][1]["metadata"] == meta
+    plain = api(client, "conversations.replies", channel="C0BUGS", ts=root).json()
+    assert "metadata" not in plain["messages"][1]
+    bad = api(client, "chat.postMessage", channel="C0BUGS", text="x", metadata={"event_payload": {}}).json()
+    assert bad["error"] == "invalid_metadata_format"
+
+
 def test_mentions_emit_signed_app_mention_events(client: TestClient, receiver: Receiver) -> None:
     client.post(
         "/slack/_ui/post",
