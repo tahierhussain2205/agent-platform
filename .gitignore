@@ -1,0 +1,31 @@
+# Personal notes (not part of the project)
+notes/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+web/dist/
+e2e/test-results/
+e2e/playwright-report/
+.pnpm-store/
+
+# Env and local data
+.env
+.env.*
+!.env.example
+*.local
+.playwright-mcp/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
