@@ -157,3 +157,93 @@ def test_slack_reconcile_job_starts_one_sync_per_workspace_per_hour(
             await handle.terminate("test cleanup")
 
     asyncio.run(check_and_clean())
+
+
+def _stale_task(world: World, workflow_id: str | None, status: str = "running") -> uuid.UUID:
+    with psycopg.connect(world.url) as conn:
+        row = conn.execute(
+            "insert into app.tasks (org_id, requested_by, trigger, model_tier, status, workflow_id, updated_at) "
+            "values (%s, %s, 'mention', 'standard', %s, %s, now() - interval '1 hour') returning id",
+            (world.acme.id, world.acme.user, status, workflow_id),
+        ).fetchone()
+        assert row is not None
+        conn.commit()
+        return row[0]  # type: ignore[no-any-return]
+
+
+def test_open_task_functions_are_for_maintenance_only(world: World) -> None:
+    for role in ("app_user", "app_vault", "app_identity_sync"):
+        for call in ("select * from app.maintenance_open_tasks('1 minute')",
+                     "select app.maintenance_fail_task(gen_random_uuid(), 'x')"):  # fmt: skip
+            with psycopg.connect(world.url) as conn:
+                conn.execute(sql.SQL("set local role {}").format(sql.Identifier(role)))
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    conn.execute(call)
+
+
+def test_fail_task_closes_the_task_expires_approvals_and_audits(world: World) -> None:
+    task = _stale_task(world, f"task-{uuid.uuid4().hex}")
+    fresh = _stale_task(world, f"task-{uuid.uuid4().hex}")
+    with psycopg.connect(world.url) as conn:
+        conn.execute("update app.tasks set updated_at = now() where id = %s", (fresh,))  # trigger: now()
+        conn.execute(
+            "insert into app.approvals (org_id, task_id, action_summary, action_tier, expires_at) "
+            "values (%s, %s, 'post', 'irreversible', now() + interval '1 hour')",
+            (world.acme.id, task),
+        )
+        conn.commit()
+        conn.execute("set local role app_maintenance")
+        listed = {r[0] for r in conn.execute("select task_id from app.maintenance_open_tasks('10 minutes')")}
+        assert task in listed
+        assert fresh not in listed  # recently active
+        first = conn.execute("select app.maintenance_fail_task(%s, 'its workflow ended')", (task,)).fetchone()
+        again = conn.execute("select app.maintenance_fail_task(%s, 'again')", (task,)).fetchone()
+        conn.commit()
+    assert (first, again) == ((True,), (False,))
+    with psycopg.connect(world.url) as conn:
+        assert conn.execute("select status, error from app.tasks where id = %s", (task,)).fetchone() == (
+            "failed",
+            "its workflow ended",
+        )
+        assert conn.execute("select status from app.approvals where task_id = %s", (task,)).fetchone() == (
+            "expired",
+        )
+        assert conn.execute(
+            "select actor_type, action from app.audit_log where task_id = %s", (task,)
+        ).fetchall() == [("system", "task.reconciled")]
+
+
+def test_task_reconcile_job_fails_only_tasks_whose_workflow_is_gone(
+    world: World, maintenance_user: LoginUser
+) -> None:
+    import asyncio
+
+    from app.settings import Settings
+    from app.temporal import connect_temporal
+    from tests.test_worker import TEMPORAL, _reachable
+
+    if not _reachable(TEMPORAL):
+        pytest.skip(f"Temporal not reachable at {TEMPORAL} (run `make infra`)")
+    settings = Settings(temporal_address=TEMPORAL, temporal_task_queue=f"test-{uuid.uuid4().hex[:8]}")
+    alive_id = f"task-alive-{uuid.uuid4().hex}"
+
+    async def start_alive() -> None:  # a running workflow on a queue nobody polls
+        client = await connect_temporal(settings)
+        await client.start_workflow("TaskWorkflow", "x", id=alive_id, task_queue=settings.temporal_task_queue)
+
+    asyncio.run(start_alive())
+    gone = _stale_task(world, f"task-gone-{uuid.uuid4().hex}")
+    alive = _stale_task(world, alive_id, status="awaiting_approval")
+    (result,) = maintenance.run_all(_dsn(world, maintenance_user), [maintenance.task_reconcile_job(settings)])
+    assert result.ok, result.detail
+    with psycopg.connect(world.url) as conn:
+        states = dict(
+            conn.execute("select id, status from app.tasks where id in (%s, %s)", (gone, alive)).fetchall()
+        )
+    assert states == {gone: "failed", alive: "awaiting_approval"}
+
+    async def cleanup() -> None:
+        client = await connect_temporal(settings)
+        await client.get_workflow_handle(alive_id).terminate("test cleanup")
+
+    asyncio.run(cleanup())

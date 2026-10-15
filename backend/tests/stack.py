@@ -124,11 +124,11 @@ async def stack(env: Env) -> AsyncIterator[Stack]:
 
 
 def app_for(stack: Stack, **overrides: Any) -> Any:
-    resources = Resources(
-        db_pool=stack.pool, identity_pool=stack.identity_pool, vault_pool=stack.vault_pool, vault=stack.vault, kv=stack.kv,
-        slack=stack.slack, temporal=stack.temporal, **overrides,
-    )  # fmt: skip
-    return create_app(Settings(env="test"), resources)
+    options: dict[str, Any] = {
+        "db_pool": stack.pool, "identity_pool": stack.identity_pool, "vault_pool": stack.vault_pool,
+        "vault": stack.vault, "kv": stack.kv, "slack": stack.slack, "temporal": stack.temporal,
+    }  # fmt: skip
+    return create_app(Settings(env="test"), Resources(**{**options, **overrides}))
 
 
 @pytest_asyncio.fixture(loop_scope="session")

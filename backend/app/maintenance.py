@@ -97,8 +97,55 @@ def slack_reconcile_job(settings: Settings) -> Job:
     return ("slack_reconcile", run)
 
 
+TASK_STALE_AFTER = "10 minutes"
+
+
+def task_reconcile_job(settings: Settings) -> Job:
+    """Fail open tasks whose workflow no longer runs (terminated, timed out, or never started), so
+    a thread is never blocked by a task nobody is working on. Tasks waiting for approval have a
+    running workflow and are left alone."""
+
+    def run(conn: psycopg.Connection) -> str:
+        rows = conn.execute(
+            "select task_id, workflow_id from app.maintenance_open_tasks(%s::interval)", (TASK_STALE_AFTER,)
+        ).fetchall()
+        if not rows:
+            return "no open tasks to check"
+
+        async def gone() -> list[tuple[object, str]]:
+            from temporalio.client import WorkflowExecutionStatus
+            from temporalio.service import RPCError
+
+            from app.temporal import connect_temporal
+
+            client = await connect_temporal(settings, attempts=3, delay=0.5)
+            found = []
+            for task_id, workflow_id in rows:
+                if not workflow_id:
+                    found.append((task_id, "the task has no workflow"))
+                    continue
+                try:
+                    described = await client.get_workflow_handle(workflow_id).describe()
+                except RPCError:
+                    found.append((task_id, "its workflow was not found"))
+                    continue
+                if described.status != WorkflowExecutionStatus.RUNNING:
+                    name = described.status.name.lower() if described.status else "closed"
+                    found.append((task_id, f"its workflow ended ({name}) without finishing the task"))
+            return found
+
+        failed = 0
+        for task_id, reason in asyncio.run(gone()):
+            row = conn.execute("select app.maintenance_fail_task(%s, %s)", (task_id, reason)).fetchone()
+            failed += 1 if row and row[0] else 0
+        return f"checked {len(rows)} open task(s), failed {failed}"
+
+    return ("task_reconcile", run)
+
+
 def run_jobs(settings: Settings) -> int:
-    results = run_all(settings.component_dsn("maintenance"), [*JOBS, slack_reconcile_job(settings)])
+    jobs = [*JOBS, slack_reconcile_job(settings), task_reconcile_job(settings)]
+    results = run_all(settings.component_dsn("maintenance"), jobs)
     for r in results:
         status = "ok" if r.ok else "FAILED"
         print(f"{r.name}: {status} ({r.detail}) in {r.seconds:.2f}s")

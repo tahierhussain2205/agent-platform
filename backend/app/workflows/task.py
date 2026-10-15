@@ -98,8 +98,8 @@ class TaskWorkflow:
 
     async def _run(self, ref: TaskRef) -> str:
         start = await self._wait_for_turn(ref)
-        if start is None:
-            return "gone"
+        if start.status != "started":
+            return str(start.status)
         mode, tier = start.mode, start.model_tier
         self.stage = "understanding"
         await self._status(ref, "🔎 Understanding the request…")
@@ -152,18 +152,18 @@ class TaskWorkflow:
         return "completed"
 
     async def _wait_for_turn(self, ref: TaskRef) -> Any:
+        """The start result: ``started``, ``gone`` (finished or cancelled meanwhile), ``refused``
+        (budget spent) or ``failed`` (waited too long)."""
         waited = timedelta()
         told = False
         while True:
             start = await self._do(TaskActivities.start, ref)
-            if start.status == "started":
+            if start.status in ("started", "gone"):
                 return start
-            if start.status == "gone":
-                return None
             if start.status == "refused":
                 await self._do(TaskActivities.reply, ref, start.message, "refused")
                 await self._do(TaskActivities.finish, ref, "failed", start.message)
-                return None
+                return start
             if not told:
                 await self._status(ref, f"⏳ {start.message}")
                 told = True
@@ -172,7 +172,8 @@ class TaskWorkflow:
                 await self._status(
                     ref, "⚠️ I waited too long for a free slot. Please ask again later.", running=False
                 )
-                return None
+                start.status = "failed"
+                return start
             pause = timedelta(seconds=3 if start.status == "wait_session" else 10)
             await workflow.sleep(pause)
             waited += pause

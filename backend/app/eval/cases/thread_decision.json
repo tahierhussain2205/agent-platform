@@ -1,0 +1,21 @@
+{
+  "id": "thread_decision",
+  "description": "A question about the current thread is answered from the thread, separating the decision from suggestions.",
+  "requester": "U0BOB",
+  "channel": "C0GENERAL",
+  "setup": [
+    {"user": "U0ALICE", "channel": "C0GENERAL", "text": "Which database should the analytics service use? ({tag})"},
+    {"user": "U0BOB", "channel": "C0GENERAL", "text": "Postgres, we already run it ({tag})", "reply_to": 0},
+    {"user": "U0ALICE", "channel": "C0GENERAL", "text": "Agreed, Postgres it is ({tag})", "reply_to": 0}
+  ],
+  "in_thread_of": 0,
+  "request": "what did we decide in this thread?",
+  "expect": {
+    "playbook": "slack_qa",
+    "channels": [],
+    "answer_includes": ["Postgres"],
+    "cites_setup": true,
+    "delivered": "thread"
+  },
+  "max_tokens": 60000
+}

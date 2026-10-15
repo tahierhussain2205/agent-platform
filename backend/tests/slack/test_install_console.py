@@ -3,7 +3,7 @@
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -56,7 +56,24 @@ def auth(sub: str, org: str) -> dict[str, str]:
     return {"authorization": f"Bearer {mint(KEY, sub, org)}", "origin": ORIGIN}
 
 
-ALICE, BOB = auth("user_alice", "org_acme"), auth("user_bob", "org_acme")
+class Auth(Mapping[str, str]):
+    """Headers with a token minted when they are used: tokens are short lived, and a module level
+    token would expire while earlier test modules run."""
+
+    def __init__(self, sub: str, org: str) -> None:
+        self.sub, self.org = sub, org
+
+    def __getitem__(self, key: str) -> str:
+        return auth(self.sub, self.org)[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(("authorization", "origin"))
+
+    def __len__(self) -> int:
+        return 2
+
+
+ALICE, BOB = Auth("user_alice", "org_acme"), Auth("user_bob", "org_acme")
 
 
 def q(world: World, query: str, params: tuple[Any, ...] = ()) -> Any:

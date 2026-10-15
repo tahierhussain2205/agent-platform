@@ -1,0 +1,9 @@
+{
+  "id": "unclear_request",
+  "description": "An unclear request gets a clarifying question instead of a guess.",
+  "requester": "U0BOB",
+  "channel": "C0GENERAL",
+  "request": "hello there",
+  "expect": {"playbook": "none"},
+  "max_tokens": 5000
+}

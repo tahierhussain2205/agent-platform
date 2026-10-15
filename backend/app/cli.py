@@ -100,6 +100,16 @@ def run_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_eval(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from app.eval import CASES
+    from app.eval import run_eval as evaluate
+
+    cases = Path(args.cases) if args.cases else CASES
+    return evaluate(get_settings(), cases, Path(args.report) if args.report else None, args.min_score)
+
+
 COMMANDS: dict[str, tuple[str, Callable[[argparse.Namespace], int]]] = {
     "api": ("Run the HTTP API (Slack ingress, console API, health).", run_api),
     "worker": ("Run the Temporal workers.", run_worker),
@@ -107,6 +117,7 @@ COMMANDS: dict[str, tuple[str, Callable[[argparse.Namespace], int]]] = {
     "migrate": ("Apply database migrations.", run_migrate),
     "seed": ("Load local development data (refused on staging and production).", run_seed),
     "check": ("Check connectivity to a dependency.", run_check),
+    "eval": ("Replay the eval cases through the agent and score them.", run_eval),
 }
 
 
@@ -118,6 +129,10 @@ def build_parser() -> argparse.ArgumentParser:
         cmd.set_defaults(handler=handler)
         if name == "check":
             cmd.add_argument("target", choices=["temporal"])
+        if name == "eval":
+            cmd.add_argument("--cases", help="directory of case files (default: the built in cases)")
+            cmd.add_argument("--report", help="write a JSON report to this file")
+            cmd.add_argument("--min-score", type=float, default=0.8, help="mean score needed to pass")
     return parser
 
 

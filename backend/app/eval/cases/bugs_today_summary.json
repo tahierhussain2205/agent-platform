@@ -1,0 +1,21 @@
+{
+  "id": "bugs_today_summary",
+  "description": "Summarize today's discussion in a channel the requester belongs to, with sources.",
+  "requester": "U0BOB",
+  "channel": "C0GENERAL",
+  "setup": [
+    {"user": "U0QUINN", "channel": "C0BUGS", "text": "Checkout returns 500 for carts with 20 or more items ({tag})"},
+    {"user": "U0ALICE", "channel": "C0BUGS", "text": "Rolled back cart-service to v41, checkout works again ({tag})"}
+  ],
+  "request": "summarize today's discussion in #bugs",
+  "expect": {
+    "playbook": "slack_qa",
+    "channels": ["bugs"],
+    "window": "today",
+    "answer_includes": ["500", "v41"],
+    "cites_setup": true,
+    "refused": false,
+    "delivered": "thread"
+  },
+  "max_tokens": 80000
+}
