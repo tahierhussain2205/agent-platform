@@ -15,7 +15,7 @@ from app.db.tenant import tenant_tx
 from app.slack import service
 from app.slack.adapter import ChannelAdapter, DirectMessage, Ephemeral, Intent, Reply
 from app.slack.client import SlackClient, SlackError
-from app.vault import Vault
+from app.vault_service import VaultClient
 from app.workflows.slack_types import (
     ChannelCheck,
     HomeRequest,
@@ -44,7 +44,7 @@ def permanent(exc: SlackError) -> ApplicationError:
 @dataclass
 class SlackDeps:
     pool: AsyncConnectionPool  # worker_service (app_user)
-    vault: Vault
+    vault: VaultClient
     slack: SlackClient
     kv: Any
     console_url: str

@@ -27,7 +27,7 @@ from app.slack import service, signature
 from app.slack.adapter import ChannelAdapter, DirectMessage, Ephemeral, Intent
 from app.slack.client import SlackClient, SlackError
 from app.temporal import connect_temporal
-from app.vault import Vault
+from app.vault_service import VaultClient
 from app.workflows.slack_types import HomeRequest, SlackRequest, SyncRequest
 
 log = logging.getLogger(__name__)
@@ -399,7 +399,7 @@ async def _update_decision_message(
 # ------------------------------------------------------------------ approvals and cancellation
 
 
-def _required(request: Request) -> tuple[Any, Vault, SlackClient]:
+def _required(request: Request) -> tuple[Any, VaultClient, SlackClient]:
     res = resources(request)
     if res.db_pool is None or res.vault is None or res.slack is None:
         raise RuntimeError("database, vault and Slack must be configured")

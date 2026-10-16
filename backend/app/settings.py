@@ -82,6 +82,38 @@ class Settings(BaseSettings):
     task_token_budget: int = Field(default=300_000, ge=1_000)
     approval_ttl_hours: int = Field(default=24, ge=1, le=24 * 30)
 
+    # Token vault service (`app vault`): the API and worker call it at VAULT_URL with the shared
+    # service token. Unset VAULT_URL: the vault runs in process (needs the vault database user).
+    vault_url: str | None = None
+    vault_service_token: SecretStr | None = None
+    # Signs the OAuth `state` of integration connect and link flows.
+    oauth_state_secret: SecretStr | None = None
+
+    # Integrations. Client ids are public (authorize URLs, built by the API); client secrets and the
+    # GitHub App private key are read only by the vault service.
+    # Authorize pages are opened by the browser; token, API and MCP URLs are called by the vault and
+    # the worker (in Compose they differ: localhost for the browser, the service name inside).
+    atlassian_authorize_url: str = "https://auth.atlassian.com/authorize"
+    atlassian_token_url: str = "https://auth.atlassian.com/oauth/token"  # noqa: S105 - a URL
+    atlassian_api_url: str = "https://api.atlassian.com"
+    atlassian_client_id: str | None = None
+    atlassian_client_secret: SecretStr | None = None
+    github_web_url: str = "https://github.com"
+    github_token_url: str = "https://github.com/login/oauth/access_token"  # noqa: S105 - a URL
+    github_api_url: str = "https://api.github.com"
+    github_app_id: str | None = None
+    github_app_slug: str | None = None
+    github_app_private_key: SecretStr | None = None
+    github_client_id: str | None = None
+    github_client_secret: SecretStr | None = None
+    google_auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    google_token_url: str = "https://oauth2.googleapis.com/token"  # noqa: S105 (a URL, not a secret)
+    google_revoke_url: str = "https://oauth2.googleapis.com/revoke"
+    google_userinfo_url: str = "https://openidconnect.googleapis.com/v1/userinfo"
+    google_mcp_url: str | None = None
+    google_client_id: str | None = None
+    google_client_secret: SecretStr | None = None
+
     # Key Value (Redis compatible).
     redis_url: SecretStr | None = None
 
@@ -122,6 +154,19 @@ class Settings(BaseSettings):
         "anthropic_api_key",
         "anthropic_fallback_api_url",
         "anthropic_fallback_api_key",
+        "vault_url",
+        "vault_service_token",
+        "oauth_state_secret",
+        "atlassian_client_id",
+        "atlassian_client_secret",
+        "github_app_id",
+        "github_app_slug",
+        "github_app_private_key",
+        "github_client_id",
+        "github_client_secret",
+        "google_mcp_url",
+        "google_client_id",
+        "google_client_secret",
         mode="before",
     )
     @classmethod
@@ -130,6 +175,13 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @property
+    def github_private_key_pem(self) -> str | None:
+        """The PEM, accepting a value with literal "\\n" escapes (one line environment variables)."""
+        if self.github_app_private_key is None:
+            return None
+        return self.github_app_private_key.get_secret_value().replace("\\n", "\n")
 
     def require_migration_database_url(self) -> str:
         if self.migration_database_url is None:

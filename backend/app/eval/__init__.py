@@ -184,28 +184,24 @@ class EvalRun:
 
 async def evaluate(settings: Settings, cases: list[dict[str, Any]]) -> list[CaseResult]:
     from app import kv
-    from app.crypto import Envelope, LocalKeyProvider
     from app.db.pool import open_pool
     from app.llm.gateway import gateway_from_settings
     from app.slack.client import SlackClient
     from app.slack.limiter import SlackRateLimiter
-    from app.vault import Vault
+    from app.vault_service.factory import vault_from_settings
     from app.workflows.slack_activities import SlackDeps
 
-    if not (settings.encryption_keys and settings.encryption_active_key):
-        raise RuntimeError("ENCRYPTION_KEYS is required (the bot token is read through the vault)")
+    closers: list[Any] = []
+    vault = await vault_from_settings(settings, closers)
+    if vault is None:
+        raise RuntimeError("no vault configured (VAULT_URL, or the vault database user and ENCRYPTION_KEYS)")
     pool = await open_pool(settings.component_dsn("worker"), "worker", min_size=1, max_size=4)
-    vault_pool = await open_pool(settings.component_dsn("vault"), "vault", min_size=0, max_size=2)
     kv_client: Any = kv.make_client(settings.redis_url.get_secret_value()) if settings.redis_url else None
     limiter = SlackRateLimiter(kv_client) if kv_client is not None else None
     slack = SlackClient(settings.slack_api_url, limiter=limiter)
     gateway = gateway_from_settings(settings, pool, kv_client)
     if gateway is None:
         raise RuntimeError("ANTHROPIC_API_KEY is required")
-    keys = LocalKeyProvider.from_config(
-        settings.encryption_keys.get_secret_value(), settings.encryption_active_key
-    )
-    vault = Vault(vault_pool, Envelope(keys))
     sink = CaptureSink()
 
     def capture(team: str, token: str) -> Sink:
@@ -231,7 +227,8 @@ async def evaluate(settings: Settings, cases: list[dict[str, Any]]) -> list[Case
         await gateway.aclose()
         await slack.aclose()
         await pool.close()
-        await vault_pool.close()
+        for close in closers:
+            await close()
         if kv_client is not None:
             await kv_client.aclose()
     return results

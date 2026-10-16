@@ -39,6 +39,27 @@ def run_api(_: argparse.Namespace) -> int:
     return 0
 
 
+def run_vault(_: argparse.Namespace) -> int:
+    """The token vault service, on the private network only."""
+    from app.vault_service.app import create_vault_app
+
+    settings = get_settings()
+    if settings.vault_service_token is None:
+        print("VAULT_SERVICE_TOKEN is required", file=sys.stderr)
+        return 2
+    config = uvicorn.Config(
+        create_vault_app(settings),
+        host="0.0.0.0",
+        port=settings.port,
+        log_level=settings.log_level.lower(),
+        timeout_graceful_shutdown=25,
+        access_log=False,
+        log_config=None,
+    )
+    uvicorn.Server(config).run()
+    return 0
+
+
 def run_worker(_: argparse.Namespace) -> int:
     from app.worker import run_worker as _run
 
@@ -113,6 +134,7 @@ def run_eval(args: argparse.Namespace) -> int:
 COMMANDS: dict[str, tuple[str, Callable[[argparse.Namespace], int]]] = {
     "api": ("Run the HTTP API (Slack ingress, console API, health).", run_api),
     "worker": ("Run the Temporal workers.", run_worker),
+    "vault": ("Run the token vault service (private network only).", run_vault),
     "maintenance": ("Run maintenance jobs (partitions, retention, reconciliation).", run_maintenance),
     "migrate": ("Apply database migrations.", run_migrate),
     "seed": ("Load local development data (refused on staging and production).", run_seed),

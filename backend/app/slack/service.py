@@ -17,7 +17,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from app import kv as kvlib
 from app.db.tenant import tenant_tx
-from app.vault import Vault
+from app.vault_service import VaultClient
 
 log = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ async def bot_connection(conn: AsyncConnection) -> tuple[UUID, str] | None:
     return (row[0], row[1]) if row else None
 
 
-async def bot_token(pool: AsyncConnectionPool, vault: Vault, org_id: UUID | str) -> tuple[str, str]:
+async def bot_token(pool: AsyncConnectionPool, vault: VaultClient, org_id: UUID | str) -> tuple[str, str]:
     """(team id, bot token) for an org."""
     async with tenant_tx(pool, org_id) as conn:
         found = await bot_connection(conn)
@@ -197,7 +197,7 @@ async def install(
 
 async def uninstall(
     conn: AsyncConnection,
-    vault: Vault | None,
+    vault: VaultClient | None,
     org_id: UUID,
     team_id: str,
     reason: str,

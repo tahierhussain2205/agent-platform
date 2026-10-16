@@ -12,14 +12,13 @@ from temporalio.worker import Worker
 
 from app import kv
 from app.agent.runner import AgentDeps, AgentRunner
-from app.crypto import Envelope, LocalKeyProvider
 from app.db.pool import open_pool
 from app.llm.gateway import gateway_from_settings
 from app.settings import Settings
 from app.slack.client import SlackClient
 from app.slack.limiter import SlackRateLimiter
 from app.temporal import connect_temporal
-from app.vault import Vault
+from app.vault_service.factory import vault_from_settings
 from app.workflows.ping import PingWorkflow, ping
 from app.workflows.slack import AgentRequestWorkflow, PublishHomeWorkflow, SyncWorkspaceWorkflow
 from app.workflows.slack_activities import SlackActivities, SlackDeps
@@ -32,21 +31,19 @@ log = logging.getLogger(__name__)
 async def build_slack_activities(
     settings: Settings, closers: list[Callable[[], Awaitable[None]]]
 ) -> SlackActivities | None:
-    """Slack activities need the worker's and the vault's database users and the encryption keys."""
-    if not (
-        settings.database_url
-        and settings.db_worker_password
-        and settings.db_vault_password
-        and settings.encryption_keys
-        and settings.encryption_active_key
-    ):
-        log.warning("database, vault or encryption not configured: Slack activities disabled")
+    """Slack activities need the worker's database user and a vault (the vault service, or the
+    vault in process with the vault's database user and the encryption keys)."""
+    if not (settings.database_url and settings.db_worker_password):
+        log.warning("database not configured: Slack activities disabled")
+        return None
+    vault = await vault_from_settings(settings, closers)
+    if vault is None:
+        log.warning("no vault configured (VAULT_URL, or the vault database user): Slack activities disabled")
         return None
     pool = await open_pool(
         settings.component_dsn("worker"), "worker", min_size=1, max_size=settings.db_pool_max_size
     )
-    vault_pool = await open_pool(settings.component_dsn("vault"), "vault", min_size=0, max_size=4)
-    closers += [pool.close, vault_pool.close]
+    closers.append(pool.close)
     kv_client: Any = kv.make_client(settings.redis_url.get_secret_value()) if settings.redis_url else None
     if kv_client is not None:
         closers.append(kv_client.aclose)
@@ -54,12 +51,6 @@ async def build_slack_activities(
         settings.slack_api_url, limiter=SlackRateLimiter(kv_client) if kv_client is not None else None
     )
     closers.append(slack.aclose)
-    envelope = Envelope(
-        LocalKeyProvider.from_config(
-            settings.encryption_keys.get_secret_value(), settings.encryption_active_key
-        )
-    )
-    vault = Vault(vault_pool, envelope)
     gateway = gateway_from_settings(settings, pool, kv_client)
     tasks = None
     if gateway is None:

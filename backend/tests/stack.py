@@ -8,6 +8,7 @@ import socket
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,10 +23,11 @@ from app.api.main import Resources, create_app
 from app.crypto import Envelope, LocalKeyProvider
 from app.db.pool import open_pool
 from app.db.roles import Component, LoginUser, ensure_login_user
+from app.integrations.providers import providers
 from app.settings import Settings
 from app.slack.client import SlackClient
 from app.slack.limiter import SlackRateLimiter
-from app.vault import Vault
+from app.vault_service import LocalVault
 from tests.conftest import ADMIN_URL
 from tests.world import World
 
@@ -34,6 +36,32 @@ SIGNING_SECRET = "local-slack-signing-secret"
 FAKES = os.environ.get("TEST_FAKES_URL", "http://localhost:4100")
 KEY = base64.b64encode(b"slack-tests-encryption-key-00001").decode()
 ENVELOPE = Envelope(LocalKeyProvider.from_config(f"v1:{KEY}", "v1"))
+GITHUB_APP_KEY = (
+    Path(__file__).resolve().parents[2] / "dev" / "github" / "app-dev-private-key.pem"
+).read_text()
+# Provider settings pointing at the stand-ins (the vault's view of Jira, GitHub and Google).
+PROVIDER_SETTINGS = Settings(
+    atlassian_authorize_url=f"{FAKES}/atlassian/authorize",
+    atlassian_token_url=f"{FAKES}/atlassian/oauth/token",
+    atlassian_api_url=f"{FAKES}/atlassian/api",
+    atlassian_client_id="local-jira-client",
+    atlassian_client_secret="local-jira-client-secret",
+    github_web_url=f"{FAKES}/github",
+    github_token_url=f"{FAKES}/github/login/oauth/access_token",
+    github_api_url=f"{FAKES}/github/api",
+    github_app_id="424242",
+    github_app_slug="agent-platform-local",
+    github_app_private_key=GITHUB_APP_KEY,
+    github_client_id="Iv1.localclient",
+    github_client_secret="local-github-client-secret",
+    google_auth_url=f"{FAKES}/google/o/oauth2/v2/auth",
+    google_token_url=f"{FAKES}/google/token",
+    google_revoke_url=f"{FAKES}/google/revoke",
+    google_userinfo_url=f"{FAKES}/google/userinfo",
+    google_mcp_url=f"{FAKES}/google/mcp",
+    google_client_id="local-google-client",
+    google_client_secret="local-google-client-secret",
+)
 
 
 def fakes_up() -> bool:
@@ -96,7 +124,7 @@ class Stack:
     pool: Any
     vault_pool: Any
     identity_pool: Any
-    vault: Vault
+    vault: LocalVault
     kv: Any
     slack: SlackClient
     temporal: FakeTemporal
@@ -112,11 +140,20 @@ async def stack(env: Env) -> AsyncIterator[Stack]:
         await kv_client.ping()
     except Exception:
         kv_client = None
+    stack_vault = LocalVault(vault_pool, ENVELOPE, providers(PROVIDER_SETTINGS))
     slack = SlackClient(f"{FAKES}/slack/api", limiter=SlackRateLimiter(kv_client) if kv_client else None)
     yield Stack(
-        env, pool, vault_pool, identity_pool, Vault(vault_pool, ENVELOPE), kv_client, slack, FakeTemporal()
+        env,
+        pool,
+        vault_pool,
+        identity_pool,
+        stack_vault,
+        kv_client,
+        slack,
+        FakeTemporal(),
     )
     await slack.aclose()
+    await stack_vault.aclose()
     for p in (pool, vault_pool, identity_pool):
         await p.close()
     if kv_client is not None:

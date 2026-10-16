@@ -27,7 +27,6 @@ from app.api.slack import router as slack_router
 from app.api.webhooks import router as webhooks_router
 from app.auth.clerk import AuthError, ClerkVerifier
 from app.context import request_id_var
-from app.crypto import Envelope, LocalKeyProvider
 from app.db.errors import error_body, map_db_error
 from app.db.pool import open_pool
 from app.db.uow import OrgBindingError, UnitOfWorkClosedError, UnitOfWorkMiddleware
@@ -36,7 +35,8 @@ from app.settings import Settings, get_settings
 from app.slack.client import SlackClient
 from app.slack.limiter import SlackRateLimiter
 from app.telemetry import configure_tracing, shutdown_tracing, strip_query_strings
-from app.vault import Vault
+from app.vault_service import VaultClient
+from app.vault_service.factory import vault_from_settings
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class Resources:
     db_pool: AsyncConnectionPool | None = None  # api_service: request paths
     identity_pool: AsyncConnectionPool | None = None  # identity_service: Clerk mirror
     vault_pool: AsyncConnectionPool | None = None  # vault_service: connection secrets only
-    vault: Vault | None = None
+    vault: VaultClient | None = None
     kv: Any = None  # redis.asyncio.Redis
     clerk_verifier: ClerkVerifier | None = None
     clerk_client: ClerkClient | None = None
@@ -83,18 +83,7 @@ async def build_resources(settings: Settings, res: Resources) -> None:
     if settings.redis_url:
         res.kv = kv.make_client(settings.redis_url.get_secret_value())
         res.owned.append(res.kv.aclose)
-    if (
-        settings.database_url
-        and settings.db_vault_password
-        and settings.encryption_keys
-        and settings.encryption_active_key
-    ):
-        res.vault_pool = await open_pool(settings.component_dsn("vault"), "vault", min_size=0, max_size=4)
-        res.owned.append(res.vault_pool.close)
-        provider = LocalKeyProvider.from_config(
-            settings.encryption_keys.get_secret_value(), settings.encryption_active_key
-        )
-        res.vault = Vault(res.vault_pool, Envelope(provider))
+    res.vault = await vault_from_settings(settings, res.owned)
     res.slack = SlackClient(
         settings.slack_api_url, limiter=SlackRateLimiter(res.kv) if res.kv is not None else None
     )

@@ -51,6 +51,23 @@ x-backend: &backend
     # Anthropic stand-in (fakes service). Real: https://api.anthropic.com and a real key (B-005).
     ANTHROPIC_API_URL: http://fakes:4100/anthropic
     ANTHROPIC_API_KEY: sk-ant-local-key
+    # Token vault service; the API and worker call it with the shared token.
+    VAULT_URL: http://vault:8100
+    VAULT_SERVICE_TOKEN: local-vault-service-token
+    OAUTH_STATE_SECRET: local-oauth-state-secret
+    # Jira, GitHub and Google stand-ins (fakes service). Browser facing pages on localhost, API calls
+    # inside the network; client secrets and the GitHub App key are only on the vault service.
+    ATLASSIAN_AUTHORIZE_URL: http://localhost:4100/atlassian/authorize
+    ATLASSIAN_API_URL: http://fakes:4100/atlassian/api
+    ATLASSIAN_CLIENT_ID: local-jira-client
+    GITHUB_WEB_URL: http://localhost:4100/github
+    GITHUB_API_URL: http://fakes:4100/github/api
+    GITHUB_APP_ID: "424242"
+    GITHUB_APP_SLUG: agent-platform-local
+    GITHUB_CLIENT_ID: Iv1.localclient
+    GOOGLE_AUTH_URL: http://localhost:4100/google/o/oauth2/v2/auth
+    GOOGLE_MCP_URL: http://fakes:4100/google/mcp
+    GOOGLE_CLIENT_ID: local-google-client
   restart: "no"
 
 services:
@@ -149,6 +166,17 @@ services:
       SLACK_CLIENT_ID: local.client
       SLACK_CLIENT_SECRET: local-slack-client-secret
       SLACK_SIGNING_SECRET: local-slack-signing-secret
+      GITHUB_SETUP_URL: http://localhost:8000/oauth/github/install
+      GITHUB_APP_PUBLIC_KEY: |
+        -----BEGIN PUBLIC KEY-----
+        MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8fectfhINa8+mWW4IcPi
+        JfQoE4xzmohWwMQIFFy9unFhrGdML0jUEg1qH/fziVz4OZABL96JdBsn40p501S7
+        //KEELTuKiIbruxVuM/PyW4cNcY63Z9QOc86NgpPpQlB4Ku06An5dgfX4EL0oN2D
+        2S0GnnjvXkuvrIZ6yNh05k2WNlrkBxwMCYRyL/eKtTAgJUm+x6pHuW+fYK/YnYhb
+        MMibLEqR7netbVqK1l3+C8phrGDr1GWspdhPKM6ZCBO2Qbg7520ehR1FROQfCx07
+        l27G9UQZ4y0TYvPcsWxcaCWVUZ5fimMSMOlo/ylfyr0sj9pWqONtnDLH7/TtLmZD
+        0wIDAQAB
+        -----END PUBLIC KEY-----
     ports: ["4100:4100"]
     volumes:
       - fakesdata:/data
@@ -191,6 +219,7 @@ services:
       migrate: { condition: service_completed_successfully }
       valkey: { condition: service_healthy }
       pgbouncer: { condition: service_healthy }
+      vault: { condition: service_healthy }
     healthcheck:
       test:
         - CMD
@@ -210,6 +239,63 @@ services:
       migrate: { condition: service_completed_successfully }
       temporal: { condition: service_healthy }
       pgbouncer: { condition: service_healthy }
+      vault: { condition: service_healthy }
+
+  # The token vault: its own database user, the providers' client secrets and the GitHub App key.
+  # Not published on the host: only the API and worker reach it.
+  vault:
+    <<: *backend
+    command: ["app", "vault"]
+    restart: unless-stopped
+    environment:
+      <<: *backend-env
+      PORT: "8100"
+      ATLASSIAN_TOKEN_URL: http://fakes:4100/atlassian/oauth/token
+      ATLASSIAN_CLIENT_SECRET: local-jira-client-secret
+      GITHUB_TOKEN_URL: http://fakes:4100/github/login/oauth/access_token
+      GITHUB_CLIENT_SECRET: local-github-client-secret
+      # Development only key pair (dev/github/README.md), valid only against the stand-in.
+      GITHUB_APP_PRIVATE_KEY: |
+        -----BEGIN PRIVATE KEY-----
+        MIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQDx95y1+Eg1rz6Z
+        Zbghw+Il9CgTjHOaiFbAxAgUXL26cWGsZ0wvSNQSDWof9/OJXPg5kAEv3ol0Gyfj
+        SnnTVLv/8oQQtO4qIhuu7FW4z8/Jbhw1xjrdn1A5zzo2Ck+lCUHgq7ToCfl2B9fg
+        QvSg3YPZLQaeeO9eS6+shnrI2HTmTZY2WuQHHAwJhHIv94q1MCAlSb7Hqke5b59g
+        r9idiFswyJssSpHud61tWorWXf4LymGsYOvUZayl2E8ozpkIE7ZBuDvnbR6FHUVE
+        5B8LHTuXbsb1RBnjLRNi89yxbFxoJZVRnl+KYxIw6Wj/KV/KvSyP2lao422cMsfv
+        9O0uZkPTAgMBAAECggEAAUQEjyLy17EMI4JHSntLyVuGEYPERD2DgUmS77Pfvu/+
+        ovzCtjeFozVWNmQrLGYD09DpqoFde9DPdqWicTCgYSCiwi/JA8Ye9UO6Rd055+zK
+        OcIR/slTe0qeKutevtrfJ+6TfUPAqetoU4wkvhmW4LMh1ou31EDFwcaTKmQayMfW
+        UD2M6su8eiDEbjl8xDFK4cOONQXHA1kYngfIIVP7S+SBz+IsN6gKoiOhsmphshP6
+        wNopfsSY1ryRluJuKd+nw0BB+WMpqKKozw2159UGGnDYyIB/ArA/tWDSlc1a9IPi
+        B6cHoEUuBymSPDYeflGAlZcg648WYMBZwBDQqtrbhQKBgQD5iOCunxhLK2SMzOdK
+        n9L8SmU7wjH2atypBkVsbrS2eAr/4TLJk5rJq75zkYgPHgCzjaDZUnbgmkSAtvdZ
+        5D9Y62nrtAFO52FLNrLUZH/RlGaLvCBV49Q8xLnLAnBOcwbGCKQSCviX6wZMkThS
+        5wMmM59dHAgcx1hFq3oe2X05hwKBgQD4PIp3X+jmo0SitRZGGsKyeeHFO5F9IigC
+        bk0zSzdUCZc9swgsuBQX8qfER39SeFdOcnjOgjSPixClMck8VNBF35vyZT7B86w9
+        kEOAGP8eAeVcbaRGEr1i8jFZQgt1gHgnDmiVTdOiKUE8kw7EjcnX7Y/BmF9bqZsC
+        /yybLf8GVQKBgQDsnKToD8WaaYADnrvmX9xRDD4nxwFXNocb4u1rXyIOL4/GiAR/
+        bW4Fsst5jFKmev2RREd0KqS8Xqt8HYI4A50ptLgQHvRqnC3+gtRZXx5wXTZLY8yJ
+        hOoX4TaHUD2rtZiDqWfiD/MfImUrrzvoKFMtIyAGyvDKUR/bmDjJDdOW+wKBgQDl
+        cwhGGTfs36MUhi/lctzeHbyrE0mCkazLumrPa8njes36MN7wfuHL1PZvferZLvT8
+        ROEXeNDekZs8Jo2sn3S38V1zK1Rb8EEX0p4h7Hj7oqL/0TSTtMSrjdRBfcObw7jL
+        2QygXQSuklWDiSaQVcLpPOOw/Ye+8UGf/n+bnGNq1QKBgQDb9nHU17s1UW5OB208
+        lT+95iG7gtGL9bQi2GnE5jElvMlAsBXuj0gq8hI1+KTGD+hPnsvCLpbG/ugYOru/
+        MkC1iiQUvP5SprtBfDT+efDBFmIt+5TrSXVzigIIl8vHYUTVOZDd3vlhBPlzVwpd
+        sm7TFl1WJSYXH+5wy13cAZABEQ==
+        -----END PRIVATE KEY-----
+      GOOGLE_TOKEN_URL: http://fakes:4100/google/token
+      GOOGLE_REVOKE_URL: http://fakes:4100/google/revoke
+      GOOGLE_USERINFO_URL: http://fakes:4100/google/userinfo
+      GOOGLE_CLIENT_SECRET: local-google-client-secret
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      pgbouncer: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=2)"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
 
   web:
     image: node:22-slim
