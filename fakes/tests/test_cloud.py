@@ -300,6 +300,21 @@ def runner_client(tmp_path: Path) -> Iterator[TestClient]:
     thread.join(5)
 
 
+def test_the_runner_stays_alive_through_a_long_command(runner_client: TestClient) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    c = runner_client
+    sid, other = sandbox(c), sandbox(c)
+    with ThreadPoolExecutor(1) as pool:  # one command keeps the runner busy past the 10 s liveness window
+        long = pool.submit(lambda: c.post(f"/sandbox/v1/sandboxes/{sid}/exec",
+                                          json={"command": "sleep 12", "timeout_seconds": 30}, headers=API_KEY))  # fmt: skip
+        time.sleep(11)
+        queued = c.post(f"/sandbox/v1/sandboxes/{other}/exec", json={"command": "echo still here"}, headers=API_KEY)
+        assert queued.status_code == 200, queued.text  # waits its turn instead of "runner_unavailable"
+        assert queued.json()["stdout"] == "still here\n"
+        assert long.result().json()["exit_code"] == 0
+
+
 def test_commands_run_in_the_workspace_with_limits(runner_client: TestClient) -> None:
     c = runner_client
     sid = sandbox(c)

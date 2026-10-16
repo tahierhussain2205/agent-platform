@@ -73,10 +73,21 @@ def run(sandbox: Path, job: dict[str, Any]) -> dict[str, Any]:
             "timed_out": timed_out, "seconds": round(time.monotonic() - started, 3)}  # fmt: skip
 
 
+def beat(root: Path, stop: threading.Event | None = None, every: float = 1.0) -> None:
+    """The heartbeat on a thread of its own: a long command must not make the runner look gone."""
+    while stop is None or not stop.is_set():
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            (root / HEARTBEAT).write_text(str(time.time()))
+        except OSError:
+            pass  # the volume is being reset: next beat
+        time.sleep(every)
+
+
 def loop(root: Path = ROOT, stop: threading.Event | None = None) -> None:
+    threading.Thread(target=beat, args=(root, stop), daemon=True).start()
     while stop is None or not stop.is_set():
         root.mkdir(parents=True, exist_ok=True)
-        (root / HEARTBEAT).write_text(str(time.time()))
         for path in sorted(root.glob("*/jobs/*.json")):
             if path.name.endswith((".result.json", ".running.json")):
                 continue
