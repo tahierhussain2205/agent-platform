@@ -135,7 +135,7 @@ async def test_api_security_headers_on_every_response(
 
 @pytest.mark.parametrize(("env", "hsts"), [("staging", True), ("production", True), ("local", False)])
 async def test_hsts_only_where_the_api_is_served_over_https(env: str, hsts: bool) -> None:
-    app = create_app(Settings(env=env, console_origins=ORIGIN))  # type: ignore[arg-type]
+    app = create_app(Settings(env=env, console_origins=ORIGIN))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://api") as client:
         response = await client.get("/healthz")
     assert ("strict-transport-security" in response.headers) is hsts
