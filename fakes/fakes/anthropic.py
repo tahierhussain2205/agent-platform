@@ -191,6 +191,14 @@ QUESTION = re.compile(
 )
 
 
+TICKETS = re.compile(
+    r"\b(create|file|open|raise|log|make)\b.{0,40}\b(tickets?|issues?|jira)\b|\bticket(s)? for\b", re.IGNORECASE
+)
+PROBLEM = re.compile(
+    r"\b(fail\w*|errors?|500|broken|crash\w*|slow|bug|timeouts?|wrong|twice|stuck|can't|cannot|doesn't|not working)\b",
+    re.IGNORECASE,
+)
+JIRA_KEY = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d+\b")
 RECURRING = re.compile(r"\b(every|daily|weekly|hourly|each (day|morning|week))\b", re.IGNORECASE)
 DAY_NUMBERS = {"sunday": 0, "monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4, "friday": 5, "saturday": 6}
 NOT_PROJECTS = {"I", "AM", "PM", "DM", "UTC", "OK", "PR"}
@@ -247,6 +255,8 @@ def classify(user: str) -> dict[str, Any]:
     words = re.sub(r"@\S+", "", request).strip()
     if RECURRING.search(words) and re.search(r"\b(report|summar\w*|progress|send|post)\b", words, re.IGNORECASE):
         return {"playbook": "schedule_create", "confidence": 0.9, "clarifying_question": None}
+    if TICKETS.search(words):
+        return {"playbook": "jira_tickets", "confidence": 0.9, "clarifying_question": None}
     if not words or not QUESTION.search(words):
         return {
             "playbook": "none",
@@ -362,6 +372,11 @@ def gather(messages: list[dict[str, Any]], first_user: str, tools: set[str] | No
             elif block.get("type") == "tool_result":
                 results.append(text_of(block.get("content")))
     calls = [c for c in tool_calls(tools or set(), the_brief) if json.dumps(c["input"], sort_keys=True) not in asked]
+    if "catalog_find_owners" in (tools or set()) and results:  # who owns each reported problem
+        for problem in problems(results)[:5]:
+            args = {"text": problem["text"].split(": ", 1)[-1][:300]}
+            if json.dumps(args, sort_keys=True) not in asked:
+                calls.append(use("catalog_find_owners", args))
     other_tools = bool(tool_calls(tools or set(), the_brief))
     if channels:
         for name in channels:
@@ -377,19 +392,109 @@ def gather(messages: list[dict[str, Any]], first_user: str, tools: set[str] | No
     if calls:
         return [{"type": "text", "text": "Reading the sources."}, *calls]
     points, gaps = [], []
+    if "catalog_find_owners" in (tools or set()):  # tickets: the problems first, then issues and owners
+        points = problems(results)
     for result in results:
         if result.lower().startswith(("access denied", "error", "not allowed")):
             gaps.append(result.splitlines()[0])
             continue
+        if result.startswith("Owners from the service catalog"):
+            for line in result.splitlines()[1:]:
+                if m := re.match(r"^\[([A-Z]\d+)\]\s+(.*)$", line):
+                    points.append({"text": m.group(2), "sources": [m.group(1)]})
+            continue
+        if "catalog_find_owners" in (tools or set()) and not result.startswith("Jira issues"):
+            continue  # tickets: Slack lines are grouped into problems above
         for line in result.splitlines():
             if m := LINE.match(line):
                 points.append({"text": f"{m.group(2).strip()}: {m.group(3).strip()[:200]}", "sources": [m.group(1)]})
         if not any(LINE.match(line) for line in result.splitlines()):
             gaps.append(result.splitlines()[0] if result else "No messages found.")
+    if "catalog_find_owners" in (tools or set()):
+        return [use("submit_findings", {"points": points[:30], "gaps": gaps})]
     return [use("submit_findings", {"points": points[-15:], "gaps": gaps})]  # the most recent
 
 
+def problems(results: list[str]) -> list[dict[str, Any]]:
+    """Slack messages reporting a problem, repeated reports of the same problem grouped (by shared
+    words), each citing every message it comes from."""
+    grouped: list[dict[str, Any]] = []
+    for result in results:
+        if result.startswith(("Owners from the service catalog", "Jira issues")):
+            continue
+        for line in result.splitlines():
+            m = LINE.match(line)
+            if not m or not PROBLEM.search(m.group(3)) or JIRA_KEY.match(m.group(2)):
+                continue
+            text = m.group(3).strip()
+            about = _words(PROBLEM.sub(" ", text))  # what it is about, not that it fails
+            seen = next((g for g in grouped if len(_words(PROBLEM.sub(" ", g["text"])) & about) >= 2), None)
+            if seen:
+                seen["sources"].append(m.group(1))
+                seen["reporters"].add(m.group(2).strip())
+            else:
+                grouped.append({"text": f"{m.group(2).strip()}: {text[:300]}", "sources": [m.group(1)],
+                                "reporters": {m.group(2).strip()}})  # fmt: skip
+    for g in grouped:
+        if len(g["reporters"]) > 1:
+            g["text"] += f" (also reported by {', '.join(sorted(g['reporters'] - {g['text'].split(':')[0]}))})"
+        del g["reporters"]
+    return grouped
+
+
+STOP = {"the", "and", "for", "with", "when", "from", "that", "this", "are", "was", "again", "after", "over", "today"}
+
+
+def _words(text: str) -> set[str]:
+    out = set()
+    for w in re.findall(r"[a-z0-9]+", text.lower()):
+        if len(w) >= 3 and w not in STOP:
+            out.add(w[:-1] if len(w) > 3 and w.endswith("s") else w)
+    return out
+
+
 SHARE = re.compile(r"\b(?:post|share|send)\b[^#]*#([a-z0-9][a-z0-9_-]*)", re.IGNORECASE)
+
+
+def ticket_plan(user: str, goal: str) -> dict[str, Any]:
+    """One create_issue per reported problem, with the owner and Jira component of the catalog line
+    that shares most words with it. Duplicates of open issues are left for the checks in code."""
+    try:
+        findings = json.loads(tag(user, "findings") or "[]")
+    except ValueError:
+        findings = []
+    owners = [f for f in findings if re.search(r"<[^>@\s]+@[^>\s]+>", f.get("text", ""))]
+    projects = [p for p in PROJECT.findall(goal) if p not in NOT_PROJECTS]
+    actions = []
+    for f in findings:
+        text = str(f.get("text", ""))
+        if f in owners or JIRA_KEY.match(text) or not PROBLEM.search(text):
+            continue
+        reporter, _, said = text.partition(": ")
+        said = re.sub(r"\s*\(also reported by [^)]*\)$", "", said)
+        best = max(owners, key=lambda o: len(_words(o["text"].split(":")[0]) & _words(said)), default=None)
+        matched = best is not None and _words(best["text"].split(":")[0]) & _words(said)
+        jira = re.search(r"\(Jira ([A-Z][A-Z0-9]+)(?:/([^;)]+))?", best["text"]) if matched and best else None
+        email = re.search(r"<([^>@\s]+@[^>\s]+)>", best["text"]) if matched and best else None
+        summary = re.split(r"(?<=[.!?])\s", said.strip())[0].rstrip(".!")[:80]
+        project = projects[0] if projects else (jira.group(1) if jira else "")
+        args = {
+            "project": project,
+            "summary": summary[:1].upper() + summary[1:],
+            "description": f"Reported in Slack by {reporter}: {said}",
+            "component": jira.group(2) if jira and jira.group(2) and jira.group(1) == project else "",
+            "assignee_email": email.group(1) if email else "",
+            "finding": f.get("finding"),
+        }
+        actions.append(
+            {
+                "tool": "jira",
+                "operation": "create_issue",
+                "args": args,
+                "summary": f"Create a ticket: {args['summary']}",
+            }
+        )
+    return {"actions": actions[:5], "notes": "One ticket per reported problem."}
 
 
 def plan(user: str) -> dict[str, Any]:
@@ -397,6 +502,8 @@ def plan(user: str) -> dict[str, Any]:
         goal = json.loads(tag(user, "brief") or "{}").get("goal", "")
     except ValueError:
         goal = ""
+    if "jira_create_issue" in (tag(user, "available_actions") or ""):
+        return ticket_plan(user, goal)
     match = SHARE.search(goal)
     if not match:
         return {"actions": [], "notes": "Answer from the gathered findings."}

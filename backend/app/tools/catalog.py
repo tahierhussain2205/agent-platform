@@ -77,6 +77,8 @@ class Match:
     name: str
     score: int
     why: list[str] = field(default_factory=list)
+    jira_project: str | None = None
+    jira_component: str | None = None
 
 
 def rank(services: list[dict[str, Any]], args: dict[str, Any]) -> list[Match]:
@@ -114,7 +116,9 @@ def rank(services: list[dict[str, Any]], args: dict[str, Any]) -> list[Match]:
             score += 1
             why.append("matches its description")
         if score > 0:
-            matches.append(Match(str(s["id"]), s["name"], score, why))
+            matches.append(
+                Match(str(s["id"]), s["name"], score, why, s.get("jira_project"), s.get("jira_component"))
+            )
     return sorted(matches, key=lambda m: (-m.score, m.name))
 
 
@@ -153,8 +157,11 @@ class CatalogAdapter:
             by_service.setdefault(service_id, []).append((email, name, source, reason))
         matches = rank(services, args)[:3]
         if not matches:
-            return ToolResult("No confirmed service in the catalog matches.", data={"candidates": []})
+            return ToolResult(
+                "No confirmed service in the catalog matches.", data={"candidates": [], "services": []}
+            )
         candidates: dict[str, dict[str, Any]] = {}
+        matched: list[dict[str, Any]] = []
         lines = ["Owners from the service catalog (best match first):"]
         for match in matches:
             source = Source(
@@ -176,9 +183,24 @@ class CatalogAdapter:
                 entry["score"] = max(entry["score"], match.score)
                 entry["reasons"].append(because)
                 listed.append(f"{name} <{email}>: {because}")
+            jira = (
+                f"Jira {match.jira_project}"
+                + (f"/{match.jira_component}" if match.jira_component else "")
+                + "; "
+                if match.jira_project
+                else ""
+            )
             lines.append(
-                f"[{short}] {match.name} (matched on {'; '.join(match.why)}): "
+                f"[{short}] {match.name} ({jira}matched on {'; '.join(match.why)}): "
                 + ("; ".join(listed) if listed else "no owners recorded")
             )
+            matched.append(
+                {
+                    "name": match.name,
+                    "score": match.score,
+                    "jira_project": match.jira_project,
+                    "jira_component": match.jira_component,
+                }
+            )
         ranked = sorted(candidates.values(), key=lambda c: (-c["score"], c["email"]))
-        return ToolResult(cap("\n".join(lines)), data={"candidates": ranked})
+        return ToolResult(cap("\n".join(lines)), data={"candidates": ranked, "services": matched})

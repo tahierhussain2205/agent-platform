@@ -63,6 +63,9 @@ class PlannedAction:
     operation: str
     args: dict[str, Any]
     summary: str
+    evidence: list[str] = field(default_factory=list)  # why, for approvers (an assignee's reasons...)
+    skip: str | None = None  # dropped by the checks in code, with the reason for the thread
+    ask: bool = False  # Ask even in Auto (a large plan, private sources)
 
 
 @dataclass

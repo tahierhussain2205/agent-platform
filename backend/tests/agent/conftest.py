@@ -4,7 +4,7 @@ Anthropic stand-in, with a capturing sink (nothing is posted unless a test asks 
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import psycopg
@@ -18,6 +18,9 @@ from app.llm.gateway import LLMGateway, Route
 from app.workflows.slack_activities import SlackActivities, SlackDeps
 from app.workflows.slack_types import Requester, SlackRequest
 from tests.stack import FAKES, PROVIDER_SETTINGS, Env, Stack, fakes_up, seed_slack_token
+
+if TYPE_CHECKING:
+    from tests.agent.live import Live
 
 MODELS = {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-5", "advanced": "claude-opus-5-5"}
 
@@ -155,3 +158,33 @@ async def bot_joins(channel: str, join: bool = True) -> None:
             f"{FAKES}/slack/_ui/join",
             json={"team": "T0ACME", "channel": channel, "user": "U0ACMEBOT", "join": join},
         )
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def live(agent: Agent, stack: Stack, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator["Live"]:
+    """A Temporal worker on a queue of its own and the API, for tasks end to end (skips without
+    Temporal)."""
+    from app.settings import Settings
+    from app.temporal import connect_temporal
+    from app.worker import build_worker
+    from tests.agent.live import SIGNING_SECRET, TEMPORAL, Live, activities_for, temporal_up
+    from tests.stack import app_for
+
+    if not temporal_up():
+        pytest.skip("Temporal not reachable (run `make infra`)")
+    monkeypatch.setenv("SLACK_SIGNING_SECRET", SIGNING_SECRET)
+    settings = Settings(temporal_address=TEMPORAL, temporal_task_queue=f"agent-test-{uuid.uuid4().hex[:8]}")
+    client = await connect_temporal(settings)
+    app = app_for(stack, temporal=client)
+    async with (
+        build_worker(client, settings, activities_for(agent, stack)),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False), base_url="http://api"
+        ) as api,
+    ):
+        yield Live(agent, client, settings, api)
+    agent.sql(
+        "update app.tasks set status = 'completed', finished_at = now() where org_id = %s "
+        "and status in ('queued', 'running', 'awaiting_approval')",
+        (agent.world.acme.id,),
+    )

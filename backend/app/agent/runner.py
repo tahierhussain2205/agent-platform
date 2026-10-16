@@ -14,8 +14,9 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -23,7 +24,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 from psycopg.types.json import Jsonb
 
-from app.agent import prompts
+from app.agent import prompts, tickets
 from app.agent.outbox import Sink, SlackSink, post_once
 from app.agent.playbooks import BUILTIN, PlaybookSpec, keys, latest
 from app.agent.types import (
@@ -61,7 +62,8 @@ STEP_TOKEN_CAP = 150_000
 LOW_CONFIDENCE = 0.6
 MAX_WINDOW_DAYS = 31
 MAX_PERMALINKS = 25
-MAX_ACTIONS = 3
+MAX_ACTIONS = 5
+AUTO_PLAN_LIMIT = 3  # Auto drops to Ask above this many changes (spec 4.5.3)
 CONVERSATION_LIMIT = 50
 TERMINAL = ("completed", "failed", "cancelled")
 TIERS: tuple[Tier, ...] = ("fast", "standard", "advanced")
@@ -653,6 +655,7 @@ class AgentRunner:
             await self.step(ref, "plan", "skipped", "No changes are possible with this playbook")
             return []
         await self.step(ref, "plan", "running")
+        numbered = [{"finding": n, "text": p["text"]} for n, p in enumerate(f.points[:30], 1)]
         result = await self.d.gateway.complete(
             self._call(ref, "plan"),
             as_tier(tier),
@@ -661,13 +664,13 @@ class AgentRunner:
                 {
                     "role": "user",
                     "content": f"<brief>{json.dumps(brief_for_model(brief))}</brief>\n"
-                    f"<findings>{json.dumps([p['text'] for p in f.points][:20])}</findings>\n"
+                    f"<findings>{json.dumps(numbered)}</findings>\n"
                     "<available_actions>" + ", ".join(writes) + "</available_actions>",
                 }
             ],
             tools=[prompts.submit_tool("submit_plan", "Submit the plan.")],
             tool_choice={"type": "tool", "name": "submit_plan"},
-            max_tokens=800,
+            max_tokens=2500,
         )
         actions = []
         for raw in (result.tool_input("submit_plan").get("actions") or [])[:MAX_ACTIONS]:
@@ -682,8 +685,22 @@ class AgentRunner:
                 continue
             summary = str(raw.get("summary") or f"{raw['tool']} {raw['operation']}")[:300]
             actions.append(PlannedAction(str(raw["tool"]), str(raw["operation"]), dict(args), summary))
+        if any(a.tool == "jira" for a in actions):  # checked in code before anything reaches the policy
+            _, _, _, executor = await self._tools(ref, ctx, u.mode, RefBook())
+            actions = await tickets.review(
+                executor, actions, f.points[:30], str(brief.get("goal") or ""), partial(self._permalinks, ref)
+            )
+        changes = [a for a in actions if a.skip is None]
+        if u.mode == "auto" and len(changes) > AUTO_PLAN_LIMIT:
+            actions = [replace(a, ask=True) for a in actions]
+            await self.reply(
+                ref,
+                f"This plan makes {len(changes)} changes, more than {AUTO_PLAN_LIMIT}, so I'll ask before "
+                "each one.",
+                "plan-size",
+            )
         await self.step(
-            ref, "plan", "completed", "; ".join(a.summary for a in actions) or "No changes needed"
+            ref, "plan", "completed", "; ".join(a.summary for a in changes) or "No changes needed"
         )
         return actions
 
@@ -786,9 +803,13 @@ class AgentRunner:
         answer: str,
         sources: list[dict[str, Any]],
     ) -> ActionOutcome:
-        """The policy decides: denied, allowed now, or an approval request in the thread."""
+        """The policy decides: denied, allowed now, or an approval request in the thread. An action
+        marked ``ask`` (a large plan, a private source) is decided as in Ask mode."""
+        if action.skip:
+            return ActionOutcome("skipped", action.skip)
         ctx = await self._context(ref)
-        tctx, registry, policy, executor = await self._tools(ref, ctx, u.mode, RefBook())
+        mode = "ask" if action.ask else u.mode
+        tctx, registry, policy, executor = await self._tools(ref, ctx, mode, RefBook())
         found = registry.lookup(tool_name(action.tool, action.operation))
         if found is None:
             return ActionOutcome("denied", f"{action.tool} {action.operation} is not available.")
@@ -877,6 +898,8 @@ class AgentRunner:
 
     @staticmethod
     def _preview(action: PlannedAction, args: dict[str, Any], target: Target | None) -> str:
+        if action.tool == "jira":
+            return tickets.preview(action, args)
         where = f"#{target.name}" if target else str(args.get("channel"))
         text = str(args.get("text") or "")
         quoted = "\n".join(f"> {line}" for line in text[:700].splitlines())
@@ -949,8 +972,19 @@ class AgentRunner:
                     "select status, target_ref from app.external_actions where idempotency_key = %s", (key,)
                 )
             ).fetchone()
-            if row is not None and row[0] == "succeeded":
-                return ActionOutcome("done", f"Done: {action.summary}", result={"target": row[1]})
+        if row is not None and row[0] == "succeeded":
+            return ActionOutcome("done", f"Done: {action.summary}", result={"target": row[1]})
+        if row is None and name == tool_name("jira", "create_issue"):
+            # Someone may have filed it while the approval waited. A retry (row present) skips this:
+            # the issue found by its label is our own.
+            same = await tickets.duplicate_of(executor, str(args.get("project")), str(args.get("summary")))
+            if same is not None:
+                return ActionOutcome(
+                    "skipped",
+                    f'Not created: "{args.get("summary")}" looks like {tickets.issue_link(same)}, '
+                    "opened meanwhile.",
+                )
+        async with tenant_tx(self.d.pool, ref.org_id) as conn:
             if row is None:
                 await conn.execute(
                     "insert into app.external_actions "
@@ -988,8 +1022,16 @@ class AgentRunner:
                 ),
             )
         if result.is_error:
-            return ActionOutcome("failed", result.text)
+            return ActionOutcome("failed", f"{action.summary}: {result.text}")
         await self.step(ref, "act", "completed", action.summary)
+        if result.data.get("url") and result.data.get("key"):
+            issue = tickets.issue_link(result.data)
+            done = (
+                f"Created {issue}: {args.get('summary')}"
+                if action.operation == "create_issue"
+                else (f"{action.summary} ({issue})")
+            )
+            return ActionOutcome("done", done, result=result.data)
         return ActionOutcome("done", f"Done: {action.summary}", result=result.data)
 
     # ------------------------------------------------------------------ deliver

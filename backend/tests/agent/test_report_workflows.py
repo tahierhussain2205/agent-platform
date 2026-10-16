@@ -27,12 +27,17 @@ from app.workflows.slack_activities import SlackActivities, SlackDeps
 from app.workflows.slack_types import HomeRequest
 from app.workflows.task_activities import TaskActivities
 from tests.agent.conftest import Agent, channel_messages
-from tests.agent.test_task_workflow import SIGNING_SECRET, TEMPORAL, temporal_up, wait_for
-from tests.agent.test_task_workflow import Live as TaskLive
-from tests.connect import connect_jira, enable
+from tests.agent.live import SIGNING_SECRET, TEMPORAL, temporal_up, wait_for
+from tests.agent.live import Live as TaskLive
+from tests.connect import connect_jira, enable, reset_jira_issues
 from tests.stack import FAKES, PROVIDER_SETTINGS, Stack, app_for
 
 pytestmark = pytest.mark.skipif(not temporal_up(), reason="Temporal not reachable (run `make infra`)")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _jira_issues_as_seeded() -> None:
+    reset_jira_issues()
 
 
 @pytest.fixture(autouse=True)

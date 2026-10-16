@@ -10,7 +10,12 @@ import pytest_asyncio
 from app.agent.types import TaskRef
 from app.slack.adapter import DirectMessage, Reply
 from tests.agent.conftest import Agent, ui_post
-from tests.connect import connect_github, connect_jira, enable, link_github, sql
+from tests.connect import connect_github, connect_jira, enable, link_github, reset_jira_issues, sql
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _jira_issues_as_seeded() -> None:
+    reset_jira_issues()
 
 
 @pytest_asyncio.fixture(loop_scope="session", autouse=True)

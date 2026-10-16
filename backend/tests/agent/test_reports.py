@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
+import pytest
 import pytest_asyncio
 from psycopg.types.json import Jsonb
 
@@ -16,8 +17,14 @@ from app.agent.types import ReportStart
 from app.schedules.figures import parse_jira_time
 from app.slack.adapter import DirectMessage, Report
 from tests.agent.conftest import Agent, script_model, ui_post
-from tests.connect import connect_jira, enable
+from tests.connect import connect_jira, enable, reset_jira_issues
 from tests.stack import FAKES
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _jira_issues_as_seeded() -> None:
+    reset_jira_issues()
+
 
 JIRA = f"{FAKES}/atlassian/api/ex/jira/cloud-acme/rest/api/3"
 

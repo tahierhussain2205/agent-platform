@@ -21,11 +21,17 @@ from tests.connect import (
     enable,
     link_github,
     link_google,
+    reset_jira_issues,
     sql,
 )
 from tests.stack import FAKES, PROVIDER_SETTINGS, Stack, fakes_up
 
 pytestmark = pytest.mark.skipif(not fakes_up(), reason="stand-ins not reachable (run `make infra`)")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _jira_issues_as_seeded() -> None:
+    reset_jira_issues()
 
 
 @dataclass

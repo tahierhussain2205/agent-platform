@@ -1,6 +1,7 @@
 """Helpers that connect integrations through the stand-ins' consent pages and the vault, the way the
 OAuth callbacks do: a connection row first, then the vault exchanges the code."""
 
+import contextlib
 import uuid
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -107,3 +108,15 @@ async def connect_custom_mcp(stack: Stack, org: Any, key: str, url: str, api_key
     conn = new_connection(stack, org, key)
     await stack.vault.store(org.id, conn, api_key)
     return conn
+
+
+def reset_jira_issues() -> None:
+    """The Jira stand-in's seed issues again (tokens are kept): for tests that count or list them."""
+    with contextlib.suppress(httpx.HTTPError):  # stand-ins down: those tests skip
+        httpx.post(f"{FAKES}/_admin/atlassian/issues/reset", timeout=10)
+
+
+async def delete_jira_issues(*phrases: str) -> None:
+    """Delete the issues a test created (summaries containing a phrase; seed issues are kept)."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        await client.post(f"{FAKES}/_admin/atlassian/issues/delete", json={"contains": list(phrases)})

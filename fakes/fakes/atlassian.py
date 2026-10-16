@@ -162,6 +162,8 @@ def adf_text_of(node: Any) -> str:
     if isinstance(node, dict):
         if node.get("type") == "text":
             return str(node.get("text", ""))
+        if node.get("type") == "hardBreak":
+            return "\n"
         parts = [adf_text_of(c) for c in node.get("content") or []]
         return ("\n\n" if node.get("type") == "doc" else "").join(p for p in parts if p)
     if isinstance(node, list):
@@ -296,7 +298,7 @@ class Atlassian:
             "reporter": self.person(issue.get("reporter")),
             "labels": list(issue.get("labels") or []),
             "components": [{"name": c} for c in issue.get("components") or []],
-            "description": adf(issue["description"]),
+            "description": issue.get("description_adf") or adf(issue["description"]),
         }
         chosen = full if not fields or "*all" in fields else {k: v for k, v in full.items() if k in fields}
         site = self.s["sites"][project["site"]]
@@ -520,6 +522,7 @@ def build_router(jira: Atlassian) -> APIRouter:
                 "key": key, "summary": summary, "status": "To Do", "assignee": assignee,
                 "priority": str((f.get("priority") or {}).get("name") or "Medium"), "updated": now, "created": now,
                 "resolved": None, "description": adf_text_of(f.get("description")), "project": project_key,
+                "description_adf": f.get("description") if isinstance(f.get("description"), dict) else None,
                 "reporter": account["accountId"], "labels": [str(x) for x in f.get("labels") or []],
                 "components": wanted, "comments": [], "issuetype": issue_type,
             }  # fmt: skip
@@ -658,6 +661,32 @@ def build_router(jira: Atlassian) -> APIRouter:
             n = oauthkit.expire_all(jira.s)
             jira.store.save()
         return {"expired": n}
+
+    @router.post("/_admin/atlassian/issues/delete")
+    async def delete_issues(request: Request) -> dict[str, list[str]]:
+        """Delete issues created since the seed whose summary contains one of the phrases (tests clean
+        up after themselves without touching tokens other clients hold)."""
+        phrases = [str(p).lower() for p in (await request.json()).get("contains") or [] if str(p).strip()]
+        seeded = set(seed()["issues"])
+        with jira.store.lock:
+            gone = sorted(
+                k
+                for k, i in jira.s["issues"].items()
+                if k not in seeded and any(p in i["summary"].lower() for p in phrases)
+            )
+            for key in gone:
+                del jira.s["issues"][key]
+            jira.store.save()
+        return {"deleted": gone}
+
+    @router.post("/_admin/atlassian/issues/reset")
+    def reset_issues() -> dict[str, int]:
+        """The seed's issues and components again; accounts, sites and tokens are kept."""
+        fresh = seed()
+        with jira.store.lock:
+            jira.s["issues"], jira.s["components"] = fresh["issues"], fresh["components"]
+            jira.store.save()
+        return {"issues": len(fresh["issues"])}
 
     @router.get("/_admin/atlassian/tokens")
     def tokens() -> dict[str, int]:

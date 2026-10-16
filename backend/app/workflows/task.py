@@ -134,21 +134,24 @@ class TaskWorkflow:
         self.stage = "writing"
         await self._status(ref, "✍️ Writing the answer…")
         c: Composed = await self._do(TaskActivities.compose, ref, u, f, tier, limit=MODEL_STEP)
-        notes = []
-        for n, action in enumerate(actions, 1):
-            outcome: ActionOutcome = await self._do(
-                TaskActivities.act, ref, u, action, n, c.answer, c.sources
-            )
-            if outcome.status == "awaiting_approval":
-                self.stage = "awaiting_approval"
-                await self._status(ref, f"⏸ Waiting for approval: {action.summary}")
-                state = await self._await_approval(ref, outcome)
-                self.stage = "acting"
-                if state.status == "approved":
-                    outcome = await self._do(TaskActivities.execute, ref, u, action, n, c.answer)
-                else:
-                    outcome = ActionOutcome("skipped", f"{action.summary}: not done ({state.status})")
-            notes.append(_note(action, outcome))
+        if workflow.patched("approvals-together"):
+            notes = await self._act_all(ref, u, actions, c)
+        else:  # tasks started before approvals were requested together
+            notes = []
+            for n, action in enumerate(actions, 1):
+                outcome: ActionOutcome = await self._do(
+                    TaskActivities.act, ref, u, action, n, c.answer, c.sources
+                )
+                if outcome.status == "awaiting_approval":
+                    self.stage = "awaiting_approval"
+                    await self._status(ref, f"⏸ Waiting for approval: {action.summary}")
+                    state = await self._await_approval(ref, outcome)
+                    self.stage = "acting"
+                    if state.status == "approved":
+                        outcome = await self._do(TaskActivities.execute, ref, u, action, n, c.answer)
+                    else:
+                        outcome = ActionOutcome("skipped", f"{action.summary}: not done ({state.status})")
+                notes.append(_note(action, outcome))
         self.stage = "delivering"
         await self._do(TaskActivities.deliver, ref, u, c, notes)
         usage = await self._do(TaskActivities.usage, ref)
@@ -156,6 +159,56 @@ class TaskWorkflow:
         self.stage = "completed"
         await self._status(ref, f"✅ Done · {int(usage['tokens']):,} tokens", running=False)
         return "completed"
+
+    async def _act_all(
+        self, ref: TaskRef, u: Understanding, actions: list[PlannedAction], c: Composed
+    ) -> list[str]:
+        """Decide every action first, so approval requests appear together, then perform each one as
+        soon as its own decision arrives (re-reading the database, so a lost signal is not a lost
+        decision). Actions the checks in code dropped are reported, not performed."""
+        outcomes: list[ActionOutcome] = []
+        for n, action in enumerate(actions, 1):
+            if action.skip:
+                outcomes.append(ActionOutcome("skipped", action.skip))
+                continue
+            outcomes.append(await self._do(TaskActivities.act, ref, u, action, n, c.answer, c.sources))
+        pending = {o.approval_id: n for n, o in enumerate(outcomes) if o.status == "awaiting_approval"}
+        while pending:
+            self.stage = "awaiting_approval"
+            waiting = [actions[n].summary for n in pending.values()]
+            await self._status(
+                ref,
+                f"⏸ Waiting for approval: {waiting[0]}"
+                if len(waiting) == 1
+                else f"⏸ Waiting for {len(waiting)} approvals",
+            )
+            deadline = min(
+                datetime.fromisoformat(outcomes[n].expires_at or "") if outcomes[n].expires_at
+                else workflow.now() + timedelta(hours=24)
+                for n in pending.values()
+            )  # fmt: skip
+            timeout = max(min(deadline - workflow.now(), APPROVAL_POLL), timedelta(seconds=1))
+            signalled = False
+            with contextlib.suppress(TimeoutError):
+                await workflow.wait_condition(
+                    lambda: any(a in self.decisions for a in pending), timeout=timeout
+                )
+                signalled = True
+            for approval_id, n in list(pending.items()):
+                if signalled and approval_id not in self.decisions:
+                    continue
+                assert approval_id is not None
+                state: ApprovalState = await self._do(TaskActivities.resolve_approval, ref, approval_id)
+                if state.status == "pending":
+                    self.decisions.pop(approval_id, None)  # a signal ahead of its commit: wait again
+                    continue
+                del pending[approval_id]
+                self.stage = "acting"
+                if state.status == "approved":
+                    outcomes[n] = await self._do(TaskActivities.execute, ref, u, actions[n], n + 1, c.answer)
+                else:
+                    outcomes[n] = ActionOutcome("skipped", f"{actions[n].summary}: not done ({state.status})")
+        return [_note(a, o) for a, o in zip(actions, outcomes, strict=True)]
 
     async def _wait_for_turn(self, ref: TaskRef) -> Any:
         """The start result: ``started``, ``gone`` (finished or cancelled meanwhile), ``refused``
@@ -222,5 +275,6 @@ class TaskWorkflow:
 def _note(action: PlannedAction, outcome: ActionOutcome) -> str:
     icon = {"done": "✅", "denied": "🚫", "failed": "⚠️", "skipped": "⏭"}.get(outcome.status, "•")
     if outcome.status == "done":
-        return f"{icon} {action.summary}."
+        text = outcome.message.removeprefix("Done: ") or action.summary
+        return f"{icon} {text}" + ("" if text.endswith((".", "!", "?")) else ".")
     return f"{icon} {outcome.message}"

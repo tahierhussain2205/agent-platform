@@ -13,7 +13,7 @@ import pytest_asyncio
 
 from app.tools.base import definitions
 from app.tools.jira import JiraAdapter, marker
-from tests.connect import connect_jira, consent, enable, sql
+from tests.connect import connect_jira, consent, delete_jira_issues, enable, sql
 from tests.stack import FAKES, PROVIDER_SETTINGS, Stack, fakes_up
 from tests.tools.test_integrations import Setup
 
@@ -31,6 +31,8 @@ async def setup(stack: Stack) -> AsyncIterator[Setup]:
     await connect_jira(stack, acme, "acc-bob", acme.user)  # Bob's own link; Alice has none
     async with httpx.AsyncClient(timeout=30) as http:
         yield Setup(stack, http)
+        # The stand-in keeps issues: leave none of ours open (other tests look for duplicates).
+        await delete_jira_issues(RUN)
 
 
 async def as_quinn(path: str, method: str = "GET", **kw: Any) -> Any:

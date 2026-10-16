@@ -154,6 +154,8 @@ def adf_text(node: Any) -> str:
     if isinstance(node, dict):
         if node.get("type") == "text":
             return str(node.get("text", ""))
+        if node.get("type") == "hardBreak":
+            return "\n"
         parts = [adf_text(c) for c in node.get("content") or []]
         sep = "\n" if node.get("type") in ("doc", "bulletList", "orderedList") else ""
         return sep.join(p for p in parts if p)
@@ -359,7 +361,19 @@ class JiraAdapter:
             lines.append(note)
         if not visible and not hidden and not note:
             lines.append("No issues match.")
-        return ToolResult(cap(redact("\n".join(lines))[0]))
+        site = credential.details.get("site_url") or ""
+        issues = [
+            {
+                "key": str(i["key"]),
+                "summary": str((i.get("fields") or {}).get("summary") or ""),
+                "status": str(((i.get("fields") or {}).get("status") or {}).get("name") or ""),
+                "done": (((i.get("fields") or {}).get("status") or {}).get("statusCategory") or {}).get("key")
+                == "done",
+                "url": f"{site}/browse/{i['key']}" if site else None,
+            }
+            for i in visible
+        ]
+        return ToolResult(cap(redact("\n".join(lines))[0]), data={"issues": issues})
 
     async def _get(self, ctx: ToolContext, credential: Credential, key: str) -> ToolResult:
         if not KEY_RE.match(key):
@@ -555,16 +569,38 @@ def marker(idempotency_key: str) -> str:
     return "agent-" + hashlib.sha256(idempotency_key.encode()).hexdigest()[:12]
 
 
+URL_RE = re.compile(r"https?://[^\s<>|]+[^\s<>|.,;:!?)\]]")
+
+
+def adf_line(line: str) -> list[dict[str, Any]]:
+    """One line as ADF text nodes, URLs as links."""
+    nodes: list[dict[str, Any]] = []
+    at = 0
+    for m in URL_RE.finditer(line):
+        if m.start() > at:
+            nodes.append({"type": "text", "text": line[at : m.start()]})
+        nodes.append(
+            {"type": "text", "text": m.group(0), "marks": [{"type": "link", "attrs": {"href": m.group(0)}}]}
+        )
+        at = m.end()
+    if at < len(line):
+        nodes.append({"type": "text", "text": line[at:]})
+    return nodes
+
+
 def adf_doc(text: str) -> dict[str, Any]:
-    """Plain text as Atlassian Document Format paragraphs (blank lines separate them)."""
+    """Plain text as Atlassian Document Format: blank lines separate paragraphs, line breaks are kept
+    and URLs become links."""
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()] or [""]
-    return {
-        "type": "doc",
-        "version": 1,
-        "content": [
-            {"type": "paragraph", "content": [{"type": "text", "text": p}] if p else []} for p in paragraphs
-        ],
-    }
+    content = []
+    for paragraph in paragraphs:
+        nodes: list[dict[str, Any]] = []
+        for i, line in enumerate(paragraph.splitlines()):
+            if i:
+                nodes.append({"type": "hardBreak"})
+            nodes += adf_line(line)
+        content.append({"type": "paragraph", "content": nodes})
+    return {"type": "doc", "version": 1, "content": content}
 
 
 def _report_fields(issue: dict[str, Any]) -> dict[str, Any]:

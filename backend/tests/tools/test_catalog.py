@@ -176,7 +176,13 @@ async def test_find_owners_uses_confirmed_services_and_explains_why(setup: Setup
         assert found.data["candidates"][0]["reasons"] == [
             "owner of cart-service (CODEOWNERS /src/pricing/ in acme/cart-service)"
         ]
-        assert "[S1] cart-service (matched on Jira component Checkout; mentions cart, checkout)" in found.text
+        assert (
+            "[S1] cart-service (Jira PAY/Checkout; matched on Jira component Checkout; mentions cart, checkout)"
+            in (found.text)
+        )
+        assert found.data["services"] == [
+            {"name": "cart-service", "score": 9, "jira_project": "PAY", "jira_component": "Checkout"}
+        ]
         assert bob.ctx.refs.by_ref["S1"].ref == f"catalog:{cart}"
         sql(stack, "update app.org_memberships set status = 'removed' where id = %s", (acme.user,))
         try:  # a member who left is no owner
