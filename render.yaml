@@ -224,7 +224,10 @@ projects:
               # Model provider (Anthropic API key, B-005). Without it the agent only acknowledges.
               - key: ANTHROPIC_API_KEY
                 sync: false
-              # Sandbox provider for repository work (B-008). Without it the code tools say so.
+              # Sandbox provider for repository work (B-008): E2B, from the template built by
+              # scripts/e2b_template.py, with the E2B API key. Without a key the code tools say so.
+              - key: SANDBOX_PROVIDER
+                value: e2b
               - key: SANDBOX_URL
                 sync: false
               - key: SANDBOX_API_KEY
@@ -323,6 +326,8 @@ projects:
               - fromGroup: backend-staging
               - fromGroup: db-maintenance-staging
               # Destroys expired sandboxes at the provider (B-008).
+              - key: SANDBOX_PROVIDER
+                value: e2b
               - key: SANDBOX_URL
                 sync: false
               - key: SANDBOX_API_KEY

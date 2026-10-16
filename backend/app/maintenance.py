@@ -192,20 +192,17 @@ def sandbox_cleanup_job(settings: Settings) -> Job:
         ).fetchall()
         if not expired:
             return "no expired sandboxes"
-        if not settings.sandbox_url or settings.sandbox_api_key is None:
-            return f"{len(expired)} expired sandbox(es) left: no sandbox provider is configured"
 
-        async def destroy_all() -> int:
+        async def destroy_all() -> int | None:
             import httpx
 
-            from app.sandbox import HttpSandboxProvider, SandboxError
+            from app.sandbox import SandboxError, provider_from_settings
 
-            url, key = settings.sandbox_url, settings.sandbox_api_key
-            assert url is not None
-            assert key is not None
             done = 0
             async with httpx.AsyncClient(timeout=20) as http:
-                provider = HttpSandboxProvider(url, key.get_secret_value(), http)
+                provider = provider_from_settings(settings, http)
+                if provider is None:
+                    return None
                 for _org, sandbox_row, provider_id in expired:
                     try:
                         if provider_id:
@@ -220,6 +217,8 @@ def sandbox_cleanup_job(settings: Settings) -> Job:
             return done
 
         done = asyncio.run(destroy_all())
+        if done is None:
+            return f"{len(expired)} expired sandbox(es) left: no sandbox provider is configured"
         return f"{done} of {len(expired)} expired sandbox(es) destroyed"
 
     return ("sandbox_cleanup", run)
