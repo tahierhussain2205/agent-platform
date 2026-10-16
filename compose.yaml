@@ -197,9 +197,11 @@ services:
         pwIDAQAB
         -----END PUBLIC KEY-----
       SANDBOX_API_KEY: sbx-local-key
+      SANDBOX_ROOT: /sandboxes
     ports: ["4100:4100"]
     volumes:
       - fakesdata:/data
+      - sandboxes:/sandboxes
       - ./backend/app/seed/fixture.json:/seed/fixture.json:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4100/healthz', timeout=2)"]
@@ -348,7 +350,35 @@ services:
       timeout: 3s
       retries: 60
 
+  # Runs sandbox commands (B-008): no network at all, a read only root, no capabilities, limits.
+  # Shares the sandboxes volume with the stand-in provider API (fakes), which hands it jobs.
+  sandbox-runner:
+    build:
+      context: ./fakes
+      dockerfile: runner.Dockerfile
+    image: agentplatform-sandbox-runner:dev
+    network_mode: none
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    user: "10001"
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 256
+    environment:
+      SANDBOX_ROOT: /sandboxes
+    volumes:
+      - sandboxes:/sandboxes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import time; assert time.time() - float(open('/sandboxes/.runner-heartbeat').read()) < 10"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
 volumes:
+  sandboxes:
   fakesdata:
   pgdata:
   temporaldata:

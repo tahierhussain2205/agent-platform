@@ -1,8 +1,9 @@
 """Sandbox provider stand-in (B-008): the API of a managed sandbox provider, locally.
 
-One directory per sandbox under the state directory, with a time to live and a disk limit. The
-platform uploads a repository archive and reads it through the file API; there is no command
-execution yet (phase 12 adds it in an isolated container). All routes need the provider API key.
+One directory per sandbox under ``SANDBOX_ROOT`` (a volume shared with the runner container), with
+a time to live and a disk limit. The platform uploads a repository archive, reads and writes it
+through the file API, and runs commands, which the runner executes with no network
+(``fakes.sandbox_runner``). All routes need the provider API key.
 
 - ``POST /sandbox/v1/sandboxes`` ``{"ttl_seconds", "limits": {"disk_mb"}, "metadata"}``
 - ``GET`` / ``DELETE /sandbox/v1/sandboxes/{id}``
@@ -11,11 +12,17 @@ execution yet (phase 12 adds it in an isolated container). All routes need the p
 - ``GET /sandbox/v1/sandboxes/{id}/files?path=&recursive=``
 - ``GET /sandbox/v1/sandboxes/{id}/files/content?path=&start=&end=``
 - ``POST /sandbox/v1/sandboxes/{id}/search`` ``{"pattern", "regex", "path", "glob", "max_results"}``
-- ``POST /sandbox/v1/sandboxes/{id}/exec``: 501 for now.
+- ``POST /sandbox/v1/sandboxes/{id}/exec`` ``{"command", "cwd", "env", "timeout_seconds"}``: run by the
+  runner container (no network), output capped
+- ``PUT /sandbox/v1/sandboxes/{id}/files/content?path=`` (the body is the file)
+- ``POST /sandbox/v1/sandboxes/{id}/diff`` ``{"path"}``: a git working tree's change: patch and files
 """
 
+import asyncio
+import base64
 import fnmatch
 import io
+import json
 import re
 import secrets
 import shutil
@@ -44,7 +51,7 @@ class Sandboxes:
     def __init__(self, config: Config, store: Store) -> None:
         self.config = config
         self.store = store
-        self.root = config.state_dir / "sandboxes"
+        self.root = config.sandbox_root or config.state_dir / "sandboxes"
 
     @property
     def s(self) -> dict[str, Any]:
@@ -52,7 +59,9 @@ class Sandboxes:
         return state
 
     def reset(self) -> None:
-        shutil.rmtree(self.root, ignore_errors=True)
+        # The sandboxes' folders go; the root and the runner's heartbeat stay.
+        for folder in self.root.glob("sbx_*"):
+            shutil.rmtree(folder, ignore_errors=True)
         self.store.data["sandbox"] = {"sandboxes": {}, "destroyed": []}
 
     def workspace(self, sandbox_id: str) -> Path:
@@ -246,11 +255,102 @@ def build_router(sbx: Sandboxes) -> APIRouter:
                         return JSONResponse({"matches": matches, "truncated": True})
         return JSONResponse({"matches": matches, "truncated": False})
 
+    async def run_job(sandbox_id: str, job: dict[str, Any]) -> dict[str, Any] | JSONResponse:
+        """Hand a command to the runner (its own container, no network) and wait for the result."""
+        heartbeat = sbx.root / ".runner-heartbeat"
+        try:
+            alive = time.time() - float(heartbeat.read_text()) < 10
+        except (OSError, ValueError):
+            alive = False
+        if not alive:
+            return error(503, "runner_unavailable", "The sandbox runner is not running")
+        jobs = sbx.root / sandbox_id / "jobs"
+        jobs.mkdir(parents=True, exist_ok=True)
+        job_id = secrets.token_hex(6)
+        (jobs / f"{job_id}.tmp").write_text(json.dumps(job))
+        (jobs / f"{job_id}.tmp").rename(jobs / f"{job_id}.json")
+        result = jobs / f"{job_id}.result.json"
+        deadline = time.monotonic() + int(job.get("timeout") or 120) + 15
+        while time.monotonic() < deadline:
+            if result.exists():
+                body: dict[str, Any] = json.loads(result.read_text())
+                result.unlink(missing_ok=True)
+                return body
+            await asyncio.sleep(0.05)
+        return error(504, "timeout", "The command did not finish in time")
+
     @router.post("/sandboxes/{sandbox_id}/exec")
     async def exec_(request: Request, sandbox_id: str) -> JSONResponse:
+        """Run a shell command in the workspace: ``{"command", "cwd", "env", "timeout_seconds"}``."""
         if not authorized(request):
             return error(401, "unauthorized", "Invalid API key")
-        return error(501, "not_implemented", "Command execution is not available in this stand-in yet")
+        if sbx.live(sandbox_id) is None:
+            return error(404, "not_found", "No such sandbox")
+        spec = await request.json()
+        command = str(spec.get("command") or "")
+        if not 1 <= len(command) <= 4000:
+            return error(422, "invalid_command", "A command of 1 to 4000 characters")
+        if sbx.resolve(sandbox_id, str(spec.get("cwd") or "")) is None:
+            return error(422, "invalid_path", "The working directory leaves the workspace")
+        env = {str(k): str(v)[:2000] for k, v in (spec.get("env") or {}).items() if str(k).isidentifier()}
+        timeout = max(1, min(int(spec.get("timeout_seconds") or 120), 600))
+        outcome = await run_job(sandbox_id, {"command": command, "cwd": str(spec.get("cwd") or ""), "env": env,
+                                             "timeout": timeout})  # fmt: skip
+        return outcome if isinstance(outcome, JSONResponse) else JSONResponse(outcome)
+
+    @router.put("/sandboxes/{sandbox_id}/files/content")
+    async def write(request: Request, sandbox_id: str) -> JSONResponse:
+        """Write a file (the body is its content), creating directories as needed."""
+        if not authorized(request):
+            return error(401, "unauthorized", "Invalid API key")
+        record = sbx.live(sandbox_id)
+        if record is None:
+            return error(404, "not_found", "No such sandbox")
+        target = sbx.resolve(sandbox_id, request.query_params.get("path", ""))
+        if target is None or target == sbx.workspace(sandbox_id).resolve() or target.is_dir():
+            return error(422, "invalid_path", "A file path inside the workspace")
+        data = await request.body()
+        if record["bytes"] + len(data) > record["limits"]["disk_mb"] * 1024 * 1024:
+            return error(507, "disk_full", "The file does not fit the sandbox's disk limit")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        with sbx.store.lock:
+            record["bytes"] += len(data)
+            sbx.store.save()
+        return JSONResponse({"path": request.query_params.get("path"), "bytes": len(data)})
+
+    @router.post("/sandboxes/{sandbox_id}/diff")
+    async def diff(request: Request, sandbox_id: str) -> JSONResponse:
+        """The change of a git working tree (``path``) against its last commit: the patch and every
+        changed file with its status, mode and new content (base64; none when deleted)."""
+        if not authorized(request):
+            return error(401, "unauthorized", "Invalid API key")
+        if sbx.live(sandbox_id) is None:
+            return error(404, "not_found", "No such sandbox")
+        path = str((await request.json()).get("path") or "")
+        repo = sbx.resolve(sandbox_id, path)
+        if repo is None or not (repo / ".git").is_dir():
+            return error(422, "not_a_repository", "The path is not a git working tree in the workspace")
+        out = "../.agent"
+        command = (f"mkdir -p {out} && git add -A && git diff --cached --binary --no-color > {out}/diff.patch"
+                   f" && git diff --cached --raw -z --no-renames > {out}/raw")  # fmt: skip
+        outcome = await run_job(sandbox_id, {"command": command, "cwd": path, "env": {}, "timeout": 60})
+        if isinstance(outcome, JSONResponse):
+            return outcome
+        if outcome["exit_code"] != 0:
+            return error(422, "git_failed", str(outcome["stderr"])[:300])
+        agent = repo.parent / ".agent"
+        raw = (agent / "raw").read_bytes().split(b"\0")
+        files = []
+        for i in range(0, len(raw) - 1, 2):
+            meta, name = raw[i].decode().lstrip(":").split(), raw[i + 1].decode()
+            status, mode = meta[4], meta[1]
+            content = None
+            if status != "D":
+                target = repo / name
+                content = base64.b64encode(target.read_bytes()).decode() if target.is_file() else None
+            files.append({"path": name, "status": status, "mode": mode, "content_b64": content})
+        return JSONResponse({"patch": (agent / "diff.patch").read_text(errors="replace"), "files": files})
 
     return router
 

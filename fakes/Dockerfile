@@ -9,7 +9,7 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
 COPY fakes ./fakes
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
-RUN mkdir -p /data && chown 10001 /data
+RUN mkdir -p /data /sandboxes && chown 10001 /data /sandboxes
 USER 10001
 EXPOSE 4100
 CMD ["uvicorn", "fakes.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "4100"]

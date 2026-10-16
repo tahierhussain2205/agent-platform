@@ -237,7 +237,7 @@ def test_sandboxes_hold_files_and_answer_reads(client: TestClient) -> None:
     regex = client.post(f"/sandbox/v1/sandboxes/{sid}/search", json={"pattern": "def \\w+\\(", "regex": True,
                         "glob": "*.py"}, headers=API_KEY).json()  # fmt: skip
     assert [m["line"] for m in regex["matches"]] == [1]
-    assert client.post(f"/sandbox/v1/sandboxes/{sid}/exec", json={"cmd": ["ls"]}, headers=API_KEY).status_code == 501
+    assert client.post(f"/sandbox/v1/sandboxes/{sid}/exec", json={"cmd": ["ls"]}, headers=API_KEY).status_code == 422
     assert client.delete(f"/sandbox/v1/sandboxes/{sid}", headers=API_KEY).status_code == 204
     assert client.get(f"/sandbox/v1/sandboxes/{sid}", headers=API_KEY).status_code == 404
     destroyed = client.get("/_admin/sandbox/sandboxes").json()["destroyed"]
@@ -274,3 +274,116 @@ def test_sandboxes_expire(client: TestClient) -> None:
     state = client.get("/_admin/sandbox/sandboxes").json()
     assert state["live"] == []
     assert json.dumps(state["destroyed"][-1]).count("expired") == 1
+
+
+# ------------------------------------------------------------------ commands (with the runner in a thread)
+
+
+@pytest.fixture
+def runner_client(tmp_path: Path) -> Iterator[TestClient]:
+    import threading
+
+    from fakes import sandbox_runner
+
+    root = tmp_path / "sandboxes"
+    stop = threading.Event()
+    thread = threading.Thread(target=sandbox_runner.loop, args=(root, stop), daemon=True)
+    thread.start()
+    config = Config(state_dir=tmp_path, seed_fixture=tmp_path / "none.json", sandbox_root=root)
+    with TestClient(create_app(config, persist=False)) as c:
+        for _ in range(100):
+            if (root / sandbox_runner.HEARTBEAT).exists():
+                break
+            time.sleep(0.02)
+        yield c
+    stop.set()
+    thread.join(5)
+
+
+def test_commands_run_in_the_workspace_with_limits(runner_client: TestClient) -> None:
+    c = runner_client
+    sid = sandbox(c)
+    assert c.put(f"/sandbox/v1/sandboxes/{sid}/files/content", params={"path": "repo/app.py"},
+                 content=b"print('hi')\n", headers=API_KEY).json() == {"path": "repo/app.py", "bytes": 12}  # fmt: skip
+    ran = c.post(f"/sandbox/v1/sandboxes/{sid}/exec", json={"command": "python app.py && echo $HOME", "cwd": "repo"},
+                 headers=API_KEY).json()  # fmt: skip
+    assert (ran.get("exit_code"), ran.get("timed_out")) == (0, False), ran
+    assert ran["stdout"].startswith("hi\n")
+    assert ran["stdout"].strip().endswith(f"{sid}/home")  # a home of its own, not the runner's
+    env = c.post(f"/sandbox/v1/sandboxes/{sid}/exec", json={"command": "env"}, headers=API_KEY).json()["stdout"]
+    assert "SANDBOX" not in env and "KEY" not in env  # a minimal environment
+    slow = c.post(f"/sandbox/v1/sandboxes/{sid}/exec", json={"command": "sleep 5", "timeout_seconds": 1},
+                  headers=API_KEY).json()  # fmt: skip
+    assert slow["timed_out"] is True
+    big = c.post(f"/sandbox/v1/sandboxes/{sid}/exec", json={"command": "python -c \"print('x' * 200000)\""},
+                 headers=API_KEY).json()  # fmt: skip
+    assert len(big["stdout"]) < 70_000
+    assert big["stdout"].startswith("…(truncated)")
+    for bad in ({"command": ""}, {"command": "ls", "cwd": "../.."}):
+        assert c.post(f"/sandbox/v1/sandboxes/{sid}/exec", json=bad, headers=API_KEY).status_code == 422
+    assert c.put(f"/sandbox/v1/sandboxes/{sid}/files/content", params={"path": "../escape"}, content=b"x",
+                 headers=API_KEY).status_code == 422  # fmt: skip
+
+
+def test_the_change_of_a_working_tree_is_exported(runner_client: TestClient) -> None:
+    c = runner_client
+    sid = sandbox(c)
+    files = {"src/cart.py": b"MAX = 19\n", "README.md": b"# r\n", "old.txt": b"bye\n"}
+    c.put(f"/sandbox/v1/sandboxes/{sid}/archive", params={"path": "repo", "strip": 1}, content=archive(files),
+          headers=API_KEY)  # fmt: skip
+    base = "git init -q && git add -A && git -c user.name=agent -c user.email=agent@local commit -qm base"
+    assert c.post(f"/sandbox/v1/sandboxes/{sid}/exec", json={"command": base, "cwd": "repo"},
+                  headers=API_KEY).json()["exit_code"] == 0  # fmt: skip
+    c.put(f"/sandbox/v1/sandboxes/{sid}/files/content", params={"path": "repo/src/cart.py"},
+          content=b"MAX = 100\n", headers=API_KEY)  # fmt: skip
+    c.put(f"/sandbox/v1/sandboxes/{sid}/files/content", params={"path": "repo/tests/test_cart.py"},
+          content=b"def test(): pass\n", headers=API_KEY)  # fmt: skip
+    c.post(f"/sandbox/v1/sandboxes/{sid}/exec", json={"command": "rm old.txt && chmod +x README.md", "cwd": "repo"},
+           headers=API_KEY)  # fmt: skip
+    diff = c.post(f"/sandbox/v1/sandboxes/{sid}/diff", json={"path": "repo"}, headers=API_KEY).json()
+    by_path = {f["path"]: f for f in diff["files"]}
+    assert {p: f["status"] for p, f in by_path.items()} == {
+        "src/cart.py": "M", "tests/test_cart.py": "A", "old.txt": "D", "README.md": "M",
+    }  # fmt: skip
+    assert by_path["old.txt"]["content_b64"] is None
+    assert by_path["README.md"]["mode"] == "100755"
+    import base64
+
+    assert base64.b64decode(by_path["src/cart.py"]["content_b64"]) == b"MAX = 100\n"
+    assert "-MAX = 19" in diff["patch"]
+    assert "+MAX = 100" in diff["patch"]
+    not_git = c.post(f"/sandbox/v1/sandboxes/{sid}/diff", json={"path": ""}, headers=API_KEY)
+    assert not_git.status_code == 422
+
+
+def test_without_a_runner_commands_are_refused(client: TestClient) -> None:
+    sid = sandbox(client)
+    refused = client.post(f"/sandbox/v1/sandboxes/{sid}/exec", json={"command": "ls"}, headers=API_KEY)
+    assert (refused.status_code, refused.json()["error"]["code"]) == (503, "runner_unavailable")
+
+
+def test_the_runner_reports_broken_jobs_and_stays_in_the_workspace(tmp_path: Path) -> None:
+    import threading
+
+    from fakes import sandbox_runner
+
+    sandbox = tmp_path / "sbx_1"
+    (sandbox / "workspace").mkdir(parents=True)
+    (sandbox / "workspace" / "out").symlink_to(tmp_path)  # a link out of the workspace
+    escaped = sandbox_runner.run(sandbox, {"command": "ls", "cwd": "out"})
+    assert (escaped["exit_code"], escaped["stderr"]) == (126, "cwd outside the workspace")
+    jobs = sandbox / "jobs"
+    jobs.mkdir()
+    (jobs / "j1.json").write_text("{not json")
+    stop = threading.Event()
+    thread = threading.Thread(target=sandbox_runner.loop, args=(tmp_path, stop), daemon=True)
+    thread.start()
+    result = jobs / "j1.result.json"
+    for _ in range(200):
+        if result.exists():
+            break
+        time.sleep(0.02)
+    stop.set()
+    thread.join(5)
+    assert json.loads(result.read_text())["exit_code"] == 125
+    assert not (jobs / "j1.running.json").exists()

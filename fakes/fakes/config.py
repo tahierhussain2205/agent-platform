@@ -49,6 +49,9 @@ class Config:
     github_app_id: str = field(default_factory=lambda: os.environ.get("GITHUB_APP_ID", "424242"))
     github_app_slug: str = field(default_factory=lambda: os.environ.get("GITHUB_APP_SLUG", "agent-platform-local"))
     sandbox_api_key: str = field(default_factory=lambda: os.environ.get("SANDBOX_API_KEY", "sbx-local-key"))
+    sandbox_root: Path | None = field(
+        default_factory=lambda: Path(os.environ["SANDBOX_ROOT"]) if os.environ.get("SANDBOX_ROOT") else None
+    )
     gcp_sa_email: str = field(
         default_factory=lambda: os.environ.get("GCP_SA_EMAIL", "agent-reader@acme-prod.iam.gserviceaccount.com")
     )
