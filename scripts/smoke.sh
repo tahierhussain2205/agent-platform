@@ -59,6 +59,16 @@ curl -fsS -o /dev/null http://localhost:16686/ && pass "Jaeger UI" || fail "Jaeg
 echo "s3.bucket.list" | docker compose exec -T objectstore weed shell 2>/dev/null | grep -qE '^\s*artifacts\s' \
   && pass "object store has the artifacts bucket" || fail "object store bucket"
 
+# The sandbox runner runs a provider command, with no network (names do not even resolve).
+sbx_api=http://localhost:4100/sandbox/v1
+sbx_auth="authorization: Bearer sbx-local-key"
+sbx=$(curl -fsS -X POST -H "$sbx_auth" -H 'content-type: application/json' "$sbx_api/sandboxes" \
+  -d '{"ttl_seconds":120,"limits":{"disk_mb":8},"metadata":{"purpose":"smoke"}}' | jq -r .id)
+ran=$(curl -fsS -X POST -H "$sbx_auth" -H 'content-type: application/json' "$sbx_api/sandboxes/$sbx/exec" \
+  -d '{"command":"echo ran; getent hosts api || echo no-network","timeout_seconds":20}' | jq -r .stdout)
+curl -fsS -o /dev/null -X DELETE -H "$sbx_auth" "$sbx_api/sandboxes/$sbx"
+[[ $ran == $'ran\nno-network' ]] && pass "sandbox runner runs commands with no network" || fail "sandbox runner: $ran"
+
 psql_q() { docker compose exec -T postgres psql -U postgres -d agent -tAc "$1"; }
 [[ $(psql_q "select count(*) from public.schema_migrations where version = '001'") == 1 ]] \
   && pass "migration 001 recorded" || fail "migration 001 not recorded"

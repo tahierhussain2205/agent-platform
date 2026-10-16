@@ -354,6 +354,37 @@ async def test_verification_failing_twice_stops_without_a_pull_request(world: Ag
     assert await wait_for(stopped, 60)
 
 
+async def test_a_rejected_push_pushes_nothing(world: Agent, live: Live) -> None:
+    channel = await own_channel(world)
+    first = await thread_with_plan(world, plan_for("src/pricing/cart.py"), channel=channel)
+    event_id, _ = await live.request(
+        "go ahead and implement the plan", channel=channel, thread_ts=first.message_ts
+    )
+    approval_id, message_ts = await live.approval(event_id)
+    assert (
+        await live.click("U0BOB", "approval_reject", approval_id, channel=channel, ts=message_ts)
+    ).status_code == 200
+    assert await asyncio_result(live, event_id) == "stopped"
+    task_id = live.task_row(event_id)[0]
+    assert world.sql("select count(*) from app.task_links where task_id = %s", (task_id,)) == [(0,)]
+    assert (
+        world.sql(
+            "select status from app.external_actions where task_id = %s and integration_key = 'github'",
+            (task_id,),
+        )
+        == []
+    )
+    branch = world.sql("select content->>'branch' from app.artifacts where task_id = %s and kind = 'diff'",
+                       (task_id,))[0][0]  # fmt: skip
+    assert branch not in github_state()["refs"]
+
+    async def reported() -> Any:
+        return [m for m in thread_of(await channel_messages(channel), first.message_ts)
+                if "Not pushed*: the push was rejected." in json.dumps(m)]  # fmt: skip
+
+    assert await wait_for(reported, 60)
+
+
 async def test_review_comments_come_back_and_revise_the_same_pull_request(world: Agent, live: Live,
                                                                            monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
     from app.settings import get_settings
@@ -402,6 +433,9 @@ async def test_review_comments_come_back_and_revise_the_same_pull_request(world:
         before = github_state()["refs"]
         branch = next(b for b, sha in before.items() if b.startswith("agent/") and
                       any(p["number"] == number and p["head"]["ref"] == b for p in github_state()["pulls"]))  # fmt: skip
+        async with httpx.AsyncClient() as client:  # CI fails on the revision's push
+            await client.post(f"{FAKES}/_admin/github/ci", json={"repository": REPO, "conclusion": "failure",
+                                                                 "failure_summary": "1 failed: test_rounding"})  # fmt: skip
         event2, _ = await live.request("please address the review comments", channel=channel,
                                        thread_ts=first.message_ts)  # fmt: skip
         # The revision adds no test, so it asks a person even in Auto.
@@ -427,6 +461,28 @@ async def test_review_comments_come_back_and_revise_the_same_pull_request(world:
                     if f"Pushed a revision to <{link[1]}|{REPO}#{number}>" in json.dumps(m)]  # fmt: skip
 
         assert await wait_for(revised, 60)
+
+        async def failed_suite() -> Any:
+            async with httpx.AsyncClient() as client:
+                found = (await client.get(f"{FAKES}/_admin/github/deliveries")).json()
+            return next((d for d in reversed(found) if d["event"] == "check_suite"
+                         and d["payload"]["check_suite"]["head_branch"] == branch
+                         and d["payload"]["check_suite"]["conclusion"] == "failure"), None)  # fmt: skip
+
+        suite = await wait_for(failed_suite, 30)
+        assert [p["number"] for p in suite["payload"]["check_suite"]["pull_requests"]] == [number]
+        posted_suite = await send_webhook(
+            live, "check_suite", suite["id"], json.dumps(suite["payload"]).encode()
+        )
+        assert posted_suite.json()["status"] == "accepted"
+
+        async def checks_failed() -> Any:
+            return [m for m in thread_of(await channel_messages(channel), first.message_ts)
+                    if f"Checks failed on <{link[1]}|{REPO}#{number}>" in json.dumps(m)]  # fmt: skip
+
+        (ci,) = await wait_for(checks_failed, 60)
+        assert "1 failed: test_rounding" in json.dumps(ci)
+        assert "fix CI" in json.dumps(ci)
     finally:
         set_auto(world, False)
         get_settings.cache_clear()

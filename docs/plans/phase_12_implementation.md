@@ -52,3 +52,14 @@ Classified from requests like "implement the plan", "go ahead and fix it", "rais
 - Webhooks: signature, replay, mapping to the task, notices in the thread, unknown PRs ignored.
 - Red team: from inside the sandbox, no token in the environment or files, and no connection to the API, the vault, Postgres, Valkey, Temporal, the stand-ins or the metadata endpoint.
 - Console API and web tests; Playwright: Example 2 continued: "implement the plan" in the thread, approve the push in Slack, the PR appears with the change, a review comment comes back to the thread, a revision is pushed.
+
+## Changes during implementation
+
+- The diff artifact is inline up to 200 KB and in the object store above that (the worker now builds the store from its settings); a change over 5 MB is refused as too large to push.
+- `github.prepare_workspace` checks the requester's push access before building the working copy (with `push: true`), so a person who cannot push gets an answer before any work; the pusher checks again.
+- Branch names end with the task id's last characters: two tasks for the same issue never share a branch.
+- Review comment events are not posted on their own: every comment belongs to a review, whose event carries them (GitHub sends both). Merged and closed pull requests are posted too; passing checks are not.
+- Notices read the pull request outside the task that opened it: the vault releases credentials to running tasks only, and that task has ended. The requester's own access is still checked.
+- A revision that adds no test (for example a docstring a reviewer asked for) asks a person even in Auto, like any change without a test.
+- Recipe runs are classified `works`, `failed` or `unavailable` (could not run); an unavailable detected recipe is detected again next time, an admin's is kept.
+- The stand-in provider got a raw file read (`GET .../files/raw`) so exact edits never see truncated lines.
