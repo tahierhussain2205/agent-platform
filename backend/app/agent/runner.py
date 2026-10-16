@@ -852,6 +852,13 @@ class AgentRunner:
             return []
         await self.step(ref, "plan", "running")
         numbered = [{"finding": n, "text": p["text"]} for n, p in enumerate(f.points[:30], 1)]
+        # Each action as the model must give it back (tool and operation), with its combined name.
+        offered = [
+            {"action": name, "tool": found[0].key, "operation": found[1].name}
+            for name in writes
+            if (found := registry.lookup(name)) is not None
+        ]
+        by_name = {o["action"]: (o["tool"], o["operation"]) for o in offered}
         result = await self.d.gateway.complete(
             self._call(ref, "plan"),
             as_tier(tier),
@@ -861,7 +868,7 @@ class AgentRunner:
                     "role": "user",
                     "content": f"<brief>{json.dumps(brief_for_model(brief))}</brief>\n"
                     f"<findings>{json.dumps(numbered)}</findings>\n"
-                    "<available_actions>" + ", ".join(writes) + "</available_actions>",
+                    f"<available_actions>{json.dumps(offered)}</available_actions>",
                 }
             ],
             tools=[prompts.submit_tool("submit_plan", "Submit the plan.")],
@@ -869,11 +876,19 @@ class AgentRunner:
             max_tokens=2500,
         )
         actions = []
+        unknown: list[str] = []
         for raw in (result.tool_input("submit_plan").get("actions") or [])[:MAX_ACTIONS]:
             if not isinstance(raw, dict):
                 continue
-            name = tool_name(str(raw.get("tool")), str(raw.get("operation")))
-            if name not in writes:
+            tool, operation = str(raw.get("tool")), str(raw.get("operation"))
+            # The combined name in either field is the same action (models write it both ways).
+            for candidate in (tool_name(tool, operation), tool, operation):
+                if candidate in by_name:
+                    tool, operation = by_name[candidate]
+                    raw = {**raw, "tool": tool, "operation": operation}
+                    break
+            else:
+                unknown.append(f"{tool} {operation}"[:80])
                 continue
             raw_args = raw.get("args")
             args: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
@@ -887,6 +902,15 @@ class AgentRunner:
             _, _, _, executor = await self._tools(ref, ctx, u.mode, RefBook())
             actions = await tickets.review(
                 executor, actions, f.points[:30], str(brief.get("goal") or ""), partial(self._permalinks, ref)
+            )
+        if unknown:  # never drop a requested change silently: the answer must not read as if it happened
+            log.warning("plan named actions that are not available", extra={"actions": unknown})
+            await self.reply(
+                ref,
+                "⚠️ I could not turn part of this request into an action I can take ("
+                + escape(", ".join(unknown))
+                + "), so nothing was changed for it.",
+                "plan-unknown",
             )
         changes = [a for a in actions if a.skip is None]
         if u.mode == "auto" and len(changes) > AUTO_PLAN_LIMIT:
