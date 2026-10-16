@@ -38,7 +38,7 @@ def operations(key: str, config: dict[str, Any]) -> list[Operation]:
 
     native = {"slack": SLACK, "jira": JIRA, "github": GITHUB}
     if key in native:
-        return list(native[key].values())
+        return [op for op in native[key].values() if not op.internal]  # internal ones are code only
     mode: CredentialMode = "user_required" if key == "google_workspace" else "org"
     return [operation_for(t, mode) for t in config.get("tools") or []]
 

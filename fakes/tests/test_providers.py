@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import json
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -431,3 +432,74 @@ def test_custom_mcp_needs_its_api_key(client: TestClient) -> None:
     tools = mcp(client, "/mcp/status", "Bearer mcp-key-local", "tools/list", session=session).json()["result"]["tools"]
     restart = next(t for t in tools if t["name"] == "restart_service")
     assert restart["annotations"]["destructiveHint"] is True
+
+
+def test_jira_create_assign_comment_and_components(client: TestClient) -> None:
+    bob = jira_tokens(client, "acc-bob")["access_token"]
+    dave = jira_tokens(client, "acc-dave")["access_token"]
+    components = jira(client, bob, "project/PAY/components").json()
+    assert {c["name"]: (c["lead"] or {}).get("accountId") for c in components} == {
+        "Checkout": "acc-bob", "Refunds": "acc-alice", "Webhooks": None,
+    }  # fmt: skip
+    assert jira(client, bob, "project/SEC/components").status_code == 404  # Bob cannot browse SEC
+    fields = {
+        "project": {"key": "PAY"},
+        "issuetype": {"name": "Bug"},
+        "summary": "Checkout fails for carts over 20 items",
+        "description": {"type": "doc", "version": 1, "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "Reported in #bugs"}]}]},
+        "assignee": {"accountId": "acc-quinn"},
+        "labels": ["agent-abc123"],
+        "components": [{"name": "Checkout"}],
+    }  # fmt: skip
+    created = jira(client, bob, "issue", "POST", json={"fields": fields})
+    assert created.status_code == 201, created.text
+    key = created.json()["key"]
+    assert key == "PAY-107"
+    issue = jira(client, bob, f"issue/{key}").json()["fields"]
+    assert issue["reporter"]["accountId"] == "acc-bob"  # whoever the token belongs to
+    assert issue["assignee"]["accountId"] == "acc-quinn"
+    assert issue["labels"] == ["agent-abc123"]
+    assert issue["components"] == [{"name": "Checkout"}]
+    found = jira(client, bob, "search/jql", "POST", json={"jql": 'labels = "agent-abc123"'}).json()["issues"]
+    assert [i["key"] for i in found] == [key]
+    in_checkout = jira(client, bob, "search/jql", "POST", json={"jql": "project = PAY AND component = Checkout"})
+    assert sorted(i["key"] for i in in_checkout.json()["issues"]) == ["PAY-101", key]
+    assert jira(client, bob, f"issue/{key}/assignee", "PUT", json={"accountId": "acc-alice"}).status_code == 204
+    assert jira(client, bob, f"issue/{key}").json()["fields"]["assignee"]["accountId"] == "acc-alice"
+    refused = jira(client, bob, f"issue/{key}/assignee", "PUT", json={"accountId": "acc-dave"})  # other site
+    assert refused.status_code == 400
+    note = {"body": {"type": "doc", "version": 1, "content": [
+        {"type": "paragraph", "content": [{"type": "text", "text": "Rolled back v41"}]}]}}  # fmt: skip
+    assert jira(client, bob, f"issue/{key}/comment", "POST", json=note).status_code == 201
+    comments = jira(client, bob, f"issue/{key}/comment").json()["comments"]
+    assert [(c["author"]["accountId"], c["body"]["content"][0]["content"][0]["text"]) for c in comments] == [
+        ("acc-bob", "Rolled back v41")
+    ]
+    # Refusals: no such component, an assignee who cannot be assigned, another site's token, no summary.
+    bad = {**fields, "components": [{"name": "Nope"}]}
+    assert jira(client, bob, "issue", "POST", json={"fields": bad}).status_code == 400
+    bad = {**fields, "assignee": {"accountId": "acc-dave"}}
+    assert jira(client, bob, "issue", "POST", json={"fields": bad}).status_code == 400
+    assert jira(client, dave, "issue", "POST", json={"fields": fields}).status_code == 404  # wrong site
+    bad = {**fields, "summary": " "}
+    assert jira(client, bob, "issue", "POST", json={"fields": bad}).status_code == 400
+    sec = {**fields, "project": {"key": "SEC"}, "components": [], "assignee": None}
+    assert jira(client, bob, "issue", "POST", json={"fields": sec}).status_code == 403
+
+
+def test_state_saved_by_an_older_stand_in_is_started_afresh(tmp_path: Path) -> None:
+    config = Config(state_dir=tmp_path, seed_fixture=tmp_path / "none.json", github_app_public_key=PUBLIC)
+    saved = tmp_path / "state.json"
+    with TestClient(create_app(config)) as c:
+        assert c.post("/_admin/reset").status_code == 200
+    state = json.loads(saved.read_text())
+    del state["atlassian"]["components"]  # as an earlier version saved it
+    state["github"]["installations"]["marker"] = {"kept": True}
+    saved.write_text(json.dumps(state))
+    with TestClient(create_app(config)):
+        pass
+    after = json.loads(saved.read_text())
+    assert after["atlassian"]["version"] == 2
+    assert after["atlassian"]["components"]["PAY"]
+    assert "marker" in after["github"]["installations"]  # an up to date provider keeps its state

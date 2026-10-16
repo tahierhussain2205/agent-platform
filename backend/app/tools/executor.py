@@ -46,8 +46,8 @@ class ToolExecutor:
         self.policy = policy
 
     async def credential_for(self, integration: str, mode: str) -> Credential | None:
-        """The credential a mode names. Slack uses the bot token (None here)."""
-        if integration == "slack":
+        """The credential a mode names. Slack uses the bot token, the catalog none (None here)."""
+        if integration in ("slack", "catalog"):
             return None
         key = f"credential:{integration}:{'user' if mode == 'user_required' else 'org'}"
         cached: Credential | None = self.ctx.cache.get(key)
@@ -127,8 +127,9 @@ class ToolExecutor:
 
 
 async def build_registry(ctx: ToolContext, bot_user_id: str | None, executor_factory: Any = None) -> Registry:
-    """Slack plus the integrations this org enabled. MCP servers bring their tools from discovery
-    (cached in the integration's config)."""
+    """Slack, the service catalog, and the integrations this org enabled. MCP servers bring their tools
+    from discovery (cached in the integration's config)."""
+    from app.tools.catalog import CatalogAdapter
     from app.tools.github import GitHubAdapter
     from app.tools.jira import JiraAdapter
     from app.tools.mcp import McpAdapter
@@ -136,6 +137,7 @@ async def build_registry(ctx: ToolContext, bot_user_id: str | None, executor_fac
 
     registry = Registry()
     registry.register(SlackAdapter(bot_user_id))
+    registry.register(CatalogAdapter())  # our own catalog: always there
     async with tenant_tx(ctx.pool, ctx.org_id) as conn:
         rows = await (
             await conn.execute(

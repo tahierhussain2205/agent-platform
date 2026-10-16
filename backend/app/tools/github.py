@@ -135,6 +135,7 @@ class GitHubAdapter:
                 for path in CODEOWNERS_PATHS:
                     result = await self._file(ctx, credential, repo, path, None)
                     if not result.is_error:
+                        result.data["rules"] = parse_codeowners(str(result.data.pop("content", "")))
                         return result
                 return ToolResult(f"{repo} has no CODEOWNERS file.", is_error=True)
         except GitHubError as exc:
@@ -157,7 +158,18 @@ class GitHubAdapter:
         body = await self._get(ctx, credential.token, "installation/repositories", per_page=100) or {}
         repos = body.get("repositories") or []
         lines = [f"{r['full_name']} ({'private' if r.get('private') else 'public'})" for r in repos]
-        return ToolResult("Repositories:\n" + ("\n".join(lines) or "none"))
+        data = {
+            "repos": [
+                {
+                    "id": str(r.get("id") or r["full_name"]),
+                    "full_name": r["full_name"],
+                    "private": bool(r.get("private")),
+                    "default_branch": r.get("default_branch") or "main",
+                }
+                for r in repos
+            ]
+        }
+        return ToolResult("Repositories:\n" + ("\n".join(lines) or "none"), data=data)
 
     async def _file(
         self, ctx: ToolContext, credential: Credential, repo: str, path: str, ref: Any
@@ -183,7 +195,21 @@ class GitHubAdapter:
         )
         short = ctx.refs.add(source)
         flat = text.strip().replace("\n", " ⏎ ")
-        return ToolResult(cap(redact(f"[{short}] ({repo}) {path}: {flat}")[0]))
+        data = {"repo": repo, "path": path, "content": text[:50_000]}  # in process only, never stored
+        return ToolResult(cap(redact(f"[{short}] ({repo}) {path}: {flat}")[0]), data=data)
+
+
+def parse_codeowners(text: str) -> list[dict[str, Any]]:
+    """CODEOWNERS rules in file order: ``{"pattern", "owners"}`` (owners as written: @login, @org/team or an
+    email). Comments and blank lines are skipped; a rule without owners clears ownership."""
+    rules = []
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        pattern, *owners = line.split()
+        rules.append({"pattern": pattern, "owners": owners})
+    return rules
 
 
 class GitHubError(Exception):

@@ -53,11 +53,20 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
         atlassian.reset()
         github.reset()
         google.reset()
+        store.save()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if not store.load() or any(k not in store.data for k in ("clerk", "slack", "atlassian", "github", "google")):
             reset()
+        for is_outdated, start_afresh in (
+            (atlassian.outdated, atlassian.reset),
+            (github.outdated, github.reset),
+            (google.outdated, google.reset),
+        ):
+            if is_outdated():  # saved by an older stand-in
+                start_afresh()
+                store.save()
         deliverer.start()
         slack_deliverer.start()
         yield

@@ -24,3 +24,9 @@ class Store:
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(self.data, indent=1, default=str))
             tmp.replace(self.path)
+
+
+def outdated(state: dict[str, Any], fresh: dict[str, Any]) -> bool:
+    """Whether a provider's saved state predates its seed: a key is missing or the version differs
+    (bump a seed's ``version`` when the shape of existing records changes)."""
+    return any(k not in state for k in fresh) or state.get("version") != fresh.get("version")

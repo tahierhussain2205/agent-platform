@@ -23,7 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 from fakes import oauthkit
 from fakes.config import Config
-from fakes.store import Store
+from fakes.store import Store, outdated
 
 PERMISSION_RANK = {"none": 0, "read": 1, "triage": 2, "write": 3, "maintain": 4, "admin": 5}
 
@@ -80,6 +80,9 @@ class GitHub:
     def s(self) -> dict[str, Any]:
         state: dict[str, Any] = self.store.data["github"]
         return state
+
+    def outdated(self) -> bool:
+        return outdated(self.store.data.get("github") or {}, seed())
 
     def reset(self) -> None:
         self.store.data["github"] = seed()

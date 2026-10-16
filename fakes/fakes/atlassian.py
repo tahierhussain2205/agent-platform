@@ -15,11 +15,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from fakes import oauthkit
 from fakes.config import Config
-from fakes.store import Store
+from fakes.store import Store, outdated
 
 
 def adf(text: str) -> dict[str, Any]:
@@ -73,6 +73,18 @@ def seed() -> dict[str, Any]:
         "SEC": {"key": "SEC", "name": "Security", "site": "cloud-acme", "browse": ["acc-alice"]},
         "OPS": {"key": "OPS", "name": "Operations", "site": "cloud-globex", "browse": ["acc-dave"]},
     }
+    components = {
+        "PAY": [
+            {"name": "Checkout", "lead": "acc-bob", "description": "Cart and checkout (cart-service)"},
+            {"name": "Refunds", "lead": "acc-alice", "description": "Refund processing"},
+            {"name": "Webhooks", "lead": None, "description": "Payment provider webhooks"},
+        ],
+        "WEB": [{"name": "Search", "lead": "acc-quinn", "description": "Site search"}],
+        "SEC": [],
+        "OPS": [],
+    }
+    issue_components = {"PAY-101": ["Checkout"], "PAY-102": ["Refunds"], "PAY-103": ["Webhooks"],
+                        "PAY-105": ["Webhooks"], "WEB-7": ["Search"]}  # fmt: skip
     issues = [
         ("PAY-101", "Checkout returns 500 for carts with 20 or more items", "In Progress", "acc-bob", "High", 0.2,
          "Since this morning's deploy, carts with 20 or more items fail at checkout with a 500.\n\nStack trace points to cart-service pricing."),
@@ -98,12 +110,14 @@ def seed() -> dict[str, Any]:
     ]  # fmt: skip
     created = {"PAY-104": 0.4, "PAY-105": 2.0, "PAY-106": 0.6}  # days ago; otherwise a day before the update
     return {
+        "version": 2,  # phase 10: issues gained reporter, labels and components
         "sites": {
             "cloud-acme": {"id": "cloud-acme", "url": "https://acme.atlassian.net", "name": "acme"},
             "cloud-globex": {"id": "cloud-globex", "url": "https://globex.atlassian.net", "name": "globex"},
         },
         "accounts": accounts,
         "projects": projects,
+        "components": components,
         "issues": {
             key: {
                 "key": key,
@@ -114,6 +128,10 @@ def seed() -> dict[str, Any]:
                 "updated": _ago(d),
                 "created": _ago(created.get(key, d + 1)),
                 "resolved": _ago(d) if st == "Done" else None,  # done at its last update
+                "reporter": "acc-quinn" if key.startswith(("PAY", "WEB")) else a,
+                "labels": [],
+                "components": issue_components.get(key, []),
+                "comments": [],
                 "description": desc,
                 "project": key.split("-")[0],
             }
@@ -135,6 +153,20 @@ CATEGORIES = {
     "Done": {"key": "done", "name": "Done"},
 }
 TIME = "%Y-%m-%dT%H:%M:%S.000+0000"
+
+
+def adf_text_of(node: Any) -> str:
+    """Plain text from Atlassian Document Format (or a plain string)."""
+    if isinstance(node, str):
+        return node
+    if isinstance(node, dict):
+        if node.get("type") == "text":
+            return str(node.get("text", ""))
+        parts = [adf_text_of(c) for c in node.get("content") or []]
+        return ("\n\n" if node.get("type") == "doc" else "").join(p for p in parts if p)
+    if isinstance(node, list):
+        return "\n".join(adf_text_of(n) for n in node)
+    return ""
 
 
 def _when(value: str) -> datetime:
@@ -204,6 +236,19 @@ def match_jql(jql: str, issue: dict[str, Any], me: str) -> bool:
             if not {">=": when >= limit, "<=": when <= limit, ">": when > limit, "<": when < limit}[op]:
                 return False
             continue
+        elif field in ("labels", "label", "component"):
+            have = [v.lower() for v in issue.get("labels" if field.startswith("label") else "components") or []]
+            hit = any(v.lower() in have for v in values)
+            if (op in ("=", "in") and not hit) or (op in ("!=", "not in") and hit):
+                return False
+            continue
+        elif field == "reporter":
+            actual = issue.get("reporter") or "EMPTY"
+            values = [me if v.lower() == "currentuser()" else v for v in values]
+            hit = actual.lower() in [v.lower() for v in values]
+            if (op in ("=", "in", "is") and not hit) or (op in ("!=", "not in", "is not") and hit):
+                return False
+            continue
         elif field == "statuscategory":
             category = CATEGORIES[issue["status"]]
             names = {v.lower() for v in values}
@@ -230,22 +275,27 @@ class Atlassian:
         state: dict[str, Any] = self.store.data["atlassian"]
         return state
 
+    def outdated(self) -> bool:
+        return outdated(self.store.data.get("atlassian") or {}, seed())
+
     def reset(self) -> None:
         self.store.data["atlassian"] = seed()
 
     def issue_json(self, issue: dict[str, Any], fields: list[str] | None = None) -> dict[str, Any]:
-        account = self.s["accounts"].get(issue["assignee"] or "")
         project = self.s["projects"][issue["project"]]
         full = {
             "summary": issue["summary"],
             "status": {"name": issue["status"], "statusCategory": CATEGORIES[issue["status"]]},
-            "assignee": {"accountId": account["accountId"], "displayName": account["displayName"]} if account else None,
+            "assignee": self.person(issue["assignee"]),
             "priority": {"name": issue["priority"]},
             "project": {"key": project["key"], "name": project["name"]},
             "issuetype": {"name": "Bug"},
             "updated": issue["updated"],
             "created": issue["created"],
             "resolutiondate": issue.get("resolved"),
+            "reporter": self.person(issue.get("reporter")),
+            "labels": list(issue.get("labels") or []),
+            "components": [{"name": c} for c in issue.get("components") or []],
             "description": adf(issue["description"]),
         }
         chosen = full if not fields or "*all" in fields else {k: v for k, v in full.items() if k in fields}
@@ -256,6 +306,10 @@ class Atlassian:
             "self": f"{site['url']}/rest/api/3/issue/{issue['key']}",
             "fields": chosen,
         }
+
+    def person(self, account_id: str | None) -> dict[str, Any] | None:
+        account = self.s["accounts"].get(account_id or "")
+        return {"accountId": account["accountId"], "displayName": account["displayName"]} if account else None
 
     def can_browse(self, account_id: str, project_key: str) -> bool:
         project = self.s["projects"].get(project_key)
@@ -402,6 +456,156 @@ def build_router(jira: Atlassian) -> APIRouter:
             return error(404, "Issue does not exist or you do not have permission to see it.")
         fields = request.query_params.get("fields")
         return JSONResponse(jira.issue_json(found, fields.split(",") if fields else None))
+
+    def visible_issue(account: dict[str, Any], cloudid: str, key: str) -> dict[str, Any] | None:
+        found = jira.s["issues"].get(key.upper())
+        if (
+            not found
+            or jira.s["projects"][found["project"]]["site"] != cloudid
+            or not jira.can_browse(account["accountId"], found["project"])
+        ):
+            return None
+        return found  # type: ignore[no-any-return]
+
+    def assignable(cloudid: str, project: str, account_id: str | None) -> str | None:
+        """None if fine, else Jira's refusal."""
+        if account_id is None:
+            return None
+        person = jira.s["accounts"].get(account_id)
+        if not person or person["site"] != cloudid or not jira.can_browse(account_id, project):
+            return f"User '{account_id}' cannot be assigned issues."
+        return None
+
+    @router.post(base + "/issue")
+    async def create_issue(request: Request, cloudid: str) -> JSONResponse:
+        """Create an issue; the reporter is whoever the token belongs to."""
+        account, err = context(request, cloudid)
+        if err:
+            return err
+        assert account is not None
+        f = ((await request.json()) or {}).get("fields") or {}
+        project_key = str((f.get("project") or {}).get("key") or "")
+        project = jira.s["projects"].get(project_key)
+        if not project or project["site"] != cloudid:
+            return JSONResponse(
+                {"errorMessages": [], "errors": {"project": "valid project is required"}}, status_code=400
+            )
+        if not jira.can_browse(account["accountId"], project_key):
+            return error(403, "You do not have permission to create issues in this project.")
+        summary = str(f.get("summary") or "").strip()
+        if not summary or len(summary) > 255:
+            return JSONResponse(
+                {"errorMessages": [], "errors": {"summary": "You must specify a summary of the issue."}},
+                status_code=400,
+            )
+        issue_type = str((f.get("issuetype") or {}).get("name") or "")
+        if issue_type not in ("Bug", "Task", "Story"):
+            return JSONResponse(
+                {"errorMessages": [], "errors": {"issuetype": "valid issue type is required"}}, status_code=400
+            )
+        assignee = (f.get("assignee") or {}).get("accountId") if f.get("assignee") else None
+        if refusal := assignable(cloudid, project_key, assignee):
+            return JSONResponse({"errorMessages": [], "errors": {"assignee": refusal}}, status_code=400)
+        known = {c["name"] for c in jira.s["components"].get(project_key, [])}
+        wanted = [str(c.get("name")) for c in f.get("components") or []]
+        if any(c not in known for c in wanted):
+            return JSONResponse(
+                {"errorMessages": [], "errors": {"components": "Component name is not valid"}}, status_code=400
+            )
+        with jira.store.lock:
+            numbers = [int(k.split("-")[1]) for k in jira.s["issues"] if k.startswith(f"{project_key}-")]
+            key = f"{project_key}-{max(numbers, default=0) + 1}"
+            now = datetime.now(UTC).strftime(TIME)
+            jira.s["issues"][key] = {
+                "key": key, "summary": summary, "status": "To Do", "assignee": assignee,
+                "priority": str((f.get("priority") or {}).get("name") or "Medium"), "updated": now, "created": now,
+                "resolved": None, "description": adf_text_of(f.get("description")), "project": project_key,
+                "reporter": account["accountId"], "labels": [str(x) for x in f.get("labels") or []],
+                "components": wanted, "comments": [], "issuetype": issue_type,
+            }  # fmt: skip
+            jira.store.save()
+        site = jira.s["sites"][cloudid]
+        return JSONResponse(
+            {"id": str(zlib.crc32(key.encode()) % 100000), "key": key, "self": f"{site['url']}/rest/api/3/issue/{key}"},
+            status_code=201,
+        )
+
+    @router.put(base + "/issue/{key}/assignee")
+    async def assign(request: Request, cloudid: str, key: str) -> Response:
+        account, err = context(request, cloudid)
+        if err:
+            return err
+        assert account is not None
+        found = visible_issue(account, cloudid, key)
+        if found is None:
+            return error(404, "Issue does not exist or you do not have permission to see it.")
+        target = ((await request.json()) or {}).get("accountId")
+        if refusal := assignable(cloudid, found["project"], target):
+            return JSONResponse({"errorMessages": [refusal], "errors": {}}, status_code=400)
+        with jira.store.lock:
+            found["assignee"] = target
+            found["updated"] = datetime.now(UTC).strftime(TIME)
+            jira.store.save()
+        return Response(status_code=204)
+
+    @router.post(base + "/issue/{key}/comment")
+    async def add_comment(request: Request, cloudid: str, key: str) -> JSONResponse:
+        account, err = context(request, cloudid)
+        if err:
+            return err
+        assert account is not None
+        found = visible_issue(account, cloudid, key)
+        if found is None:
+            return error(404, "Issue does not exist or you do not have permission to see it.")
+        body = ((await request.json()) or {}).get("body")
+        text = adf_text_of(body)
+        if not text.strip():
+            return JSONResponse(
+                {"errorMessages": [], "errors": {"comment": "Comment body can not be empty!"}}, status_code=400
+            )
+        with jira.store.lock:
+            comment = {"id": str(10000 + sum(len(i["comments"]) for i in jira.s["issues"].values())),
+                       "author": account["accountId"], "text": text, "created": datetime.now(UTC).strftime(TIME)}  # fmt: skip
+            found["comments"].append(comment)
+            found["updated"] = comment["created"]
+            jira.store.save()
+        return JSONResponse(
+            {
+                "id": comment["id"],
+                "author": jira.person(account["accountId"]),
+                "body": adf(text),
+                "created": comment["created"],
+            },
+            status_code=201,
+        )
+
+    @router.get(base + "/issue/{key}/comment")
+    async def comments(request: Request, cloudid: str, key: str) -> JSONResponse:
+        account, err = context(request, cloudid)
+        if err:
+            return err
+        assert account is not None
+        found = visible_issue(account, cloudid, key)
+        if found is None:
+            return error(404, "Issue does not exist or you do not have permission to see it.")
+        items = [{"id": c["id"], "author": jira.person(c["author"]), "body": adf(c["text"]), "created": c["created"]}
+                 for c in found["comments"]]  # fmt: skip
+        return JSONResponse({"comments": items, "startAt": 0, "maxResults": len(items), "total": len(items)})
+
+    @router.get(base + "/project/{key}/components")
+    async def project_components(request: Request, cloudid: str, key: str) -> JSONResponse:
+        account, err = context(request, cloudid)
+        if err:
+            return err
+        assert account is not None
+        project = jira.s["projects"].get(key)
+        if not project or project["site"] != cloudid or not jira.can_browse(account["accountId"], key):
+            return error(404, f"No project could be found with key '{key}'.")
+        return JSONResponse([
+            {"id": str(zlib.crc32(f"{key}:{c['name']}".encode()) % 100000), "name": c["name"],
+             "description": c.get("description", ""), "lead": jira.person(c.get("lead")), "project": key}
+            for c in jira.s["components"].get(key, [])
+        ])  # fmt: skip
 
     @router.get(base + "/project/search")
     async def projects(request: Request, cloudid: str) -> JSONResponse:

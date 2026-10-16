@@ -29,6 +29,9 @@ Outcome = Literal["allowed", "needs_approval", "denied"]
 AUDIT_DECISION = {"allowed": "allowed", "denied": "denied", "needs_approval": "info"}
 
 
+ALWAYS_ON = {"catalog"}  # built in tools over our own data (the service catalog)
+
+
 @dataclass(frozen=True)
 class TaskScope:
     org_id: UUID
@@ -120,6 +123,8 @@ class Policy:
                     "select enabled from app.org_integrations where integration_key = %s", (adapter_key,)
                 )
             ).fetchone()
+            if adapter_key in ALWAYS_ON:
+                enabled = (True,)
             if not enabled or not enabled[0]:
                 return Decision(
                     "denied",

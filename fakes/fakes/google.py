@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fakes import oauthkit
 from fakes.config import Config
 from fakes.mcp import McpServer, Tool
-from fakes.store import Store
+from fakes.store import Store, outdated
 
 
 def seed() -> dict[str, Any]:
@@ -60,6 +60,9 @@ class Google:
     def s(self) -> dict[str, Any]:
         state: dict[str, Any] = self.store.data["google"]
         return state
+
+    def outdated(self) -> bool:
+        return outdated(self.store.data.get("google") or {}, seed())
 
     def reset(self) -> None:
         self.store.data["google"] = seed()

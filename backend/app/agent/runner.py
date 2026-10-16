@@ -983,7 +983,7 @@ class AgentRunner:
                 (
                     "failed" if result.is_error else "succeeded",
                     result.text[:500] if result.is_error else None,
-                    f"{result.data.get('channel')}:{result.data.get('ts')}" if result.data else None,
+                    _target_ref(result.data),
                     key,
                 ),
             )
@@ -1041,6 +1041,15 @@ class AgentRunner:
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def _target_ref(data: dict[str, Any]) -> str | None:
+    """What a write produced: a tool's own reference (``jira:PAY-7``), or a Slack channel and ts."""
+    if not data:
+        return None
+    if data.get("target_ref"):
+        return str(data["target_ref"])
+    return f"{data.get('channel')}:{data.get('ts')}"
 
 
 def playbook_of(u: Understanding) -> tuple[PlaybookSpec, dict[str, Any]]:

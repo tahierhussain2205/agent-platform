@@ -1,11 +1,16 @@
-"""Jira tool adapter (read; writes arrive in phase 10).
+"""Jira tool adapter: reads, and writes with the requester's own account.
 
 With the org connection (credential mode ``org_with_check``, the default) every result is filtered
 to projects the requester may browse: their Jira account is their linked one, or the account the
 org connection finds for their email, and ``BROWSE_PROJECTS`` is checked per project. With a user
-link (``user_required``), Jira itself applies the requester's permissions.
+link (``user_required``, the default for writes), Jira itself applies the requester's permissions and
+issues carry their name.
+
+Writes are idempotent beyond ``external_actions``: a created issue carries a label derived from the
+action's idempotency key and a comment a short reference, and a retry looks for them first.
 """
 
+import hashlib
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -66,6 +71,71 @@ OPERATIONS = {
         internal=True,
     ),
 }
+WRITE_SCHEMA_ISSUE = {
+    "type": "object",
+    "properties": {
+        "project": {"type": "string", "description": "Project key, for example PAY."},
+        "summary": {"type": "string", "maxLength": 255},
+        "description": {"type": "string", "maxLength": 8000},
+        "issue_type": {"type": "string", "enum": ["Bug", "Task", "Story"]},
+        "assignee_email": {"type": "string", "description": "From catalog_find_owners; omit when unsure."},
+        "component": {"type": "string"},
+        "labels": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "finding": {"type": "integer", "description": "The number of the finding this ticket is for."},
+    },
+    "required": ["project", "summary"],
+}
+OPERATIONS.update(
+    {
+        "list_components": Operation(
+            "list_components",
+            "List the components of a Jira project, with their leads.",
+            {"type": "object", "properties": {"project": {"type": "string"}}, "required": ["project"]},
+            credential_mode="org_with_check",
+        ),
+        "match_accounts": Operation(
+            "match_accounts",
+            "Jira account ids for people's emails (to recognise members among component leads).",
+            {
+                "type": "object",
+                "properties": {"emails": {"type": "array", "items": {"type": "string"}, "maxItems": 500}},
+                "required": ["emails"],
+            },
+            credential_mode="org",
+            internal=True,
+        ),
+        "create_issue": Operation(
+            "create_issue",
+            "Create a Jira issue with the requester's own Jira account (it carries their name).",
+            WRITE_SCHEMA_ISSUE,
+            kind="write",
+            credential_mode="user_required",
+        ),
+        "assign_issue": Operation(
+            "assign_issue",
+            "Assign a Jira issue to someone, by their email.",
+            {
+                "type": "object",
+                "properties": {"key": {"type": "string"}, "assignee_email": {"type": "string"}},
+                "required": ["key", "assignee_email"],
+            },
+            kind="write",
+            credential_mode="user_required",
+        ),
+        "add_comment": Operation(
+            "add_comment",
+            "Comment on a Jira issue with the requester's own Jira account.",
+            {
+                "type": "object",
+                "properties": {"key": {"type": "string"}, "text": {"type": "string", "maxLength": 8000}},
+                "required": ["key", "text"],
+            },
+            kind="write",
+            credential_mode="user_required",
+        ),
+    }
+)
+LABEL_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 REPORT_FIELDS = [
     "summary",
     "status",
@@ -124,6 +194,8 @@ class JiraAdapter:
         )
         if response.status_code == 404:
             return None
+        if response.status_code == 204 or not response.content:
+            return {}
         if response.status_code >= 400:
             try:
                 messages = response.json().get("errorMessages") or [response.text[:200]]
@@ -206,6 +278,21 @@ class JiraAdapter:
                 return await self._projects(ctx, credential)
             if operation == "report_issues":
                 return await self._report_issues(ctx, credential, args)
+            if operation == "list_components":
+                return await self._components(ctx, credential, str(args.get("project", "")).strip().upper())
+            if operation == "match_accounts":
+                found = {}
+                for email in [str(e).strip() for e in args.get("emails") or []][:500]:
+                    account = await self._account_for_email(ctx, credential, email) if email else None
+                    if account:
+                        found[email.lower()] = account
+                return ToolResult(f"{len(found)} of the emails have Jira accounts.", data={"accounts": found})
+            if operation == "create_issue":
+                return await self._create(ctx, credential, args)
+            if operation == "assign_issue":
+                return await self._assign(ctx, credential, args)
+            if operation == "add_comment":
+                return await self._comment(ctx, credential, args)
         except JiraError as exc:
             return ToolResult(f"Jira refused the request: {exc}", is_error=True)
         except (ValueError, httpx.HTTPError) as exc:
@@ -343,13 +430,141 @@ class JiraAdapter:
         lines += [self._line(ctx, credential, i) for i in issues]
         return ToolResult(cap(redact("\n".join(lines))[0]), data=data)
 
+    async def _components(self, ctx: ToolContext, credential: Credential, project: str) -> ToolResult:
+        if not PROJECT_RE.match(project):
+            raise ValueError(f"{project or 'That'} is not a project key")
+        allowed, note = await self._filter(ctx, credential, [project])
+        if note or project not in allowed:
+            return ToolResult(
+                note or f"Access denied: you can't browse the {project} project.", is_error=True
+            )
+        found = await self._call(ctx, credential, "GET", f"project/{project}/components") or []
+        lines = [f"Components of {project}:"]
+        for c in found:
+            lead = (c.get("lead") or {}).get("displayName") or "no lead"
+            lines.append(f"{c.get('name')} (lead {lead}): {c.get('description') or ''}".rstrip(": "))
+        data = {
+            "project": project,
+            "components": [
+                {
+                    "name": c.get("name"),
+                    "lead": (c.get("lead") or {}).get("accountId"),
+                    "description": c.get("description"),
+                }
+                for c in found
+            ],
+        }
+        return ToolResult(cap(redact("\n".join(lines if found else [*lines, "none"]))[0]), data=data)
+
+    async def _assignee(self, ctx: ToolContext, credential: Credential, email: str) -> str | None:
+        if not email:
+            return None
+        account = await self._account_for_email(ctx, credential, email)
+        if account is None:
+            raise JiraError(f"no Jira user has the email {email}")
+        return account
+
+    def _issue_link(self, credential: Credential, key: str) -> str:
+        site = credential.details.get("site_url") or ""
+        return f"{site}/browse/{key}" if site else key
+
+    async def _create(self, ctx: ToolContext, credential: Credential, args: dict[str, Any]) -> ToolResult:
+        project = str(args.get("project") or "").strip().upper()
+        summary = " ".join(str(args.get("summary") or "").split())
+        if not PROJECT_RE.match(project):
+            raise ValueError(f"{project or 'That'} is not a project key")
+        if not 1 <= len(summary) <= 255:
+            raise ValueError("a summary of 1 to 255 characters is required")
+        label = marker(str(args.get("_idempotency_key") or f"{project}:{summary}"))
+        earlier = await self._call(
+            ctx, credential, "POST", "search/jql", json={"jql": f'labels = "{label}"', "fields": ["summary"]}
+        )
+        if earlier and earlier.get("issues"):  # created by an earlier attempt of this action
+            key = str(earlier["issues"][0]["key"])
+            url = self._issue_link(credential, key)
+            return ToolResult(
+                f"{key} exists already: {url}", data={"target_ref": f"jira:{key}", "key": key, "url": url}
+            )
+        assignee = await self._assignee(ctx, credential, str(args.get("assignee_email") or "").strip())
+        labels = [label, *(LABEL_RE.sub("-", str(x))[:50] for x in (args.get("labels") or [])[:5])]
+        fields: dict[str, Any] = {
+            "project": {"key": project},
+            "issuetype": {"name": str(args.get("issue_type") or "Bug")},
+            "summary": summary,
+            "description": adf_doc(str(args.get("description") or "")),
+            "labels": labels,
+        }
+        if assignee:
+            fields["assignee"] = {"accountId": assignee}
+        if str(args.get("component") or "").strip():
+            fields["components"] = [{"name": str(args["component"]).strip()}]
+        created = await self._call(ctx, credential, "POST", "issue", json={"fields": fields})
+        if not created or not created.get("key"):
+            raise JiraError("Jira did not create the issue")
+        key = str(created["key"])
+        url = self._issue_link(credential, key)
+        return ToolResult(
+            f"Created {key}: {summary} ({url})", data={"target_ref": f"jira:{key}", "key": key, "url": url}
+        )
+
+    async def _assign(self, ctx: ToolContext, credential: Credential, args: dict[str, Any]) -> ToolResult:
+        key = str(args.get("key") or "").strip().upper()
+        if not KEY_RE.match(key):
+            return ToolResult(f"{key or 'That'} is not an issue key like PAY-101.", is_error=True)
+        email = str(args.get("assignee_email") or "").strip()
+        assignee = await self._assignee(ctx, credential, email)
+        await self._call(ctx, credential, "PUT", f"issue/{key}/assignee", json={"accountId": assignee})
+        url = self._issue_link(credential, key)
+        return ToolResult(
+            f"Assigned {key} to {email}", data={"target_ref": f"jira:{key}", "key": key, "url": url}
+        )
+
+    async def _comment(self, ctx: ToolContext, credential: Credential, args: dict[str, Any]) -> ToolResult:
+        key = str(args.get("key") or "").strip().upper()
+        text = str(args.get("text") or "").strip()
+        if not KEY_RE.match(key):
+            return ToolResult(f"{key or 'That'} is not an issue key like PAY-101.", is_error=True)
+        if not text:
+            raise ValueError("a comment needs text")
+        ref = marker(str(args.get("_idempotency_key") or f"{key}:{text}"))
+        existing = await self._call(ctx, credential, "GET", f"issue/{key}/comment")
+        if existing is None:
+            return ToolResult(f"{key} does not exist or is not visible.", is_error=True)
+        url = self._issue_link(credential, key)
+        if any(ref in adf_text(c.get("body")) for c in existing.get("comments") or []):
+            return ToolResult(
+                f"Commented on {key} already", data={"target_ref": f"jira:{key}", "key": key, "url": url}
+            )
+        body = adf_doc(f"{text}\n\nvia the agent · {ref}")
+        await self._call(ctx, credential, "POST", f"issue/{key}/comment", json={"body": body})
+        return ToolResult(f"Commented on {key}", data={"target_ref": f"jira:{key}", "key": key, "url": url})
+
     async def _projects(self, ctx: ToolContext, credential: Credential) -> ToolResult:
         values = (await self._call(ctx, credential, "GET", "project/search") or {}).get("values") or []
         allowed, note = await self._filter(ctx, credential, [str(p["key"]) for p in values])
-        lines = [f"{p['key']}: {p.get('name', '')}" for p in values if p["key"] in allowed]
+        visible = [p for p in values if p["key"] in allowed]
+        lines = [f"{p['key']}: {p.get('name', '')}" for p in visible]
         if note:
             lines.append(note)
-        return ToolResult("Jira projects you can browse:\n" + ("\n".join(lines) or "none"))
+        data = {"projects": [{"key": p["key"], "name": p.get("name", "")} for p in visible]}
+        return ToolResult("Jira projects you can browse:\n" + ("\n".join(lines) or "none"), data=data)
+
+
+def marker(idempotency_key: str) -> str:
+    """The label (or comment reference) a write carries, so a retry can find what it did."""
+    return "agent-" + hashlib.sha256(idempotency_key.encode()).hexdigest()[:12]
+
+
+def adf_doc(text: str) -> dict[str, Any]:
+    """Plain text as Atlassian Document Format paragraphs (blank lines separate them)."""
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()] or [""]
+    return {
+        "type": "doc",
+        "version": 1,
+        "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": p}] if p else []} for p in paragraphs
+        ],
+    }
 
 
 def _report_fields(issue: dict[str, Any]) -> dict[str, Any]:

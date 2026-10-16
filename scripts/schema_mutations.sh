@@ -22,6 +22,7 @@ declare -a MUTATIONS=(
   "grant select on app.task_steps to app_vault"
   "drop trigger schedules_track on app.schedules"
   "grant execute on function app.maintenance_schedule_orgs() to app_user"
+  "drop index app.services_live_name"
 )
 
 failed=0
