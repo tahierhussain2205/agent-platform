@@ -61,9 +61,10 @@ async def post_notice(runner: "AgentRunner", notice: GitHubNotice) -> str:
     # outside any task, with the org connection, still checking the requester's own access.
     executor.ctx.task_id = None
     label = f"{notice.repo}#{notice.number}"
-    got = await executor.run(
-        tool_name("github", "get_pull_request"), {"repo": notice.repo, "number": notice.number}
-    )
+    args: dict[str, Any] = {"repo": notice.repo, "number": notice.number}
+    if notice.kind == "checks_failed" and notice.sha:
+        args["sha"] = notice.sha  # the commit the suite ran on, whatever the head is now
+    got = await executor.run(tool_name("github", "get_pull_request"), args)
     pr: dict[str, Any] = got.data if not (got.is_error or got.denied) else {}
     url = pr.get("url")
     link = f"<{url}|{escape(label)}>" if url else escape(label)
@@ -99,7 +100,8 @@ def _headline(notice: GitHubNotice, link: str) -> str:
     if notice.kind == "review":
         return f"💬 {who} {STATES.get(str(notice.state).upper(), 'reviewed')} {link}."
     if notice.kind == "checks_failed":
-        return f"❌ Checks failed on {link} ({escape(str(notice.state))})."
+        at = f" at `{notice.sha[:7]}`" if notice.sha else ""
+        return f"❌ Checks failed on {link}{at} ({escape(str(notice.state))})."
     return f"🎉 {link} was merged." if notice.state == "merged" else f"{link} was closed without merging."
 
 

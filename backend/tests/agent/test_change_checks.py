@@ -135,6 +135,8 @@ def test_github_webhooks_are_parsed_and_signatures_checked() -> None:
     suite = {"action": "completed", "repository": repo, "check_suite": {"conclusion": "failure",
                                                                          "pull_requests": [{"number": 3}]}}  # fmt: skip
     assert [n["kind"] for n in github_notices("check_suite", suite)] == ["checks_failed"]
+    suite["check_suite"]["head_sha"] = "a" * 40  # type: ignore[index]
+    assert github_notices("check_suite", suite)[0]["sha"] == "a" * 40  # the checks of that commit are read
     suite["check_suite"]["conclusion"] = "success"  # type: ignore[index]
     assert github_notices("check_suite", suite) == []  # only failures are posted
     merged = {"action": "closed", "repository": repo, "pull_request": {"number": 3, "merged": True}}

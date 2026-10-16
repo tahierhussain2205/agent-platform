@@ -237,3 +237,4 @@ class GitHubNotice:
     review_id: int | None = None
     state: str | None = None  # the review's state, the check suite's conclusion, merged or closed
     sender: str | None = None
+    sha: str | None = None  # the commit a check suite ran on

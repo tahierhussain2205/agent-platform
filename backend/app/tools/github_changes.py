@@ -49,10 +49,15 @@ CHANGE_OPERATIONS = {
     ),
     "get_pull_request": Operation(
         "get_pull_request",
-        "A pull request: its state, branch, reviews, review comments and the results of its checks.",
+        "A pull request: its state, branch, reviews, review comments and the results of its checks (at its "
+        "head, or at the commit sha given).",
         {
             "type": "object",
-            "properties": {"repo": REPO, "number": {"type": "integer", "minimum": 1}},
+            "properties": {
+                "repo": REPO,
+                "number": {"type": "integer", "minimum": 1},
+                "sha": {"type": "string"},
+            },
             "required": ["repo", "number"],
         },
         credential_mode="org_with_check",
@@ -174,8 +179,9 @@ class ChangeOperations:
         reviews = await self.gh._get(ctx, credential.token, f"repos/{repo}/pulls/{number}/reviews") or []
         comments = await self.gh._get(ctx, credential.token, f"repos/{repo}/pulls/{number}/comments") or []
         head_sha = str(pr["head"]["sha"])
+        checked = str(args["sha"]) if SHA.match(str(args.get("sha") or "")) else head_sha
         runs = (
-            await self.gh._get(ctx, credential.token, f"repos/{repo}/commits/{head_sha}/check-runs") or {}
+            await self.gh._get(ctx, credential.token, f"repos/{repo}/commits/{checked}/check-runs") or {}
         ).get("check_runs") or []
         info = await self.gh._repo(ctx, credential, repo) or {}
         short = ctx.refs.add(
@@ -200,6 +206,7 @@ class ChangeOperations:
             "title": str(pr.get("title") or "")[:256],
             "head_ref": pr["head"]["ref"],
             "head_sha": head_sha,
+            "checks_sha": checked,
             "base_ref": pr["base"]["ref"],
             "reviews": [
                 {"id": r.get("id"), "state": r.get("state"), "user": (r.get("user") or {}).get("login"),

@@ -139,7 +139,7 @@ def github_notices(event: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
         if suite.get("conclusion") not in FAILED_CHECKS:
             return []
         return [{"kind": "checks_failed", "repo": repo, "number": p.get("number"),
-                 "state": suite.get("conclusion"), "sender": sender}
+                 "state": suite.get("conclusion"), "sender": sender, "sha": suite.get("head_sha")}
                 for p in suite.get("pull_requests") or []]  # fmt: skip
     if event == "pull_request" and action == "closed":
         pr = payload.get("pull_request") or {}
@@ -230,8 +230,10 @@ async def _start_notices(request: Request, res: Any, delivery: str, notices: lis
         if client is None:
             raise RuntimeError("Temporal is not reachable")
         for org_id, task_id in latest.values():
-            notice = GitHubNotice(str(org_id), str(task_id), delivery, n["kind"], n["repo"], int(n["number"]),
-                                  n.get("review_id"), n.get("state"), n.get("sender"))  # fmt: skip
+            notice = GitHubNotice(
+                str(org_id), str(task_id), delivery, n["kind"], n["repo"], int(n["number"]),
+                n.get("review_id"), n.get("state"), n.get("sender"), n.get("sha"),
+            )  # fmt: skip
             with contextlib.suppress(WorkflowAlreadyStartedError):
                 await client.start_workflow(
                     "GitHubNoticeWorkflow", notice, id=f"github-{delivery}-{task_id}-{n['number']}",
