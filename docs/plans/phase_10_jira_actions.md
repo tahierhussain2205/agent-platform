@@ -48,3 +48,12 @@ A Catalog page: services (proposed first) with owners and their reasons, reposit
 - Catalog: proposals from CODEOWNERS and components, owner mapping, unmapped owners in evidence, confirmed services untouched; `find_owners` ranking and reasons.
 - Runner and workflows: duplicates dropped, assignees validated with reasons, links in descriptions, Ask (approval requests, approve and reject), Auto (created without approval, within the ceiling), Auto dropping to Ask above three actions, links posted in the thread, no duplicates when an activity is retried.
 - Console API: permissions, edits, owners and channels, confirm and archive, isolation; web unit tests; Playwright: an admin proposes and confirms the catalog, then Example 1 in Ask mode (approve in Slack) and in Auto mode, tickets created under the requester's Jira account and assigned to the catalog owner.
+
+## Changes during implementation
+
+- **Approval requests appear together** (D-145): the task workflow decides every action first and performs each when its own decision arrives, behind `workflow.patched("approvals-together")` so running tasks replay as before. With up to five tickets, one request after another hid the plan and was slow.
+- **Model and user text is escaped in Slack mrkdwn** (D-147): found while adding ticket notes; covers answers, summaries, previews, questions, report narratives, schedule names and App Home.
+- **Duplicates are also checked at execution** (D-143), for an issue someone filed while the approval waited.
+- **Answers citing restricted sources go privately, ticket links included** (D-146): Example 1 is asked where the problems were reported.
+- **Eval**: a ticket case scored after the checks in code, skipped when Jira is not connected (D-150).
+- **Stand-ins** can list, delete and reset Jira issues; tests clean up what they create (D-148).

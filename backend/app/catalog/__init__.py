@@ -11,6 +11,7 @@ name is not proposed again; a proposal is refreshed with its proposal owners rep
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
@@ -63,9 +64,17 @@ def matches(component: dict[str, Any], proposal: Proposal) -> bool:
     name = str(component.get("name") or "")
     if words(name) & words(short):
         return True
-    if short in str(component.get("description") or "").lower():
+    if re.search(rf"(?<![\w-]){re.escape(short)}(?![\w-])", str(component.get("description") or "").lower()):
         return True
     return name.lower() in proposal.segments
+
+
+def unique_name(name: str, project: str, proposals: list[Proposal]) -> str:
+    """A component's service name, qualified by its project when another proposal has the name
+    (Search in two projects would otherwise be one name twice, which the catalog refuses)."""
+    clean = name.strip()
+    taken = {p.name.strip().lower() for p in proposals}
+    return f"{clean} ({project})" if clean.lower() in taken else clean
 
 
 async def _owner_maps(
@@ -134,13 +143,16 @@ async def build(executor: ToolExecutor, pool: Any, org_id: Any) -> tuple[list[Pr
         for project in projects.data.get("projects") or []:
             key = project["key"]
             listed = await executor.run(tool_name("jira", "list_components"), {"project": key})
+            if listed.is_error:
+                notes.append(f"Jira components of {key}: {listed.text}")
             for component in listed.data.get("components") or []:
                 target = next(
                     (p for p in proposals if p.jira_component is None and matches(component, p)), None
                 )
                 if target is None:
                     target = Proposal(
-                        name=str(component["name"]), description=component.get("description") or None
+                        name=unique_name(str(component["name"]), key, proposals),
+                        description=component.get("description") or None,
                     )
                     proposals.append(target)
                 target.jira_project, target.jira_component = key, str(component["name"])

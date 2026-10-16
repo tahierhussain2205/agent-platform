@@ -133,6 +133,18 @@ def test_a_component_matches_by_name_description_or_codeowners_directory() -> No
     assert matches({"name": "Search", "description": "Site search"}, web)
     assert not matches({"name": "Refunds", "description": "Refund processing"}, cart)
     assert not matches({"name": "Cart"}, Proposal("Cart"))  # a proposal without a repository
+    api = Proposal("api", repository={"id": "3", "full_name": "acme/api"})
+    assert not matches({"name": "Payments", "description": "rapid checkout"}, api)  # words, not letters
+    assert matches({"name": "Payments", "description": "served by api and cart-service"}, api)
+
+
+def test_components_with_one_name_in_two_projects_get_distinct_names() -> None:
+    from app.catalog import unique_name
+
+    proposals = [Proposal("web-app"), Proposal("Search")]
+    assert unique_name("Search", "WEB", proposals) == "Search (WEB)"
+    assert unique_name(" search ", "OPS", proposals) == "search (OPS)"
+    assert unique_name("Refunds", "PAY", proposals) == "Refunds"
 
 
 def test_an_owner_found_twice_keeps_both_reasons() -> None:
