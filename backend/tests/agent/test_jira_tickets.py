@@ -414,6 +414,40 @@ async def test_plans_naming_actions_by_their_combined_name_still_count(tickets: 
                for t in notes)  # fmt: skip
 
 
+async def test_a_plan_written_as_a_string_still_counts_and_an_unreadable_one_is_said(tickets: Agent) -> None:
+    """Staging: the model wrote the actions as a JSON string with its call markup after it, the plan
+    read no action from it, and nobody was told. The gateway decodes it; what cannot be read is said."""
+    from tests.agent.conftest import script_model
+
+    agent = tickets
+    name, external = await channel(agent)
+    await ui_post("U0QUINN", external, "Gift cards are rejected at checkout")
+    ref = await ask(agent, f"create Jira tickets for the problems reported today in #{name}")
+    u = await agent.runner.understand(ref, "ask")
+    f = await agent.runner.gather(ref, u, "standard")
+    issue = {"project": "PAY", "summary": "Gift cards are rejected at checkout", "description": "From Slack",
+             "finding": 1}  # fmt: skip
+    written = json.dumps([{"tool": "jira", "operation": "create_issue", "args": issue, "summary": "Ticket"}])
+    await script_model(
+        [{"type": "tool_use", "name": "submit_plan",
+          "input": {"actions": written + '\n</parameter>\n<parameter name="notes">One ticket'}}]
+    )  # fmt: skip
+    actions = await agent.runner.plan(ref, u, f, "standard")
+    assert [(a.tool, a.operation, a.args["summary"]) for a in actions] == [
+        ("jira", "create_issue", "Gift cards are rejected at checkout")
+    ]
+
+    for unreadable in ("[{'tool': 'jira'", ["jira create_issue"]):  # the note is posted once per task
+        ref = await ask(agent, f"create Jira tickets for the problems reported today in #{name}")
+        u = await agent.runner.understand(ref, "ask")
+        f = await agent.runner.gather(ref, u, "standard")
+        await script_model([{"type": "tool_use", "name": "submit_plan", "input": {"actions": unreadable}}])
+        mark = len(agent.sink.sent)
+        assert await agent.runner.plan(ref, u, f, "standard") == []
+        notes = [i.text for i, _ in agent.sink.sent[mark:] if isinstance(i, Reply)]
+        assert any("could not turn part of this request into an action" in t for t in notes), unreadable
+
+
 async def test_the_answer_is_told_not_to_claim_changes(tickets: Agent) -> None:
     from tests.agent.conftest import model_requests
 
