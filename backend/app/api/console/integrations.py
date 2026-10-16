@@ -59,8 +59,11 @@ def _connection_json(row: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     return {
         k: row[k]
-        for k in ("id", "status", "external_account_id", "created_at", "expires_at", "last_refreshed_at")
-    }
+        for k in (
+            "id", "status", "external_account_id", "external_account_label", "created_at", "expires_at",
+            "last_refreshed_at",
+        )
+    }  # fmt: skip
 
 
 @router.get("")
@@ -77,9 +80,9 @@ async def list_integrations(
     }
     connections = await fetch_all(
         conn,
-        "select id, integration_key, scope, membership_id, status, external_account_id, created_at, "
-        "expires_at, "
-        "last_refreshed_at from app.connections where status in ('active', 'expired') "
+        "select id, integration_key, scope, membership_id, status, external_account_id, "
+        "external_account_label, created_at, expires_at, last_refreshed_at from app.connections "
+        "where status in ('active', 'expired') "
         "and (scope = 'org' or membership_id = %s) order by created_at desc",
         (identity.membership_id,),
     )

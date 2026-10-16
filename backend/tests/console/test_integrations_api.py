@@ -146,6 +146,7 @@ async def test_admins_connect_jira_and_state_cannot_be_replayed(
     listed = await integrations(console, BOB)
     assert listed["jira"]["enabled"] is True  # connecting enables it
     assert listed["jira"]["connection"]["external_account_id"] == "cloud-acme"
+    assert listed["jira"]["connection"]["external_account_label"] == "https://acme.atlassian.net"
     # Reconnecting replaces the connection.
     await connect(console, "jira", "acc-alice")
     acme = stack.env.world.acme
@@ -162,6 +163,7 @@ async def test_people_link_their_own_accounts(console: httpx.AsyncClient, stack:
     assert await connect(console, "jira", "acc-bob", BOB, "link") == {"linked": "jira"}
     bob_view = await integrations(console, BOB)
     assert bob_view["jira"]["link"]["external_account_id"] == "acc-bob"
+    assert bob_view["jira"]["link"]["external_account_label"] == "Bob Builder"
     alice_view = await integrations(console, ALICE)
     assert alice_view["jira"]["link"] is None  # links are personal
     # Google links use PKCE: the verifier stays on the server.
@@ -185,6 +187,7 @@ async def test_github_app_installation(console: httpx.AsyncClient) -> None:
     assert await callback(console, "/oauth/github/install", granted) == {"connected": "github"}
     github = (await integrations(console, ALICE))["github"]
     assert github["connection"]["external_account_id"] == "acme"
+    assert github["connection"]["external_account_label"] == "acme"
     checked = await console.post("/api/integrations/github/check", headers=ALICE)
     assert checked.json() == {"key": "github", "health": "ok", "detail": "3 repositories visible."}
     # An installation that is not the installer's is refused (and the row revoked).

@@ -192,10 +192,11 @@ class LocalVault:
     ) -> None:
         async with tenant_tx(self.pool, org_id) as conn:
             await conn.execute(
-                "update app.connections set external_account_id = %s, granted_scopes = %s, "
-                "expires_at = to_timestamp(%s), last_refreshed_at = now() where id = %s",
+                "update app.connections set external_account_id = %s, external_account_label = %s, "
+                "granted_scopes = %s, expires_at = to_timestamp(%s), last_refreshed_at = now() where id = %s",
                 (
                     account.external_id,
+                    account.label[:200] or None,
                     tokens.scope.split() if tokens else [],
                     tokens.expires_at if tokens else None,
                     connection_id,

@@ -181,6 +181,8 @@ export interface IntegrationConnection {
   id: string
   status: 'active' | 'expired'
   external_account_id: string | null
+  /** A readable name for the account (a Jira site's address, a person's name), when known. */
+  external_account_label: string | null
   created_at: string
   expires_at: string | null
   last_refreshed_at: string | null
