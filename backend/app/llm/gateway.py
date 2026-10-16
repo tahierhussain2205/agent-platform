@@ -83,7 +83,10 @@ class LLMResult:
         return [b for b in self.content if b.get("type") == "tool_use"]
 
     def tool_input(self, name: str) -> dict[str, Any]:
-        """The input of the (forced) tool call ``name``."""
+        """The input of the (forced) tool call ``name``. An answer cut off at ``max_tokens`` is refused:
+        its input can be missing the fields after the cut, and must not pass for a complete answer."""
+        if self.stop_reason == "max_tokens":
+            raise LLMResponseError(f"the {name} answer was cut off at the output limit")
         for block in self.tool_uses():
             if block.get("name") == name and isinstance(block.get("input"), dict):
                 return block["input"]  # type: ignore[no-any-return]

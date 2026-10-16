@@ -16,7 +16,7 @@
       "settings": {
         "default_model_tier": "standard",
         "allowed_model_tiers": ["fast", "standard", "advanced"],
-        "user_daily_token_limit": 200000,
+        "user_daily_token_limit": 1000000,
         "org_monthly_token_limit": 20000000,
         "max_concurrent_tasks": 10,
         "max_schedules": 25,

@@ -37,6 +37,7 @@ log = logging.getLogger(__name__)
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d+$")
 LEAD = timedelta(hours=2)  # a window starts this long before the issue was created
 LOOKBACK = timedelta(hours=24)
+MIN_BRIEF_WINDOW = timedelta(hours=1)  # shorter is "now", not a window (a request in the present tense)
 MAX_WINDOW = timedelta(days=7)
 LEVELS = ("low", "medium", "high")
 STEP_KINDS = ("investigate", "reproduce", "implement", "verify", "other")
@@ -69,6 +70,8 @@ def window_of(time_window: dict[str, Any] | None, issue: dict[str, Any] | None, 
     created, to its resolution or now); otherwise the last day. At most seven days, never ahead."""
     tw = time_window or {}
     start, end = _when(tw.get("start")), _when(tw.get("end"))
+    if start is not None and (end or now) - start < MIN_BRIEF_WINDOW:
+        start, end = None, None
     if issue and start is None and _when(issue.get("created")):
         start = _when(issue.get("created"))
         start = start - LEAD if start else None
@@ -557,7 +560,7 @@ class Investigation:
                 messages=[{"role": "user", "content": content}],
                 tools=[prompts.submit_tool("submit_investigation_plan", "Submit the plan.")],
                 tool_choice={"type": "tool", "name": "submit_investigation_plan"},
-                max_tokens=4000,
+                max_tokens=16000,  # a whole plan, and the model's thinking before it
             )
             raw = result.tool_input("submit_investigation_plan")
         except BudgetExceededError as exc:

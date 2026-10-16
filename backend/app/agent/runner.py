@@ -49,7 +49,7 @@ from app.agent.types import (
 )
 from app.db.tenant import tenant_tx
 from app.integrations.catalog import CATALOG
-from app.llm.gateway import BudgetExceededError, CallContext, Lane, LLMGateway
+from app.llm.gateway import BudgetExceededError, CallContext, Lane, LLMGateway, LLMResponseError
 from app.llm.models import Tier
 from app.policy import Destination, Policy, TaskScope
 from app.policy.redaction import redact
@@ -619,12 +619,29 @@ class AgentRunner:
         ]
         system = prompts.system(ctx.org_name, spec, ctx.roles, prompts.GATHER)
         findings = await self._subagent(ref, tier, executor, tools, system, messages, refs)
+        await self._unread_channels(executor, brief, findings)
         if findings.stopped:
             await self.step(ref, "gather", "failed", f"Stopped: {findings.stopped}")
         else:
             where = ", ".join(findings.channels_read) or "no source"
             await self.step(ref, "gather", "completed", f"{len(findings.points)} findings from {where}")
         return findings
+
+    @staticmethod
+    async def _unread_channels(executor: ToolExecutor, brief: dict[str, Any], findings: Findings) -> None:
+        """A channel the brief names that the subagent did not read is reported with the policy's own
+        reason (a model that sees it may not read a channel does not even try, so no call was denied)."""
+        slack = executor.registry.adapters.get("slack")
+        if slack is None:
+            return
+        for name in (brief.get("entities") or {}).get("channels") or []:
+            label = f"#{name}"
+            if label in findings.channels_read or any(g.startswith(f"{label}:") for g in findings.gaps):
+                continue
+            target = await slack.resolve_target(executor.ctx, "read_channel", {"channel": name})
+            decision = await executor.policy.check_tool("slack", "read_channel", target)
+            reason = decision.reason if decision.outcome == "denied" else "not read"
+            findings.gaps = [f"{label}: {reason}"[:300], *(g for g in findings.gaps if label not in g)][:20]
 
     async def _subagent(
         self,
@@ -689,6 +706,8 @@ class AgentRunner:
             used += result.usage.counted
             calls = result.tool_uses()
             submitted = next((c for c in calls if c.get("name") == submit), None)
+            if submitted is not None and result.stop_reason == "max_tokens":  # cut off: fields may be missing
+                raise LLMResponseError(f"the {submit} answer was cut off at the output limit")
             if submitted is not None:
                 raw = submitted.get("input")
                 return raw if isinstance(raw, dict) else {}

@@ -36,8 +36,8 @@
       "search/index.ts"
     ],
     "root_cause": [
-      "products_v2",
-      "europe-west1"
+      "europe-west1",
+      ["products_v2", "REGIONS", "replica"]
     ],
     "sourced": true
   },

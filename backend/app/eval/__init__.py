@@ -27,6 +27,7 @@ from psycopg.types.json import Jsonb
 from app.agent.outbox import CaptureSink, Sink
 from app.agent.runner import AgentDeps, AgentRunner, render_answer
 from app.db.tenant import tenant_tx
+from app.llm.gateway import BudgetExceededError
 from app.settings import Settings
 from app.workflows.slack_activities import SlackActivities
 from app.workflows.slack_types import SlackRequest
@@ -113,14 +114,22 @@ def score(case: dict[str, Any], observed: dict[str, Any]) -> dict[str, float]:
         files = set(observed.get("files") or [])
         checks["fix_file_recall"] = sum(f in files for f in expect["fix_files"]) / len(expect["fix_files"])
     if expect.get("root_cause"):  # the leading hypothesis names the cause
-        top = str(observed.get("hypothesis") or "").lower()
-        checks["root_cause"] = float(all(term.lower() in top for term in expect["root_cause"]))
+        top = _squeeze(str(observed.get("hypothesis") or ""))
+        terms = [
+            t if isinstance(t, list) else [t] for t in expect["root_cause"]
+        ]  # a list: any of its wordings
+        checks["root_cause"] = float(all(any(_squeeze(w) in top for w in term) for term in terms))
     if expect.get("sourced"):  # every claim cites what it comes from
         sourced, unsourced = observed.get("sourced") or (0, 0)
         checks["claims_sourced"] = sourced / (sourced + unsourced) if sourced + unsourced else 0.0
     if "max_tokens" in case:
         checks["token_budget"] = float(observed.get("tokens", 0) <= case["max_tokens"])
     return checks
+
+
+def _squeeze(text: str) -> str:
+    """Lower case without whitespace, so "MAX_LINES=19" matches "MAX_LINES = 19"."""
+    return "".join(text.lower().split())
 
 
 def _covers(window: Any, incident: dict[str, float]) -> bool:
@@ -267,7 +276,12 @@ class EvalRun:
         ref = await self.intake.create_task(req, requester)
         if ref is None:
             return skip(case, "the agent runtime is not configured")
-        observed = await self.observe(ref, setup_ts)
+        try:
+            observed = await self.observe(ref, setup_ts)
+        except BudgetExceededError as exc:
+            return skip(case, f"stopped by a token limit: {exc}")
+        if observed.get("skip"):
+            return skip(case, str(observed["skip"]))
         checks = score({**case, "expect": _fill(case["expect"], tag)}, observed)
         mean = sum(checks.values()) / len(checks) if checks else 0.0
         return CaseResult(
@@ -300,6 +314,9 @@ class EvalRun:
         observed: dict[str, Any] = {"setup_ts": setup_ts}
         try:
             start = await self.runner.start(ref)
+            if start.status == "refused":  # a spent budget is the environment, not the agent's answer
+                observed["skip"] = start.message
+                return observed
             if start.status != "started":
                 observed["answer"] = start.message
                 return observed

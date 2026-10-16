@@ -399,3 +399,14 @@ async def test_round_trip_with_the_anthropic_stand_in(stack: Stack, org: Any) ->
     assert first.model == "claude-haiku-4-5-20251001"
     assert second.usage.cache_read_input_tokens > 0  # the stable prefix was cached
     await gw.aclose()
+
+
+def test_an_answer_cut_off_at_the_output_limit_is_refused() -> None:
+    from app.llm.gateway import LLMResponseError, LLMResult, Usage
+
+    block = {"type": "tool_use", "name": "submit_plan", "input": {"summary": "only the summary made it"}}
+    cut = LLMResult([block], "claude-sonnet-5", "standard", "max_tokens", Usage(), Decimal(0))
+    with pytest.raises(LLMResponseError, match="cut off"):
+        cut.tool_input("submit_plan")
+    whole = LLMResult([block], "claude-sonnet-5", "standard", "tool_use", Usage(), Decimal(0))
+    assert whole.tool_input("submit_plan") == {"summary": "only the summary made it"}
