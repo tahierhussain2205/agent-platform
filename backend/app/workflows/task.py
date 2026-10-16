@@ -19,8 +19,10 @@ from temporalio.workflow import ActivityCancellationType
 
 with workflow.unsafe.imports_passed_through():
     from app.agent.types import (
+        INVESTIGATORS,
         ActionOutcome,
         ApprovalState,
+        CaseFile,
         Composed,
         Findings,
         PlannedAction,
@@ -121,6 +123,8 @@ class TaskWorkflow:
             await self._do(TaskActivities.reply, ref, u.mode_note, "mode-note")
         done = ["understood the request"]
         await self._check_budget(ref, done)
+        if u.playbook_key == "investigate_issue":
+            return await self._investigate(ref, u, tier, done)
         channels = ", ".join(f"#{c}" for c in ((u.brief or {}).get("entities") or {}).get("channels") or [])
         self.stage = "gathering"
         await self._status(ref, f"📖 Reading {channels or 'the conversation'}…")
@@ -154,6 +158,39 @@ class TaskWorkflow:
                 notes.append(_note(action, outcome))
         self.stage = "delivering"
         await self._do(TaskActivities.deliver, ref, u, c, notes)
+        usage = await self._do(TaskActivities.usage, ref)
+        await self._do(TaskActivities.finish, ref, "completed", c.stopped)
+        self.stage = "completed"
+        await self._status(ref, f"✅ Done · {int(usage['tokens']):,} tokens", running=False)
+        return "completed"
+
+    async def _investigate(self, ref: TaskRef, u: Understanding, tier: str, done: list[str]) -> str:
+        """Orient in code, then the investigators in parallel (each its own activity and context),
+        then the plan, checked in code and delivered like an answer."""
+        self.stage = "gathering"
+        await self._status(ref, "🔎 Finding the issue, the service and the window…")
+        case: CaseFile = await self._do(TaskActivities.orient, ref, u, limit=MODEL_STEP)
+        await self._status(ref, "🔬 Investigating logs, code and recent changes…")
+        found: list[Findings] = list(
+            await asyncio.gather(
+                *(
+                    self._do(TaskActivities.investigate, ref, u, case, kind, tier, limit=MODEL_STEP)
+                    for kind in INVESTIGATORS
+                )
+            )
+        )
+        stopped = next((f.stopped for f in found if f.stopped), None)
+        if stopped:
+            raise StopTask(stopped, done)
+        done.append("investigated " + (", ".join(str(f.kind) for f in found if f.points) or "nothing"))
+        await self._check_budget(ref, done)
+        self.stage = "writing"
+        await self._status(ref, "✍️ Writing the plan…")
+        c: Composed = await self._do(
+            TaskActivities.plan_investigation, ref, u, case, found, tier, limit=MODEL_STEP
+        )
+        self.stage = "delivering"
+        await self._do(TaskActivities.deliver, ref, u, c, [])
         usage = await self._do(TaskActivities.usage, ref)
         await self._do(TaskActivities.finish, ref, "completed", c.stopped)
         self.stage = "completed"

@@ -25,12 +25,14 @@ import httpx
 from psycopg.types.json import Jsonb
 
 from app.agent import prompts, tickets
+from app.agent.investigation import Investigation
 from app.agent.outbox import Sink, SlackSink, post_once
 from app.agent.playbooks import BUILTIN, PlaybookSpec, keys, latest
 from app.agent.types import (
     ActionOutcome,
     ApprovalState,
     BudgetCheck,
+    CaseFile,
     Composed,
     Delivered,
     Findings,
@@ -51,7 +53,7 @@ from app.slack import service
 from app.slack.adapter import ApprovalRequest, ChannelAdapter, DirectMessage, Progress, Reply, escape
 from app.slack.client import SlackClient, SlackError
 from app.tools.base import RefBook, Source, Target, ToolContext, definitions, tool_name
-from app.tools.executor import ToolExecutor, ToolUnavailableError, build_registry
+from app.tools.executor import ExecResult, ToolExecutor, ToolUnavailableError, build_registry
 from app.tools.mcp import McpAdapter, McpError
 from app.tools.registry import Registry
 from app.tools.slack import SlackAdapter
@@ -381,6 +383,21 @@ class AgentRunner:
                 )
         await self._release_sandboxes(ref)
 
+    async def _prior_plan(self, ref: TaskRef) -> dict[str, Any] | None:
+        """The session's current plan: the latest plan another task of this thread made."""
+        if not ref.session_id:
+            return None
+        async with tenant_tx(self.d.pool, ref.org_id) as conn:
+            row = await (
+                await conn.execute(
+                    "select a.content from app.artifacts a join app.tasks t on t.id = a.task_id "
+                    "where t.session_id = %s and a.task_id <> %s and a.kind = 'plan' "
+                    "and a.content is not null order by a.created_at desc limit 1",
+                    (ref.session_id, ref.task_id),
+                )
+            ).fetchone()
+        return dict(row[0]) if row and isinstance(row[0], dict) else None
+
     async def _release_sandboxes(self, ref: TaskRef) -> None:
         """The task's sandboxes go with it (best effort: they expire, and maintenance destroys them)."""
         provider = provider_from_settings(self.d.settings, self.d.http) if self.d.http else None
@@ -444,6 +461,14 @@ class AgentRunner:
         refs = RefBook("B")
         await self.step(ref, "gather", "running", "Understanding the request")
         lines, request_text, request_ref = await self._conversation(ref, ctx, refs)
+        prior = await self._prior_plan(ref)
+        current_plan = (
+            "\n<current_plan>"
+            + json.dumps({k: prior.get(k) for k in ("playbook", "goal", "summary")})
+            + "</current_plan>"
+            if prior
+            else ""
+        )
         try:
             result = await self.d.gateway.complete(
                 self._call(ref, "classify"),
@@ -456,7 +481,8 @@ class AgentRunner:
                         "role": "user",
                         "content": f"<request>{request_text}</request>\n<conversation>\n"
                         + "\n".join(lines[-10:])
-                        + "\n</conversation>",
+                        + "\n</conversation>"
+                        + current_plan,
                     }
                 ],
                 tools=[prompts.submit_tool("submit_classification", "Submit the classification.")],
@@ -552,7 +578,6 @@ class AgentRunner:
             *self._definitions(executor.registry, spec, "read"),
             prompts.submit_tool("submit_findings", "Submit findings."),
         ]
-        allowed_names = {t["name"] for t in tools}
         channels = ", ".join(f"#{c}" for c in (brief.get("entities") or {}).get("channels") or [])
         await self.step(ref, "gather", "running", f"Reading {channels or 'the conversation'}")
         messages: list[dict[str, Any]] = [
@@ -563,15 +588,39 @@ class AgentRunner:
                 f"<now>{self.d.now().isoformat()}</now>",
             }
         ]
+        system = prompts.system(ctx.org_name, spec, ctx.roles, prompts.GATHER)
+        findings = await self._subagent(ref, tier, executor, tools, system, messages, refs)
+        if findings.stopped:
+            await self.step(ref, "gather", "failed", f"Stopped: {findings.stopped}")
+        else:
+            where = ", ".join(findings.channels_read) or "no source"
+            await self.step(ref, "gather", "completed", f"{len(findings.points)} findings from {where}")
+        return findings
+
+    async def _subagent(
+        self,
+        ref: TaskRef,
+        tier: str,
+        executor: ToolExecutor,
+        tools: list[dict[str, Any]],
+        system: list[dict[str, Any]],
+        messages: list[dict[str, Any]],
+        refs: RefBook,
+        purpose: str = "gather",
+        seen: list[tuple[str, ExecResult]] | None = None,
+    ) -> Findings:
+        """The tool loop of an isolated subagent: only ``tools`` (the last one is ``submit_findings``),
+        every call through the policy, bounded rounds and tokens. ``seen`` collects each tool result
+        for checks in code."""
+        allowed_names = {t["name"] for t in tools}
         denied: list[str] = []
         read: list[str] = []
         used = 0
-        system = prompts.system(ctx.org_name, spec, ctx.roles, prompts.GATHER)
         try:
             for round_no in range(MAX_GATHER_ROUNDS + 1):
                 force = round_no == MAX_GATHER_ROUNDS or used > STEP_TOKEN_CAP
                 result = await self.d.gateway.complete(
-                    self._call(ref, "gather"),
+                    self._call(ref, purpose),
                     as_tier(tier),
                     system=system,
                     messages=messages,
@@ -583,11 +632,7 @@ class AgentRunner:
                 calls = result.tool_uses()
                 submitted = next((c for c in calls if c.get("name") == "submit_findings"), None)
                 if submitted is not None:
-                    findings = self._findings(submitted.get("input") or {}, refs, denied, read)
-                    where = ", ".join(read) or "no source"
-                    summary = f"{len(findings.points)} findings from {where}"
-                    await self.step(ref, "gather", "completed", summary)
-                    return findings
+                    return self._findings(submitted.get("input") or {}, refs, denied, read)
                 if not calls:  # the model answered in prose: ask for the structured findings
                     messages += [
                         {"role": "assistant", "content": result.content or [{"type": "text", "text": "..."}]},
@@ -596,7 +641,7 @@ class AgentRunner:
                     continue
                 results = []
                 for call in calls:
-                    text, is_error = await self._run_tool(call, allowed_names, executor, denied, read)
+                    text, is_error = await self._run_tool(call, allowed_names, executor, denied, read, seen)
                     results.append(
                         {
                             "type": "tool_result",
@@ -610,7 +655,6 @@ class AgentRunner:
                     {"role": "user", "content": results},
                 ]
         except BudgetExceededError as exc:
-            await self.step(ref, "gather", "failed", f"Stopped: {exc}")
             return Findings([], denied, read, stopped=str(exc))
         return Findings(
             [], [*denied, "The search ended before findings were submitted."], read
@@ -623,11 +667,14 @@ class AgentRunner:
         executor: ToolExecutor,
         denied: list[str],
         read: list[str],
+        seen: list[tuple[str, ExecResult]] | None = None,
     ) -> tuple[str, bool]:
         name = str(call.get("name"))
         raw_args = call.get("input")
         args: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
         result = await executor.run(name, args, allowed)
+        if seen is not None:
+            seen.append((name, result))
         found = executor.registry.lookup(name)
         tool = CATALOG[found[0].key].title if found and found[0].key in CATALOG else name
         label = (
@@ -660,6 +707,21 @@ class AgentRunner:
             if not any(note.split(":", 1)[0] in g for g in gaps):
                 gaps.append(note[:300])
         return Findings(points, gaps, read)
+
+    # ------------------------------------------------------------------ investigate
+
+    async def orient(self, ref: TaskRef, u: Understanding) -> CaseFile:
+        return await Investigation(self).orient(ref, u)
+
+    async def investigate(
+        self, ref: TaskRef, u: Understanding, case: CaseFile, kind: str, tier: str
+    ) -> Findings:
+        return await Investigation(self).investigate(ref, u, case, kind, tier)
+
+    async def plan_investigation(
+        self, ref: TaskRef, u: Understanding, case: CaseFile, findings: list[Findings], tier: str
+    ) -> Composed:
+        return await Investigation(self).plan(ref, u, case, findings, tier)
 
     # ------------------------------------------------------------------ plan
 

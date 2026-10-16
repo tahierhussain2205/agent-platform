@@ -55,6 +55,28 @@ class Findings:
     gaps: list[str]
     channels_read: list[str] = field(default_factory=list)
     stopped: str | None = None
+    # Collected by code from tool results, not written by the model: error signatures, files read,
+    # commits seen (investigations use them to check plans and to measure retrieval).
+    facts: dict[str, Any] = field(default_factory=dict)
+    kind: str | None = None  # the investigator that produced them, if any
+
+
+INVESTIGATORS = ("logs", "code", "changes")
+
+
+@dataclass
+class CaseFile:
+    """What an investigation is about, found in code before the investigators start: the issue the
+    request names, the catalog service it concerns, the time window, and the session's current plan.
+    Derived content only (no Slack text)."""
+
+    goal: str
+    window: list[str]  # [start, end], ISO
+    issue: dict[str, Any] | None = None  # key, summary, description, status, created, url
+    service: dict[str, Any] | None = None  # name, repository, jira_project, jira_component, logs
+    prior_plan: dict[str, Any] | None = None
+    points: list[dict[str, Any]] = field(default_factory=list)  # findings: the issue, the catalog entry
+    notes: list[str] = field(default_factory=list)  # what could not be found
 
 
 @dataclass

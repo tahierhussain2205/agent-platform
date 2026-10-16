@@ -134,7 +134,7 @@ test('a QA user schedules a daily Jira report and gets exact numbers', async ({
     .getByTestId('message')
     .filter({ hasText: `PAY daily ${t}` })
     .first()
-  await expect(report).toContainText('Created: 2 · Resolved: 2 · Open now: 3', AGENT)
+  await expect(report).toContainText('Created: 3 · Resolved: 2 · Open now: 3', AGENT)
   await expect(report).toContainText('Open by status: To Do 2, In Progress 1')
   await expect(report).toContainText('Open by priority: High 1, Medium 2')
   await expect(report).toContainText('Open and unassigned: 2')

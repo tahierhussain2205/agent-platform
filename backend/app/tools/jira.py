@@ -27,7 +27,17 @@ from app.vault_service import Credential
 log = logging.getLogger(__name__)
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d{1,7}$")
 PROJECT_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
-FIELDS = ["summary", "status", "assignee", "priority", "project", "updated", "description"]
+FIELDS = [
+    "summary",
+    "status",
+    "assignee",
+    "priority",
+    "project",
+    "updated",
+    "created",
+    "components",
+    "description",
+]
 
 OPERATIONS = {
     "search_issues": Operation(
@@ -391,7 +401,19 @@ class JiraAdapter:
         lines = [self._line(ctx, credential, issue)]
         if description:
             lines.append("  Description: " + description.replace("\n", " ⏎ ")[:3000])
-        return ToolResult(cap(redact("\n".join(lines))[0]))
+        fields = issue.get("fields") or {}
+        site = credential.details.get("site_url") or ""
+        data = {
+            "key": key,
+            "summary": redact(str(fields.get("summary") or ""))[0],
+            "description": redact(description[:3000])[0],
+            "status": str((fields.get("status") or {}).get("name") or ""),
+            "created": fields.get("created"),
+            "updated": fields.get("updated"),
+            "components": [str(c.get("name")) for c in fields.get("components") or [] if isinstance(c, dict)],
+            "url": f"{site}/browse/{key}" if site else None,
+        }
+        return ToolResult(cap(redact("\n".join(lines))[0]), data=data)
 
     async def _all(
         self, ctx: ToolContext, credential: Credential, jql: str

@@ -108,9 +108,11 @@ def seed() -> dict[str, Any]:
         ("OPS-1", "Payment webhooks delayed by 15 minutes", "In Progress", "acc-dave", "High", 0.3,
          "Provider status page shows degraded webhooks."),
     ]  # fmt: skip
-    created = {"PAY-104": 0.4, "PAY-105": 2.0, "PAY-106": 0.6}  # days ago; otherwise a day before the update
+    # Days ago; otherwise a day before the update. PAY-101 and WEB-7 follow their incidents in the
+    # logs and GitHub fixtures (a deploy 6.5 and 29 hours ago); PAY-105, two days ago.
+    created = {"PAY-101": 0.25, "WEB-7": 1.15, "PAY-104": 0.4, "PAY-105": 2.0, "PAY-106": 0.6}
     return {
-        "version": 2,  # phase 10: issues gained reporter, labels and components
+        "version": 3,  # phase 11: creation times follow the incidents in the logs fixture
         "sites": {
             "cloud-acme": {"id": "cloud-acme", "url": "https://acme.atlassian.net", "name": "acme"},
             "cloud-globex": {"id": "cloud-globex", "url": "https://globex.atlassian.net", "name": "globex"},

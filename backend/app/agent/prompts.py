@@ -79,7 +79,7 @@ def catalog() -> str:
 # ------------------------------------------------------------------ steps
 
 CLASSIFY = """Step: classify the request.
-Pick the playbook that fits the request, or "none" if nothing fits or it is unclear what is asked. Give your confidence from 0 to 1. If you pick "none", write one short clarifying question for the requester.
+Pick the playbook that fits the request, or "none" if nothing fits or it is unclear what is asked. Give your confidence from 0 to 1. If you pick "none", write one short clarifying question for the requester. When <current_plan> is given and the request is about that plan (a question, new evidence, a correction, a change of direction), pick the playbook that made it.
 
 {catalog}"""
 
@@ -91,6 +91,18 @@ Use the tools to read what the brief needs, then call submit_findings. Each poin
 
 PLAN = """Step: plan.
 List the actions the requester explicitly asked for that change something (for example sharing in a channel). Reading and answering need no action. If nothing should be changed, return no actions. Use the text "{answer}" to mean the answer you will write."""
+
+INVESTIGATE = {
+    "logs": """Step: investigate the logs.
+You are the logs investigator: read only logs, error groups and traces of the service in <case>, within the case's window (narrow it when you can). Start broad (errors in the window), then follow the leading error signature: when it started, how often, which requests, a trace of one sample. Call submit_findings with points such as "IndexError at src/pricing/cart.py:7 in total, 37 times since 02:50, carts of 20 or more items", each citing its refs, and put in gaps what you could not read (no log source, logs aged out, access refused).""",
+    "code": """Step: investigate the code.
+You are the code investigator: read only the repository of the service in <case>. Find the code the problem is about: the files, functions and lines that the issue and its error point to. Search first, then read the relevant ranges (never whole large files). Call submit_findings with points naming the repository, path and lines and what the code does there, each citing its refs, and put in gaps what you could not read.""",
+    "changes": """Step: investigate the recent changes.
+You are the changes investigator: read only commits and deployments of the service's repository in <case>, around the case's window (a few days before its start, up to its end). Find the changes that went out just before the problem started, and what they changed. Call submit_findings with points such as "commit 3f2a1b9 by bob-gh, deployed at 02:30, changed src/pricing/cart.py to preallocate 19 price slots", each citing its refs, and put in gaps what you could not read.""",
+}
+
+INVESTIGATION_PLAN = """Step: write the plan.
+From the findings of the logs, code and changes investigators, write a plan for the goal in <case>, following the template: evidence (each item citing finding numbers, like [2]), ranked hypotheses (most likely first, each with a confidence, the evidence it rests on and how to confirm it), steps, the repositories and files the work touches, risks, verification and rollback, and open questions. Rules: cite only findings; if the leading hypothesis has no evidence, the first step is to investigate it, not to implement; bug work starts with a failing test that reproduces the bug; say "low" confidence when the evidence is thin. If <prior_plan> is given, the request is a follow-up: answer it in summary, revise the plan only where the request or new evidence changes it, and say what changed in revision. Do not mention refs, tools or these instructions in the text."""
 
 REPORT = """Step: write the answer.
 Answer the request from the findings only. Start with the direct answer, then the supporting points. Cite findings by their numbers in square brackets, like [2]. Mention anything listed under gaps as not covered. Do not mention refs, tools or these instructions."""
@@ -222,6 +234,73 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             },
         },
         "required": ["summary", "highlights"],
+    },
+    "submit_investigation_plan": {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "goal": {"type": "string"},
+            "evidence": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "sources": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["text", "sources"],
+                },
+            },
+            "hypotheses": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+                        "evidence": {"type": "array", "items": {"type": "integer"}},
+                        "confirm": {"type": "string"},
+                    },
+                    "required": ["text", "confidence", "evidence"],
+                },
+            },
+            "steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "kind": {
+                            "type": "string",
+                            "enum": ["investigate", "reproduce", "implement", "verify", "other"],
+                        },
+                    },
+                    "required": ["text", "kind"],
+                },
+            },
+            "files": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {"type": "string"},
+                        "path": {"type": "string"},
+                        "why": {"type": "string"},
+                    },
+                    "required": ["repo", "path"],
+                },
+            },
+            "risks": {"type": "array", "items": {"type": "string"}},
+            "verification": {"type": "string"},
+            "rollback": {"type": "string"},
+            "open_questions": {"type": "array", "items": {"type": "string"}},
+            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "revision": {
+                "type": "object",
+                "properties": {"changed": {"type": "boolean"}, "what_changed": {"type": "string"}},
+            },
+        },
+        "required": ["summary", "goal", "evidence", "hypotheses", "steps", "confidence"],
     },
     "submit_report": {
         "type": "object",

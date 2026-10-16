@@ -13,6 +13,7 @@ from app.agent.types import (
     ActionOutcome,
     ApprovalState,
     BudgetCheck,
+    CaseFile,
     Composed,
     Delivered,
     Findings,
@@ -98,6 +99,25 @@ class TaskActivities:
     async def gather(self, ref: TaskRef, u: Understanding, tier: str) -> Findings:
         return await self.r.gather(ref, u, tier)
 
+    @activity.defn(name="agent_orient")
+    @translated
+    async def orient(self, ref: TaskRef, u: Understanding) -> CaseFile:
+        return await self.r.orient(ref, u)
+
+    @activity.defn(name="agent_investigate")
+    @translated
+    async def investigate(
+        self, ref: TaskRef, u: Understanding, case: CaseFile, kind: str, tier: str
+    ) -> Findings:
+        return await self.r.investigate(ref, u, case, kind, tier)
+
+    @activity.defn(name="agent_plan_investigation")
+    @translated
+    async def plan_investigation(
+        self, ref: TaskRef, u: Understanding, case: CaseFile, findings: list[Findings], tier: str
+    ) -> Composed:
+        return await self.r.plan_investigation(ref, u, case, findings, tier)
+
     @activity.defn(name="agent_plan")
     @translated
     async def plan(self, ref: TaskRef, u: Understanding, f: Findings, tier: str) -> list[PlannedAction]:
@@ -149,5 +169,6 @@ class TaskActivities:
         return [
             self.start, self.status, self.reply, self.set_status, self.finish, self.budget, self.usage,
             self.understand, self.gather, self.plan, self.compose, self.act, self.resolve_approval,
-            self.execute, self.deliver, self.propose_schedule,
+            self.execute, self.deliver, self.propose_schedule, self.orient, self.investigate,
+            self.plan_investigation,
         ]  # fmt: skip

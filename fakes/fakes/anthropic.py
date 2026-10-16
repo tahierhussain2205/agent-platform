@@ -29,6 +29,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from fakes import investigator
 from fakes.config import Config
 
 CACHE_TTL = 300.0
@@ -164,6 +165,8 @@ class Anthropic:
             return [use(forced, classify(last_user))]
         if forced == "submit_brief":
             return [use(forced, brief(last_user))]
+        if forced == "submit_investigation_plan":
+            return [use(forced, investigator.plan(last_user))]
         if forced == "submit_plan":
             return [use(forced, plan(last_user))]
         if forced == "submit_report":
@@ -172,6 +175,10 @@ class Anthropic:
             return [use(forced, narrative(last_user))]
         if forced == "submit_schedule":
             return [use(forced, schedule(last_user))]
+        if "submit_findings" in tool_names and "<case>" in first_user:
+            return investigator.investigate(
+                body["messages"], first_user, {str(t) for t in tool_names}, forced == "submit_findings"
+            )
         if "submit_findings" in tool_names:
             return gather(body["messages"], first_user, {str(t) for t in tool_names})
         return [{"type": "text", "text": "OK."}]
@@ -191,6 +198,12 @@ QUESTION = re.compile(
 )
 
 
+INVESTIGATE = re.compile(
+    r"\b(investigate|look into|dig into|debug|root cause|figure out why|plan (a|the) fix)\b"
+    r"|\bwhy (is|are|does|do|did)\b.*\b(fail\w*|broken|slow|erroring|crash\w*|down)\b",
+    re.IGNORECASE,
+)
+QUESTION_ONLY = re.compile(r"\b(summar\w*|recap|catch me up)\b", re.IGNORECASE)
 TICKETS = re.compile(
     r"\b(create|file|open|raise|log|make)\b.{0,40}\b(tickets?|issues?|jira)\b|\bticket(s)? for\b", re.IGNORECASE
 )
@@ -257,6 +270,8 @@ def classify(user: str) -> dict[str, Any]:
         return {"playbook": "schedule_create", "confidence": 0.9, "clarifying_question": None}
     if TICKETS.search(words):
         return {"playbook": "jira_tickets", "confidence": 0.9, "clarifying_question": None}
+    if INVESTIGATE.search(words) or (tag(user, "current_plan") and not QUESTION_ONLY.search(words)):
+        return {"playbook": "investigate_issue", "confidence": 0.9, "clarifying_question": None}
     if not words or not QUESTION.search(words):
         return {
             "playbook": "none",

@@ -149,7 +149,7 @@ def test_jira_jql_and_permission_lookups(client: TestClient) -> None:
     assert keys('text ~ "checkout"') == ["PAY-101"]
     assert keys("assignee = currentUser()") == ["PAY-103", "PAY-106", "SEC-3"]
     # What progress reports ask: created, resolved, open by status category.
-    assert keys("project = PAY AND created >= -1d") == ["PAY-104", "PAY-106"]
+    assert keys("project = PAY AND created >= -1d") == ["PAY-101", "PAY-104", "PAY-106"]
     assert keys("project = PAY AND resolved >= -1d") == ["PAY-105", "PAY-106"]
     assert keys("project = PAY AND resolutiondate < -1d") == ["PAY-103"]
     assert keys("project = PAY AND statusCategory != Done") == ["PAY-101", "PAY-102", "PAY-104"]
@@ -500,7 +500,7 @@ def test_state_saved_by_an_older_stand_in_is_started_afresh(tmp_path: Path) -> N
     with TestClient(create_app(config)):
         pass
     after = json.loads(saved.read_text())
-    assert after["atlassian"]["version"] == 2
+    assert after["atlassian"]["version"] == 3
     assert after["atlassian"]["components"]["PAY"]
     assert "marker" in after["github"]["installations"]  # an up to date provider keeps its state
 
