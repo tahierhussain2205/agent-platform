@@ -1,10 +1,13 @@
 """Temporal worker process (``app worker``)."""
 
 import asyncio
+import contextlib
 import logging
 import signal
+import tempfile
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -132,6 +135,18 @@ def build_worker(client: Client, settings: Settings, slack: SlackActivities | No
     )
 
 
+READY_FILE = Path(tempfile.gettempdir()) / "agent-worker-ready"
+
+
+def ready(polling: bool) -> None:
+    """Mark the worker ready (polling) or not, for container health checks; never fatal."""
+    with contextlib.suppress(OSError):
+        if polling:
+            READY_FILE.write_text("polling\n")
+        else:
+            READY_FILE.unlink(missing_ok=True)
+
+
 async def run_worker(settings: Settings) -> int:
     from app.telemetry import configure_tracing, shutdown_tracing
 
@@ -153,9 +168,12 @@ async def run_worker(settings: Settings) -> int:
                 settings.temporal_address,
                 settings.temporal_namespace,
             )
+            ready(True)  # what a container health check waits for
             await stop.wait()
+            ready(False)
             log.info("shutdown requested; draining in-flight activities")
     finally:
+        ready(False)
         for close in reversed(closers):
             await close()
     shutdown_tracing()

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 from temporalio.client import WorkflowFailureError
@@ -95,3 +96,16 @@ def test_worker_process_stops_cleanly_on_sigterm(temporal_settings: Settings) ->
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+def test_the_ready_file_marks_a_polling_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import worker
+
+    monkeypatch.setattr(worker, "READY_FILE", tmp_path / "ready")
+    worker.ready(True)
+    assert (tmp_path / "ready").read_text() == "polling\n"
+    worker.ready(False)
+    worker.ready(False)  # already gone: fine
+    assert not (tmp_path / "ready").exists()
+    monkeypatch.setattr(worker, "READY_FILE", tmp_path / "missing" / "ready")
+    worker.ready(True)  # an unwritable place is never fatal

@@ -38,7 +38,10 @@ done
 [[ -n $found ]] && pass "request trace $trace_id exported to Jaeger ($found)" || fail "trace $trace_id not in Jaeger"
 
 # Last line only: connection retries during startup may log before the answer.
-out=$(docker compose exec -T worker python -m app check temporal 2>&1 | tail -1) && [[ $out == "pong: smoke" ]] \
+# One retry: a ping started while a worker was being replaced can wait out its first attempt.
+ping() { docker compose exec -T worker python -m app check temporal 2>&1 | tail -1; }
+out=$(ping); [[ $out == "pong: smoke" ]] || out=$(ping)
+[[ $out == "pong: smoke" ]] \
   && pass "worker connected to Temporal (PingWorkflow -> $out)" || fail "PingWorkflow: $out"
 
 for svc in api worker; do

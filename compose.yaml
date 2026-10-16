@@ -258,6 +258,13 @@ services:
     command: ["app", "worker"]
     restart: unless-stopped
     stop_grace_period: 90s
+    # Healthy once it polls Temporal, so `make dev` (up --wait) returns with a worker ready.
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/agent-worker-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 60
+      start_period: 5s
     depends_on:
       migrate: { condition: service_completed_successfully }
       temporal: { condition: service_healthy }
