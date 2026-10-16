@@ -125,6 +125,36 @@ def run_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_offboard(args: argparse.Namespace) -> int:
+    """Offboard an org (operators): it is no longer served; its data is deleted after the grace
+    period by the maintenance job, or now with ``--now``."""
+    from datetime import timedelta
+    from uuid import UUID
+
+    import psycopg
+
+    from app.lifecycle import offboard
+
+    settings = get_settings()
+    org = UUID(args.org)
+    with psycopg.connect(
+        settings.component_dsn("maintenance"), autocommit=True, prepare_threshold=None
+    ) as conn:
+        with conn.transaction():
+            row = conn.execute("select app.maintenance_begin_offboarding(%s)", (org,)).fetchone()
+        print(f"org {org}: {'now offboarding' if row and row[0] else 'already offboarding or unknown'}")
+        if not args.now:
+            print(f"its data is deleted {settings.offboarding_grace_days} day(s) after offboarding began")
+            return 0
+        with conn.transaction():
+            result = offboard(conn, settings, org, timedelta(0))
+    print(
+        f"deleted: {result.deleted}; schedules {result.schedules}, objects {result.objects}, "
+        f"keys {result.keys}" + (f"; {', '.join(result.notes)}" if result.notes else "")
+    )
+    return 0 if result.deleted else 1
+
+
 def run_eval(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -144,6 +174,10 @@ COMMANDS: dict[str, tuple[str, Callable[[argparse.Namespace], int]]] = {
     "seed": ("Load local development data (refused on staging and production).", run_seed),
     "check": ("Check connectivity to a dependency.", run_check),
     "eval": ("Replay the eval cases through the agent and score them.", run_eval),
+    "offboard": (
+        "Offboard an org: stop serving it, delete its data (after the grace period, or --now).",
+        run_offboard,
+    ),
 }
 
 
@@ -155,6 +189,11 @@ def build_parser() -> argparse.ArgumentParser:
         cmd.set_defaults(handler=handler)
         if name == "check":
             cmd.add_argument("target", choices=["temporal", "vault", "model"])
+        if name == "offboard":
+            cmd.add_argument("--org", required=True, help="the org's id")
+            cmd.add_argument(
+                "--now", action="store_true", help="delete its data now instead of after the grace period"
+            )
         if name == "eval":
             cmd.add_argument("--cases", help="directory of case files (default: the built in cases)")
             cmd.add_argument("--report", help="write a JSON report to this file")

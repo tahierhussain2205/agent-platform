@@ -327,12 +327,24 @@ projects:
                 sync: false
               - key: SANDBOX_API_KEY
                 sync: false
-              # Starts Slack membership reconciliations through Temporal.
+              # Starts Slack membership reconciliations through Temporal; offboarding deletes schedules.
               - key: TEMPORAL_ADDRESS
                 sync: false
               - key: TEMPORAL_NAMESPACE
                 sync: false
               - key: TEMPORAL_API_KEY
+                sync: false
+              # Retention and offboarding delete objects and an offboarded org's keys (plan phase 13).
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: kv-staging
+                  property: connectionString
+              - key: S3_ENDPOINT_URL
+                sync: false
+              - key: S3_ACCESS_KEY_ID
+                sync: false
+              - key: S3_SECRET_ACCESS_KEY
                 sync: false
               - key: DATABASE_URL
                 fromDatabase:

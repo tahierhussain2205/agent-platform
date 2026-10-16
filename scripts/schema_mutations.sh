@@ -24,6 +24,8 @@ declare -a MUTATIONS=(
   "grant execute on function app.maintenance_schedule_orgs() to app_user"
   "drop index app.services_live_name"
   "alter table app.sandboxes drop constraint sandboxes_task_id_repository_key"
+  "drop trigger orgs_offboarding_since on app.orgs"
+  "grant execute on function app.maintenance_offboard_org(uuid, interval) to app_user"
 )
 
 failed=0

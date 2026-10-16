@@ -226,12 +226,16 @@ def sandbox_cleanup_job(settings: Settings) -> Job:
 
 
 def run_jobs(settings: Settings) -> int:
+    from app.lifecycle import offboarding_job, retention_job
+
     jobs = [
         *JOBS,
         slack_reconcile_job(settings),
         task_reconcile_job(settings),
         schedule_sync_job(settings),
         sandbox_cleanup_job(settings),
+        retention_job(settings),
+        offboarding_job(settings),
     ]
     results = run_all(settings.component_dsn("maintenance"), jobs)
     for r in results:

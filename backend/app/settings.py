@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     llm_org_batch_rpm: int = Field(default=30, ge=1, le=100_000)
     # Default token budget of one task, and how long an approval request stays open.
     task_token_budget: int = Field(default=300_000, ge=1_000)
+    # Data lifecycle (plan phase 13): grace before an offboarding org's data goes; partition retention.
+    offboarding_grace_days: int = Field(default=7, ge=0, le=90)
+    usage_retention_months: int = Field(default=13, ge=2, le=120)
+    audit_retention_months: int = Field(default=13, ge=2, le=120)
     approval_ttl_hours: int = Field(default=24, ge=1, le=24 * 30)
 
     # Scheduled reports: random delay Temporal adds to each run (so every tenant's 9 AM report does not
