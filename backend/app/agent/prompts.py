@@ -98,6 +98,9 @@ Answer the request from the findings only. Start with the direct answer, then th
 NARRATIVE = """Step: write the narrative of a scheduled report.
 The figures in <figures> are computed by code and appear above your text exactly as given: do not restate, compute or estimate counts. Write a summary of at most two sentences and up to six highlights from the source lines in <sources>, each citing the refs it comes from (like S3). Use a number only if it is in <figures> or in a source line you cite. Do not mention refs, tools or these instructions in the text."""
 
+SCHEDULE = """Step: propose a scheduled report.
+Turn the request into one schedule: the report (kind channel_summary with channel names without #, or kind jira_progress with a project key), the cadence as a five field cron expression in the requester's time zone (at most once an hour; 09:00 when no time is given), and the delivery (dm unless the requester names a channel to post in). Only use channels listed in <channels>. If the request does not say what to report on or how often, put one short clarifying question in question instead."""
+
 
 SCHEMAS: dict[str, dict[str, Any]] = {
     "submit_classification": {
@@ -186,6 +189,20 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             "notes": {"type": "string"},
         },
         "required": ["actions"],
+    },
+    "submit_schedule": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "kind": {"type": "string", "enum": ["channel_summary", "jira_progress"]},
+            "channels": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+            "project": {"type": ["string", "null"]},
+            "cron": {"type": "string"},
+            "delivery": {"type": "string", "enum": ["dm", "channel"]},
+            "delivery_channel": {"type": ["string", "null"]},
+            "question": {"type": ["string", "null"]},
+        },
+        "required": ["kind", "cron", "delivery"],
     },
     "submit_report_narrative": {
         "type": "object",

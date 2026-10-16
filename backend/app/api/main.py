@@ -21,6 +21,7 @@ from app.api.console import integrations as console_integrations
 from app.api.console import members as console_members
 from app.api.console import org as console_org
 from app.api.console import roles as console_roles
+from app.api.console import schedules as console_schedules
 from app.api.console import slack as console_slack
 from app.api.errors import ApiError
 from app.api.middleware import RequestContextMiddleware
@@ -239,6 +240,7 @@ def create_app(settings: Settings | None = None, resources: Resources | None = N
     app.include_router(console_roles.router)
     app.include_router(console_slack.router)
     app.include_router(console_integrations.router)
+    app.include_router(console_schedules.router)
     app.include_router(slack_router)
     app.include_router(oauth_router)
     return app

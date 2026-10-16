@@ -389,13 +389,13 @@ class AgentRunner:
 
     # ------------------------------------------------------------------ understand
 
-    async def understand(self, ref: TaskRef, mode: str) -> Understanding:
-        """Classify the request to a playbook, then turn the conversation into a brief."""
-        ctx = await self._context(ref)
-        refs = RefBook("B")
+    async def _conversation(
+        self, ref: TaskRef, ctx: Context, refs: RefBook
+    ) -> tuple[list[str], str, str | None]:
+        """The thread (or the message) the request is in, as cited lines: (lines, the request's text,
+        the request's ref). Raw text stays in the calling activity."""
         tctx = await self._tool_ctx(ref, refs)
         adapter = SlackAdapter(ctx.bot_user_id)
-        await self.step(ref, "gather", "running", "Understanding the request")
         messages: list[dict[str, Any]] = []
         async for m in self.d.slack.paginate(
             "conversations.replies",
@@ -417,6 +417,14 @@ class AgentRunner:
             (line for line in lines if request_ref and line.startswith(f"[{request_ref}]")), ""
         )
         request_text = request_line.split(": ", 1)[1] if ": " in request_line else request_line
+        return lines, request_text, request_ref
+
+    async def understand(self, ref: TaskRef, mode: str) -> Understanding:
+        """Classify the request to a playbook, then turn the conversation into a brief."""
+        ctx = await self._context(ref)
+        refs = RefBook("B")
+        await self.step(ref, "gather", "running", "Understanding the request")
+        lines, request_text, request_ref = await self._conversation(ref, ctx, refs)
         try:
             result = await self.d.gateway.complete(
                 self._call(ref, "classify"),

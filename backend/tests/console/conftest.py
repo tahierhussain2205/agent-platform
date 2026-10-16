@@ -26,6 +26,7 @@ from app.db.roles import LoginUser, ensure_login_user
 from app.identity.clerk_api import ClerkClient
 from app.settings import Settings
 from tests.conftest import ADMIN_URL
+from tests.stack import FakeTemporal
 from tests.world import World
 
 ISSUER = "https://clerk.test.example"
@@ -183,9 +184,19 @@ def clerk_backend() -> ClerkBackend:
     return ClerkBackend()
 
 
+@pytest.fixture(scope="module")
+def temporal() -> FakeTemporal:
+    """Records the workflows the console starts (follow ups such as a member's removal)."""
+    return FakeTemporal()
+
+
 @pytest_asyncio.fixture(loop_scope="session")
 async def console(
-    module_world: World, login_users: dict[str, LoginUser], jwks: Jwks, clerk_backend: ClerkBackend
+    module_world: World,
+    login_users: dict[str, LoginUser],
+    jwks: Jwks,
+    clerk_backend: ClerkBackend,
+    temporal: FakeTemporal,
 ) -> AsyncIterator[httpx.AsyncClient]:
     api_pool = await open_pool(dsn(module_world, login_users["api"]), "api", min_size=0, max_size=4)
     identity_pool = await open_pool(
@@ -200,6 +211,7 @@ async def console(
         db_pool=api_pool,
         identity_pool=identity_pool,
         kv=kv_client,
+        temporal=temporal,
         clerk_verifier=ClerkVerifier(
             ISSUER,
             "https://clerk.test.example/.well-known/jwks.json",

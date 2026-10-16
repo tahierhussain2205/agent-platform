@@ -305,7 +305,7 @@ projects:
             plan: starter
             branch: main
             autoDeployTrigger: checksPass
-            schedule: "17 3 * * *"
+            schedule: "*/15 * * * *"
             dockerContext: ./backend
             dockerfilePath: ./backend/Dockerfile
             dockerCommand: app maintenance

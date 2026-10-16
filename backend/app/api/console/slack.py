@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from pydantic import BaseModel
 
 from app.api.console.common import audit, fetch_all, fetch_one
@@ -14,6 +14,7 @@ from app.api.errors import ApiError
 from app.auth.console import ConsoleIdentity, console_identity, require_admin, resources
 from app.db.uow import UnitOfWork, get_uow
 from app.identity.invite import InviteError, invite_member
+from app.schedules.temporal import start_sync
 from app.settings import get_settings
 from app.slack import service
 from app.slack.client import SlackError
@@ -116,6 +117,7 @@ async def update_channel(
     channel_id: UUID,
     body: ChannelUpdate,
     request: Request,
+    background: BackgroundTasks,
     identity: ConsoleIdentity = Depends(require_admin),
     uow: UnitOfWork = Depends(get_uow),
 ) -> dict[str, Any]:
@@ -166,6 +168,8 @@ async def update_channel(
                     sync,
                     f"slack-sync-channel-{channel_id}-{uuid.uuid4().hex[:8]}",
                 )
+    if paused:  # after the commit (background tasks run once the response is sent)
+        background.add_task(start_sync, resources(request).temporal, get_settings(), identity.org_id)
     return {"id": channel_id, "is_allowlisted": body.is_allowlisted, "paused_schedules": paused}
 
 

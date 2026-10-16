@@ -304,7 +304,7 @@ async def test_bot_joining_or_leaving_updates_bot_membership(api: httpx.AsyncCli
     assert q(env.world, "select bot_is_member from app.channels where external_id = 'C0RANDOM'") is False
 
 
-async def test_channel_lifecycle_events(api: httpx.AsyncClient, env: Any) -> None:
+async def test_channel_lifecycle_events(api: httpx.AsyncClient, env: Any, stack: Stack) -> None:
     world = env.world
     await post_event(
         api,
@@ -333,12 +333,17 @@ async def test_channel_lifecycle_events(api: httpx.AsyncClient, env: Any) -> Non
             "update app.channels set archived = false, is_allowlisted = true where external_id = 'C0BUGS'"
         )
         conn.commit()
+    started = len(stack.temporal.started)
     await post_event(api, event_payload({"type": "channel_archive", "channel": "C0BUGS", "user": "U0ALICE"}))
     assert q(world, "select archived from app.channels where external_id = 'C0BUGS'") is True
     assert (
         q(world, "select status || ':' || pause_reason from app.schedules where id = %s", (schedule,))
         == "paused:access_lost"
     )
+    # Temporal stops firing it and the admins hear about it.
+    assert [(w, a) for w, a, _ in stack.temporal.started[started:]] == [
+        ("ScheduleSyncWorkflow", str(world.acme.id))
+    ]
     await post_event(
         api, event_payload({"type": "channel_unarchive", "channel": "C0BUGS", "user": "U0ALICE"})
     )

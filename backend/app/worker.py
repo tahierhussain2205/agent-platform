@@ -21,6 +21,7 @@ from app.slack.client import SlackClient
 from app.slack.limiter import SlackRateLimiter
 from app.temporal import connect_temporal
 from app.vault_service.factory import vault_from_settings
+from app.workflows.members import MemberActivities, MemberRemovedWorkflow
 from app.workflows.ping import PingWorkflow, ping
 from app.workflows.report_activities import ReportActivities
 from app.workflows.reports import ScheduledReportWorkflow, ScheduleSyncWorkflow
@@ -110,8 +111,8 @@ def build_worker(client: Client, settings: Settings, slack: SlackActivities | No
             workflows.append(TaskWorkflow)
             activities += slack.tasks.all()
         if slack.reports is not None:
-            workflows += [ScheduledReportWorkflow, ScheduleSyncWorkflow]
-            activities += slack.reports.all()
+            workflows += [ScheduledReportWorkflow, ScheduleSyncWorkflow, MemberRemovedWorkflow]
+            activities += [*slack.reports.all(), *MemberActivities(slack.d.pool).all()]
     return Worker(
         client,
         task_queue=settings.temporal_task_queue,

@@ -78,12 +78,14 @@ class FakeTemporal:
     started: list[tuple[str, Any, str]] = field(default_factory=list)
     fail: bool = False
 
-    async def start_workflow(self, workflow: str, arg: Any, *, id: str, task_queue: str) -> None:
+    async def start_workflow(
+        self, workflow: str, arg: Any = None, *, id: str, task_queue: str, args: Any = None, **_: Any
+    ) -> None:
         if self.fail:
             raise RuntimeError("temporal unavailable")
         if any(existing == id for _, _, existing in self.started):
             raise WorkflowAlreadyStartedError(id, workflow)
-        self.started.append((workflow, arg, id))
+        self.started.append((workflow, arg if args is None else list(args), id))
 
 
 @dataclass

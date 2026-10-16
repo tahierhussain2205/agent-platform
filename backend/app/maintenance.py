@@ -143,8 +143,46 @@ def task_reconcile_job(settings: Settings) -> Job:
     return ("task_reconcile", run)
 
 
+def schedule_sync_job(settings: Settings) -> Job:
+    """Start a schedule sync for every org with schedules Temporal does not match yet, or pauses
+    nobody was told about (whatever the best effort starts after changes missed). One workflow id
+    per org and quarter hour, so overlapping cron runs do not duplicate work."""
+
+    def run(conn: psycopg.Connection) -> str:
+        orgs = [r[0] for r in conn.execute("select org_id from app.maintenance_schedule_orgs()").fetchall()]
+        if not orgs:
+            return "all schedules in sync"
+        now = datetime.now(UTC)
+        slot = f"{now:%Y%m%d%H}{now.minute // 15}"
+
+        async def start_all() -> int:
+            from temporalio.exceptions import WorkflowAlreadyStartedError
+
+            from app.temporal import connect_temporal
+
+            client = await connect_temporal(settings, attempts=3, delay=0.5)
+            started = 0
+            for org_id in orgs:
+                try:
+                    await client.start_workflow(
+                        "ScheduleSyncWorkflow",
+                        str(org_id),
+                        id=f"schedule-sync-{org_id}-{slot}",
+                        task_queue=settings.temporal_task_queue,
+                    )
+                    started += 1
+                except WorkflowAlreadyStartedError:
+                    pass
+            return started
+
+        started = asyncio.run(start_all())
+        return f"{started} schedule sync(s) started for {len(orgs)} org(s)"
+
+    return ("schedule_sync", run)
+
+
 def run_jobs(settings: Settings) -> int:
-    jobs = [*JOBS, slack_reconcile_job(settings), task_reconcile_job(settings)]
+    jobs = [*JOBS, slack_reconcile_job(settings), task_reconcile_job(settings), schedule_sync_job(settings)]
     results = run_all(settings.component_dsn("maintenance"), jobs)
     for r in results:
         status = "ok" if r.ok else "FAILED"

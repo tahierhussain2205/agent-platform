@@ -170,6 +170,8 @@ class Anthropic:
             return [use(forced, report(last_user))]
         if forced == "submit_report_narrative":
             return [use(forced, narrative(last_user))]
+        if forced == "submit_schedule":
+            return [use(forced, schedule(last_user))]
         if "submit_findings" in tool_names:
             return gather(body["messages"], first_user, {str(t) for t in tool_names})
         return [{"type": "text", "text": "OK."}]
@@ -189,9 +191,62 @@ QUESTION = re.compile(
 )
 
 
+RECURRING = re.compile(r"\b(every|daily|weekly|hourly|each (day|morning|week))\b", re.IGNORECASE)
+DAY_NUMBERS = {"sunday": 0, "monday": 1, "tuesday": 2, "wednesday": 3, "thursday": 4, "friday": 5, "saturday": 6}
+NOT_PROJECTS = {"I", "AM", "PM", "DM", "UTC", "OK", "PR"}
+
+
+def schedule(user: str) -> dict[str, Any]:
+    """A proposed schedule from phrases like "every weekday at 9am send me a summary of #bugs" or
+    "every Monday at 10:30 post the PAY Jira progress in #general"."""
+    request = re.sub(r"@\S+", "", tag(user, "request") or "").strip()
+    lowered = request.lower()
+    at = re.search(r"\bat (\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", lowered)
+    hour, minute = (int(at[1]), int(at[2] or 0)) if at else (9, 0)
+    if at and at[3] == "pm" and hour < 12:
+        hour += 12
+    if at and at[3] == "am" and hour == 12:
+        hour = 0
+    days = [str(n) for name, n in DAY_NUMBERS.items() if re.search(rf"\b{name}s?\b", lowered)]
+    if "hourly" in lowered or "every hour" in lowered:
+        cron, cadence = f"{minute} * * * *", "Hourly"
+    elif "weekday" in lowered:
+        cron, cadence = f"{minute} {hour} * * 1-5", "Weekday"
+    elif days:
+        cron, cadence = f"{minute} {hour} * * {','.join(sorted(days))}", "Weekly"
+    elif "weekly" in lowered or "every week" in lowered:
+        cron, cadence = f"{minute} {hour} * * 1", "Weekly"
+    else:
+        cron, cadence = f"{minute} {hour} * * *", "Daily"
+    target = re.search(r"\b(?:post|share|deliver|send)\b[^#]*?\b(?:in|to|into)\s+#([a-z0-9][a-z0-9_-]*)", lowered)
+    delivery_channel = target[1] if target else None
+    channels = [c for c in CHANNEL.findall(lowered) if c != delivery_channel]
+    projects = [p for p in PROJECT.findall(request) if p not in NOT_PROJECTS]
+    jira = bool(projects) and bool(re.search(r"\b(jira|progress|issues|tickets)\b", lowered))
+    result: dict[str, Any] = {
+        "cron": cron,
+        "delivery": "channel" if delivery_channel else "dm",
+        "delivery_channel": delivery_channel,
+        "channels": [] if jira else channels[:5],
+        "project": projects[0] if jira else None,
+        "kind": "jira_progress" if jira else "channel_summary",
+        "question": None,
+    }
+    if jira:
+        result["name"] = f"{cadence} {projects[0]} progress"
+    elif channels:
+        result["name"] = f"{cadence} " + ", ".join(f"#{c}" for c in channels[:5]) + " summary"
+    else:
+        result["name"] = f"{cadence} report"
+        result["question"] = "Which channels should the report summarize, or which Jira project?"
+    return result
+
+
 def classify(user: str) -> dict[str, Any]:
     request = tag(user, "request") or user
     words = re.sub(r"@\S+", "", request).strip()
+    if RECURRING.search(words) and re.search(r"\b(report|summar\w*|progress|send|post)\b", words, re.IGNORECASE):
+        return {"playbook": "schedule_create", "confidence": 0.9, "clarifying_question": None}
     if not words or not QUESTION.search(words):
         return {
             "playbook": "none",

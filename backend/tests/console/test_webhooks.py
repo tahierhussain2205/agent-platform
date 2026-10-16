@@ -12,6 +12,7 @@ import pytest
 
 from app.identity import svix
 from tests.console.conftest import q
+from tests.stack import FakeTemporal
 from tests.world import World
 
 SECRET = "whsec_" + base64.b64encode(b"console-test-webhook-secret-0001").decode()
@@ -182,7 +183,7 @@ async def test_membership_before_user_event_still_works(
 
 
 async def test_role_change_removal_revocation_and_deletions(
-    console: httpx.AsyncClient, module_world: World
+    console: httpx.AsyncClient, module_world: World, temporal: FakeTemporal
 ) -> None:
     tag = uuid.uuid4().hex[:6]
     email, user = f"m-{tag}@acme.test", f"user_{tag}"
@@ -202,6 +203,9 @@ async def test_role_change_removal_revocation_and_deletions(
         membership_event("organizationMembership.deleted", "org_acme", "Acme Corp", user, email, "org:admin"),
     )
     assert member_state(module_world, "org_acme", email)[0] == "removed"
+    member = q(module_world, "select m.id from app.org_memberships m join app.users u on u.id = m.user_id "
+                             "where u.email = %s", (email,))  # fmt: skip
+    assert [w for w, a, _ in temporal.started if a and a[1] == str(member)] == ["MemberRemovedWorkflow"]
 
     invited = f"inv-{tag}@acme.test"
     await send(console, invitation_event("organizationInvitation.created", "org_acme", invited))

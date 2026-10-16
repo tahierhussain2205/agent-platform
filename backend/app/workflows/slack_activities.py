@@ -3,6 +3,7 @@ token through the vault; nothing here trusts the model or message text."""
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from psycopg import AsyncConnection
@@ -395,6 +396,15 @@ class SlackActivities:
                         {"m": requester.membership_id},
                     )
                 ).fetchone()
+                schedules = await (
+                    await conn.execute(
+                        "select id, name, cron, timezone, status, pause_reason, pause_detail from "
+                        "app.schedules "
+                        "where owner_membership_id = %s and status <> 'deleted' "
+                        "order by status = 'active' desc, created_at desc limit 10",
+                        (requester.membership_id,),
+                    )
+                ).fetchall()
             assert row is not None
             view = home_view(
                 org=row[0],
@@ -405,9 +415,98 @@ class SlackActivities:
                 roles=row[4],
                 invited=row[5] == "invited",
                 console_url=self.d.console_url,
+                schedules=[schedule_entry(*s) for s in schedules],
             )
         await self.d.slack.call("views.publish", token, team, user_id=req.user, view=view)
         return "published"
+
+
+PAUSED = {
+    "owner_removed": "its owner was removed",
+    "access_lost": "access was lost",
+    "budget": "a budget is used up",
+    "admin": "paused by a person",
+}
+
+
+def schedule_entry(
+    sid: Any, name: str, cron: str, timezone: str, status: str, reason: str | None, detail: str | None
+) -> dict[str, Any]:
+    """What the home tab shows of one of the person's schedules."""
+    from app.schedules.cron import Cadence
+
+    when = Cadence(cron, timezone)
+    state = "Active" if status == "active" else f"Paused: {detail or PAUSED.get(reason or '', reason)}"
+    upcoming = when.next_runs(datetime.now(UTC), 1)[0] if status == "active" else None
+    return {
+        "id": str(sid),
+        "name": name,
+        "when": f"{when.describe()} ({timezone})",
+        "status": status,
+        "state": state + (f" · next {upcoming.strftime('%a %b %d %H:%M')}" if upcoming else ""),
+    }
+
+
+def schedule_blocks(schedules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": "*Your scheduled reports*"}},
+    ]
+    for s in schedules:
+        buttons = [
+            ("schedule_pause", "Pause", None)
+            if s["status"] == "active"
+            else ("schedule_resume", "Resume", None),
+            *([("schedule_run", "Run now", None)] if s["status"] == "active" else []),
+            ("schedule_delete", "Delete", "danger"),
+        ]
+        blocks += [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"*{s['name']}*\n{s['when']} · {s['state']}"},
+            },
+            {
+                "type": "actions",
+                "block_id": f"schedule:{s['id']}",
+                "elements": [
+                    {
+                        "type": "button",
+                        "action_id": action,
+                        "text": {"type": "plain_text", "text": label},
+                        "value": s["id"],
+                        **({"style": style} if style else {}),
+                        **(
+                            {
+                                "confirm": {
+                                    "title": {"type": "plain_text", "text": "Delete this schedule?"},
+                                    "text": {"type": "plain_text", "text": f"{s['name']} stops for good."},
+                                    "confirm": {"type": "plain_text", "text": "Delete"},
+                                    "deny": {"type": "plain_text", "text": "Keep it"},
+                                }
+                            }
+                            if action == "schedule_delete"
+                            else {}
+                        ),
+                    }
+                    for action, label, style in buttons
+                ],
+            },
+        ]
+    if not schedules:
+        blocks.append(
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": "No scheduled reports yet."}]}
+        )
+    blocks.append(
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "To schedule one, ask me: _every weekday at 9 send me a summary of #bugs_.",
+                }
+            ],
+        }
+    )
+    return blocks
 
 
 def home_view(
@@ -419,6 +518,7 @@ def home_view(
     roles: str | None,
     invited: bool,
     console_url: str,
+    schedules: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     options = [
         {"text": {"type": "plain_text", "text": "Ask before changing anything"}, "value": "ask"},
@@ -458,6 +558,8 @@ def home_view(
                 }
             ],
         },
+        {"type": "divider"},
+        *schedule_blocks(schedules or []),
         {"type": "divider"},
         {
             "type": "context",

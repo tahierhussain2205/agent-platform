@@ -68,7 +68,7 @@ def _no_temporal_jobs_from_the_cli(monkeypatch: pytest.MonkeyPatch, request: pyt
     start workflows on the dev stack's task queue (and reuse the hourly workflow ids the reconcile
     tests check). Those jobs have their own tests, so the CLI tests stub them."""
     if request.node.name.startswith("test_cli"):
-        for name in ("slack_reconcile_job", "task_reconcile_job"):
+        for name in ("slack_reconcile_job", "task_reconcile_job", "schedule_sync_job"):
             monkeypatch.setattr(maintenance, name, lambda settings, name=name: (name, lambda conn: "stubbed"))
 
 
@@ -165,6 +165,46 @@ def test_slack_reconcile_job_starts_one_sync_per_workspace_per_hour(
             assert description.workflow_type == "SyncWorkspaceWorkflow"
             assert description.status == WorkflowExecutionStatus.RUNNING
             await handle.terminate("test cleanup")
+
+    asyncio.run(check_and_clean())
+
+
+def test_schedule_sync_job_starts_one_sync_per_org_needing_it(
+    world: World, maintenance_user: LoginUser
+) -> None:
+    import asyncio
+
+    from app.settings import Settings
+    from app.temporal import connect_temporal
+    from tests.test_worker import TEMPORAL, _reachable
+
+    if not _reachable(TEMPORAL):
+        pytest.skip(f"Temporal not reachable at {TEMPORAL} (run `make infra`)")
+    settings = Settings(temporal_address=TEMPORAL, temporal_task_queue=f"test-{uuid.uuid4().hex[:8]}")
+    job = maintenance.schedule_sync_job(settings)
+    with psycopg.connect(world.url) as conn:  # the world's schedules were never mirrored
+        orgs = {r[0] for r in conn.execute("select org_id from app.schedules where synced_revision is null")}
+    assert {world.acme.id, world.globex.id} <= orgs
+    (first,) = maintenance.run_all(_dsn(world, maintenance_user), [job])
+    (second,) = maintenance.run_all(_dsn(world, maintenance_user), [job])
+    assert first.detail == f"{len(orgs)} schedule sync(s) started for {len(orgs)} org(s)", first.detail
+    assert second.detail.startswith("0 schedule sync(s) started")  # same quarter hour
+
+    async def check_and_clean() -> None:
+        from temporalio.service import RPCError
+
+        client = await connect_temporal(settings)
+        now = datetime.now(UTC)
+        found = 0
+        for org in orgs:
+            handle = client.get_workflow_handle(f"schedule-sync-{org}-{now:%Y%m%d%H}{now.minute // 15}")
+            try:
+                assert (await handle.describe()).workflow_type == "ScheduleSyncWorkflow"
+            except RPCError:  # the quarter hour turned meanwhile
+                continue
+            found += 1
+            await handle.terminate("test cleanup")
+        assert found in (0, len(orgs))
 
     asyncio.run(check_and_clean())
 

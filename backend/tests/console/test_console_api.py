@@ -8,6 +8,7 @@ import psycopg
 import pytest
 
 from tests.console.conftest import ClerkBackend, SigningKey, auth, q
+from tests.stack import FakeTemporal
 from tests.world import World
 
 ALICE = ("user_alice", "org_acme")  # Acme admin
@@ -337,7 +338,11 @@ async def test_clerk_failure_rolls_back_a_demotion(
 
 
 async def test_remove_member_cascades_and_locks_them_out(
-    console: httpx.AsyncClient, signing_key: SigningKey, clerk_backend: ClerkBackend, module_world: World
+    console: httpx.AsyncClient,
+    signing_key: SigningKey,
+    clerk_backend: ClerkBackend,
+    module_world: World,
+    temporal: FakeTemporal,
 ) -> None:
     tag = uuid.uuid4().hex[:6]
     sql(
@@ -356,6 +361,9 @@ async def test_remove_member_cascades_and_locks_them_out(
     assert (await console.get("/api/me", headers=auth(signing_key, f"user_t{tag}", "org_acme"))).json()[
         "error"
     ]["code"] == "not_a_member"
+    # The follow up cancels their running tasks and tells admins about their schedules.
+    org = q(module_world, "select id from app.orgs where clerk_org_id = 'org_acme'")
+    assert ("MemberRemovedWorkflow", [str(org), str(member)]) in [(w, a) for w, a, _ in temporal.started]
 
 
 async def test_remove_succeeds_when_clerk_already_dropped_the_member(

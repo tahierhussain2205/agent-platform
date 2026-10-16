@@ -2,6 +2,7 @@
 
 import json
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -10,6 +11,7 @@ from app import kv
 from app.auth.console import resources
 from app.identity import svix
 from app.identity.sync import apply_event
+from app.schedules.temporal import start_member_removed
 from app.settings import get_settings
 
 log = logging.getLogger(__name__)
@@ -75,4 +77,27 @@ async def clerk_webhook(request: Request) -> JSONResponse:
     if res.kv is not None:
         await res.kv.set(key, "done", ex=DONE_TTL)
     log.info("clerk webhook %s", outcome, extra={"event_type": event_type, "svix_id": msg_id})
+    if event_type == "organizationMembership.deleted" and outcome == "applied":
+        await _after_removal(res, event)
     return JSONResponse({"status": outcome})
+
+
+async def _after_removal(res: Any, event: dict[str, Any]) -> None:
+    """The removal is committed: cancel the person's running tasks and notify about their schedules."""
+    data = event.get("data") or {}
+    try:
+        clerk_user = data["public_user_data"]["user_id"]
+        clerk_org = data["organization"]["id"]
+    except (KeyError, TypeError):
+        return
+    if res.db_pool is None:
+        return
+    async with res.db_pool.connection() as conn:
+        row = await (
+            await conn.execute(
+                "select org_id, membership_id, membership_status from app.resolve_console_identity(%s, %s)",
+                (clerk_user, clerk_org),
+            )
+        ).fetchone()
+    if row is not None and row[2] == "removed":
+        await start_member_removed(res.temporal, get_settings(), row[0], row[1])

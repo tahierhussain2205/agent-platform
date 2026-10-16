@@ -138,9 +138,16 @@ class TaskActivities:
     async def deliver(self, ref: TaskRef, u: Understanding, c: Composed, notes: list[str]) -> Delivered:
         return await self.r.deliver(ref, u, c, notes)
 
+    @activity.defn(name="agent_propose_schedule")
+    @translated
+    async def propose_schedule(self, ref: TaskRef, u: Understanding) -> str:
+        from app.agent.schedule_setup import propose_schedule
+
+        return await propose_schedule(self.r, ref, u)
+
     def all(self) -> list[Callable[..., Any]]:
         return [
             self.start, self.status, self.reply, self.set_status, self.finish, self.budget, self.usage,
             self.understand, self.gather, self.plan, self.compose, self.act, self.resolve_approval,
-            self.execute, self.deliver,
+            self.execute, self.deliver, self.propose_schedule,
         ]  # fmt: skip

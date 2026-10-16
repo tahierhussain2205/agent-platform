@@ -69,7 +69,17 @@ class Report:
     footer: str | None = None
 
 
-Intent = Reply | Ephemeral | DirectMessage | Progress | ApprovalRequest | Report
+@dataclass(frozen=True)
+class Prompt:
+    """A message asking the person something, with buttons (a schedule to confirm)."""
+
+    channel: str
+    text: str
+    thread_ts: str | None = None
+    actions: list[tuple[str, str, str]] = field(default_factory=list)  # (action_id, label, value)
+
+
+Intent = Reply | Ephemeral | DirectMessage | Progress | ApprovalRequest | Report | Prompt
 
 
 def split_text(text: str, limit: int = SECTION_LIMIT) -> list[str]:
@@ -176,6 +186,35 @@ def render(intent: Intent) -> list[tuple[str, dict[str, Any]]]:
         if intent.ts:
             return [("chat.update", {**params, "ts": intent.ts})]
         return [("chat.postMessage", {**params, "thread_ts": intent.thread_ts})]
+    if isinstance(intent, Prompt):
+        prompt_blocks: list[dict[str, Any]] = [*text_blocks(intent.text)]
+        if intent.actions:
+            prompt_blocks.append(
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "action_id": a,
+                            "text": {"type": "plain_text", "text": label},
+                            "value": v,
+                            **({"style": "primary"} if i == 0 else {}),
+                        }
+                        for i, (a, label, v) in enumerate(intent.actions)
+                    ],
+                }
+            )
+        return [
+            (
+                "chat.postMessage",
+                {
+                    "channel": intent.channel,
+                    "thread_ts": intent.thread_ts,
+                    "text": fallback(intent.text),
+                    "blocks": prompt_blocks[:BLOCK_LIMIT],
+                },
+            )
+        ]
     if isinstance(intent, ApprovalRequest):
         blocks = [
             section(f"*Approval needed* ({intent.tier.replace('_', ' ')})"),

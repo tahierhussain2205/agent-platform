@@ -111,6 +111,12 @@ class TaskWorkflow:
             await self._do(TaskActivities.finish, ref, "completed", None)
             await self._status(ref, "❓ I asked a question above.", running=False)
             return "asked"
+        if u.playbook_key == "schedule_create":  # a proposal the requester confirms with a button
+            proposal: str = await self._do(TaskActivities.propose_schedule, ref, u, limit=MODEL_STEP)
+            await self._do(TaskActivities.finish, ref, "completed", None)
+            final = {"proposed": "📅 Confirm the schedule above.", "asked": "❓ I asked a question above."}
+            await self._status(ref, final.get(proposal, "✅ Done"), running=False)
+            return proposal
         if u.mode_note:
             await self._do(TaskActivities.reply, ref, u.mode_note, "mode-note")
         done = ["understood the request"]

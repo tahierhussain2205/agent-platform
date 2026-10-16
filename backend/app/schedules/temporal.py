@@ -145,3 +145,24 @@ async def start_sync(client: Client | None, settings: Settings, org_id: Any) -> 
         )
     except Exception:
         log.warning("could not start a schedule sync", extra={"org_id": str(org_id)}, exc_info=True)
+
+
+async def start_member_removed(
+    client: Client | None, settings: Settings, org_id: Any, membership_id: Any
+) -> None:
+    """After a removal commits: cancel the member's running tasks, sync and notify (best effort; the
+    maintenance job catches schedules this misses)."""
+    if client is None:
+        return
+    try:
+        await client.start_workflow(
+            "MemberRemovedWorkflow",
+            args=[str(org_id), str(membership_id)],
+            id=f"member-removed-{membership_id}-{uuid.uuid4().hex[:8]}",
+            task_queue=settings.temporal_task_queue,
+            execution_timeout=timedelta(minutes=10),
+        )
+    except Exception:
+        log.warning(
+            "could not start the member removal follow-up", extra={"org_id": str(org_id)}, exc_info=True
+        )

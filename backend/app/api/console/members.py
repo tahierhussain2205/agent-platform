@@ -19,6 +19,8 @@ from app.auth.console import ConsoleIdentity, console_identity, require_admin, r
 from app.db.uow import UnitOfWork, get_uow
 from app.identity.clerk_api import ClerkError
 from app.identity.invite import CLERK_ROLE, InviteError, invite_member
+from app.schedules.temporal import start_member_removed
+from app.settings import get_settings
 
 router = APIRouter(prefix="/api/members")
 
@@ -217,9 +219,10 @@ async def remove_member(
                     ) from exc
     except psycopg.errors.CheckViolation as exc:
         raise LAST_ADMIN from exc
-    # Removal trigger: linked accounts revoked, owned schedules paused, sessions closed.
-    # Running tasks are cancelled once the agent runtime exists (phase 7).
+    # Removal trigger: linked accounts revoked, owned schedules paused, sessions closed. The follow-up
+    # workflow cancels their running tasks and tells admins about the paused schedules.
     await audit(uow.connection, identity, "member.removed", target["email"])
+    await start_member_removed(resources(request).temporal, get_settings(), identity.org_id, membership_id)
 
 
 class RoleAssignment(BaseModel):

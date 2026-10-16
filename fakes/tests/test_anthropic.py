@@ -267,3 +267,27 @@ def test_report_narrative_cites_lines_and_states_no_numbers_of_its_own(client: T
     empty = tool_input(call(client, messages=[{"role": "user", "content": "<sources>\n</sources>"}],
                             **forced("submit_report_narrative")))  # fmt: skip
     assert empty == {"summary": "It was a quiet period.", "highlights": []}
+
+
+@pytest.mark.parametrize(
+    ("request_text", "expected"),
+    [
+        ("@agent every weekday at 9am send me a summary of #bugs",
+         {"cron": "0 9 * * 1-5", "kind": "channel_summary", "channels": ["bugs"], "delivery": "dm",
+          "name": "Weekday #bugs summary"}),
+        ("every Monday at 10:30 post the PAY Jira progress in #general",
+         {"cron": "30 10 * * 1", "kind": "jira_progress", "project": "PAY", "delivery": "channel",
+          "delivery_channel": "general", "name": "Weekly PAY progress"}),
+        ("daily at 5pm summarize #bugs and #general for me",
+         {"cron": "0 17 * * *", "channels": ["bugs", "general"], "delivery": "dm"}),
+        ("every day send me a report", {"question": "Which channels should the report summarize, or which Jira project?"}),
+    ],
+)  # fmt: skip
+def test_schedule_requests_are_classified_and_parsed(
+    client: TestClient, request_text: str, expected: dict[str, object]
+) -> None:
+    user = f"<request>{request_text}</request>"
+    chosen = tool_input(call(client, messages=[{"role": "user", "content": user}], **forced("submit_classification")))
+    assert chosen["playbook"] == "schedule_create"
+    proposal = tool_input(call(client, messages=[{"role": "user", "content": user}], **forced("submit_schedule")))
+    assert {k: proposal[k] for k in expected} == expected

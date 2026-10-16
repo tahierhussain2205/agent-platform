@@ -19,9 +19,11 @@ from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app import kv
+from app.api import slack_schedules
 from app.auth.console import resources
 from app.db.tenant import tenant_tx
 from app.identity.invite import InviteError, invite_member
+from app.schedules.temporal import start_sync
 from app.settings import get_settings
 from app.slack import service, signature
 from app.slack.adapter import ChannelAdapter, DirectMessage, Ephemeral, Intent
@@ -50,6 +52,7 @@ CHANNEL_EVENTS = {
     "group_unarchive",
     "group_deleted",
 }
+ARCHIVE_EVENTS = {"channel_archive", "channel_deleted", "group_archive", "group_deleted"}
 
 
 def ok() -> Response:
@@ -159,9 +162,12 @@ async def _route(
             bot = await (
                 await conn.execute("select bot_user_id from app.workspaces where id = %s", (workspace_id,))
             ).fetchone()
-            return await service.apply_channel_event(
+            outcome = await service.apply_channel_event(
                 conn, res.kv, org_id, workspace_id, bot[0] if bot else None, event
             )
+        if kind in ARCHIVE_EVENTS:  # committed: schedules delivering there are paused (trigger)
+            await start_sync(res.temporal, get_settings(), org_id)
+        return outcome
 
     if kind == "app_home_opened":
         if event.get("tab") != "home":
@@ -265,6 +271,22 @@ async def interactions(request: Request) -> Response:
             )
         elif action_id == "task_cancel":
             await _cancel_task(request, org_id, workspace_id, user, str(action.get("value", "")), payload)
+        elif action_id.startswith("schedule_"):
+
+            async def tell(text: str) -> None:
+                await _tell_clicker(request, org_id, user, payload, text)
+
+            await slack_schedules.handle(
+                request,
+                org_id,
+                workspace_id,
+                team_id,
+                user,
+                action_id,
+                str(action.get("value", "")),
+                payload,
+                tell,
+            )
     except Exception:
         log.exception("slack interaction failed", extra={"action_id": action_id})
         return JSONResponse({"error": "failed"}, status_code=500)
