@@ -51,3 +51,30 @@ def test_check_vault_needs_the_vault_service(
     finally:
         get_settings.cache_clear()
     assert "VAULT_URL and VAULT_SERVICE_TOKEN are not set" in capsys.readouterr().err
+
+
+def test_check_storage_writes_reads_and_deletes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import os
+
+    from app.settings import get_settings
+
+    endpoint = os.environ.get("TEST_S3_ENDPOINT", "http://localhost:8333")
+    for key, value in {"S3_BUCKET": "artifacts", "S3_ENDPOINT_URL": endpoint,
+                       "S3_ACCESS_KEY_ID": "local-access-key", "S3_SECRET_ACCESS_KEY": "local-secret-key"}.items():  # fmt: skip
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    try:
+        assert cli.main(["check", "storage"]) == 0
+        assert "ok: wrote, read and deleted an object in artifacts" in capsys.readouterr().out
+        monkeypatch.setenv("S3_SECRET_ACCESS_KEY", "wrong-secret")
+        get_settings.cache_clear()
+        assert cli.main(["check", "storage"]) == 1
+        assert "check storage failed" in capsys.readouterr().err
+        monkeypatch.delenv("S3_BUCKET")
+        get_settings.cache_clear()
+        assert cli.main(["check", "storage"]) == 1
+        assert "no object storage configured" in capsys.readouterr().err
+    finally:
+        get_settings.cache_clear()

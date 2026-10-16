@@ -22,6 +22,30 @@ async def check_temporal(settings: Settings, timeout_seconds: float = 20.0) -> s
     return result
 
 
+# Objects written by `app check storage` live under this made up tenant, never a real org's prefix.
+CHECK_TENANT = uuid.UUID("00000000-0000-0000-0000-00000000c0de")
+
+
+async def check_storage(settings: Settings) -> str:
+    """Write, read and delete one small object in the configured bucket with this process's own
+    credentials (under a tenant prefix no org has)."""
+    from app.storage import ObjectNotFoundError, store_from_settings
+
+    store = store_from_settings(settings)
+    if store is None:
+        raise RuntimeError("no object storage configured (S3_BUCKET is not set)")
+    body = f"check {uuid.uuid4()}".encode()
+    ref = await store.put(CHECK_TENANT, "check", body)
+    if await store.get(CHECK_TENANT, ref) != body:
+        raise RuntimeError("read back something other than what was written")
+    await store.delete(CHECK_TENANT, ref)
+    try:
+        await store.get(CHECK_TENANT, ref)
+    except ObjectNotFoundError:
+        return f"ok: wrote, read and deleted an object in {settings.s3_bucket}"
+    raise RuntimeError("the object was still there after deleting it")
+
+
 async def check_vault(settings: Settings) -> str:
     """Call the vault service with the service token; it answers once it reaches its database."""
     from app.vault_service.client import RemoteVault
