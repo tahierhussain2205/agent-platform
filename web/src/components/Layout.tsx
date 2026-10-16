@@ -57,7 +57,7 @@ export function ConsoleGate() {
     )
   }
   if (auth.status === 'signed_out') return <Navigate to="/sign-in" replace />
-  if (auth.orgs.length === 0)
+  if (auth.orgs.length === 0 && !auth.activeOrgId)
     return <Navigate to={auth.invitations.length > 0 ? '/invitations' : '/create-org'} replace />
   if (me.isPending) {
     return (
