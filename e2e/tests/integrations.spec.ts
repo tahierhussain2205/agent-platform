@@ -54,7 +54,7 @@ test('an admin enables and connects Jira and GitHub through the providers', asyn
   await expect(page).toHaveTitle('Jira wants to access your Atlassian account')
   await consent(page, /Alice Admin/)
   await expect(page.getByText('Jira is connected.')).toBeVisible()
-  await expect(jira.getByTestId('jira-connection')).toContainText('connected as cloud-acme')
+  await expect(jira.getByTestId('jira-connection')).toContainText('connected as acme.atlassian.net')
 
   const github = card(page, 'GitHub')
   await github.getByLabel('Enable GitHub').check()
@@ -75,7 +75,7 @@ test('a cancelled consent changes nothing', async ({ page }) => {
   await page.getByRole('button', { name: 'Deny' }).click()
   await expect(page.getByText('The connection was cancelled at the provider.')).toBeVisible()
   await expect(card(page, 'Jira').getByTestId('jira-connection')).toContainText(
-    'connected as cloud-acme', // the org connection is to the Jira site
+    'connected as acme.atlassian.net', // the org connection is to the Jira site
   )
 })
 
@@ -87,7 +87,7 @@ test('a member links their own Jira and GitHub accounts', async ({ page }) => {
   await jira.getByRole('button', { name: 'Link my account' }).click()
   await consent(page, /Bob Builder/)
   await expect(page.getByText('Your Jira account is linked.')).toBeVisible()
-  await expect(jira.getByTestId('jira-link')).toContainText('linked as acc-bob')
+  await expect(jira.getByTestId('jira-link')).toContainText('linked as Bob Builder')
 
   const github = card(page, 'GitHub')
   await github.getByRole('button', { name: 'Link my account' }).click()
@@ -377,7 +377,7 @@ test('Example 1 in Auto mode: tickets are created right away and linked in the t
   await integrations(admin, 'alice@acme.test')
   await card(admin, 'Jira').getByRole('button', { name: 'Link my account' }).click()
   await consent(admin, /Alice Admin/)
-  await expect(card(admin, 'Jira').getByTestId('jira-link')).toContainText('linked as acc-alice')
+  await expect(card(admin, 'Jira').getByTestId('jira-link')).toContainText('linked as Alice Admin')
   await admin.close()
 
   const channel = await ticketsChannel(browser)
