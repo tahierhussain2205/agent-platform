@@ -2,12 +2,15 @@
 
 A sandbox is untrusted: the platform puts code in (an archive at a pinned commit, fetched outside
 with a read only token that never enters the sandbox) and reads results out through the provider's
-API. This phase reads files only (list, read ranges, search); phase 12 adds commands.
+API: files (list, read, search, write), commands (``exec``: run in the sandbox, which has no
+network and holds no credential) and the change of a working tree (``diff``), which is all that
+leaves it.
 
 ``HttpSandboxProvider`` speaks the provider API the local stand-in implements (B-008): replacing it
 with a managed provider is a client for that provider's API, nothing else.
 """
 
+import base64
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -18,6 +21,37 @@ from app.tools.http import request
 
 class SandboxError(Exception):
     """The provider refused or failed; the message is safe to show (no tokens, no paths outside)."""
+
+
+@dataclass(frozen=True)
+class Ran:
+    """What a command did. Output is capped by the provider (the end is kept)."""
+
+    exit_code: int
+    stdout: str
+    stderr: str
+    timed_out: bool
+    seconds: float
+
+    @property
+    def ok(self) -> bool:
+        return self.exit_code == 0 and not self.timed_out
+
+
+@dataclass(frozen=True)
+class ChangedFile:
+    path: str
+    status: str  # A, M, D, T
+    mode: str  # 100644, 100755, 120000 (a link), 160000 (a submodule)
+    content: bytes | None  # None when deleted
+
+
+@dataclass(frozen=True)
+class Change:
+    """A working tree's change against its baseline commit."""
+
+    patch: str
+    files: list[ChangedFile]
 
 
 @dataclass(frozen=True)
@@ -50,6 +84,21 @@ class SandboxProvider(Protocol):
     ) -> dict[str, Any]: ...
 
     async def destroy(self, sandbox_id: str) -> None: ...
+
+    async def exec(
+        self,
+        sandbox_id: str,
+        command: str,
+        cwd: str = "",
+        env: dict[str, str] | None = None,
+        seconds: int = 120,
+    ) -> Ran: ...
+
+    async def write(self, sandbox_id: str, path: str, content: bytes) -> int: ...
+
+    async def read_bytes(self, sandbox_id: str, path: str) -> bytes: ...
+
+    async def diff(self, sandbox_id: str, path: str) -> Change: ...
 
 
 class HttpSandboxProvider:
@@ -128,6 +177,68 @@ class HttpSandboxProvider:
         spec = {"pattern": pattern, "path": path, "glob": glob, "regex": regex, "max_results": limit}
         body: dict[str, Any] = await self._call("POST", f"/sandboxes/{sandbox_id}/search", json=spec)
         return body
+
+    async def exec(
+        self,
+        sandbox_id: str,
+        command: str,
+        cwd: str = "",
+        env: dict[str, str] | None = None,
+        seconds: int = 120,
+    ) -> Ran:
+        spec = {"command": command, "cwd": cwd, "env": env or {}, "timeout_seconds": seconds}
+        body = await self._call("POST", f"/sandboxes/{sandbox_id}/exec", json=spec, timeout=seconds + 30)
+        return Ran(
+            int(body["exit_code"]),
+            str(body.get("stdout") or ""),
+            str(body.get("stderr") or ""),
+            bool(body.get("timed_out")),
+            float(body.get("seconds") or 0),
+        )
+
+    async def write(self, sandbox_id: str, path: str, content: bytes) -> int:
+        try:
+            response = await self.http.put(
+                f"{self.base}/sandboxes/{sandbox_id}/files/content",
+                params={"path": path},
+                content=content,
+                headers={**self.headers, "content-type": "application/octet-stream"},
+            )
+        except httpx.HTTPError as exc:
+            raise SandboxError(f"the sandbox provider is unreachable ({type(exc).__name__})") from exc
+        if response.status_code >= 400:
+            raise SandboxError(f"the sandbox provider refused the file ({response.status_code})")
+        return int(response.json().get("bytes", 0))
+
+    async def read_bytes(self, sandbox_id: str, path: str) -> bytes:
+        try:
+            response = await request(
+                self.http,
+                "GET",
+                f"{self.base}/sandboxes/{sandbox_id}/files/raw",
+                params={"path": path},
+                headers=self.headers,
+            )
+        except httpx.HTTPError as exc:
+            raise SandboxError(f"the sandbox provider is unreachable ({type(exc).__name__})") from exc
+        if response.status_code == 404:
+            raise SandboxError(f"no file {path}")
+        if response.status_code >= 400:
+            raise SandboxError(f"the sandbox provider refused the read ({response.status_code})")
+        return response.content
+
+    async def diff(self, sandbox_id: str, path: str) -> Change:
+        body = await self._call("POST", f"/sandboxes/{sandbox_id}/diff", json={"path": path}, timeout=120)
+        files = [
+            ChangedFile(
+                str(f["path"]),
+                str(f["status"]),
+                str(f.get("mode") or "100644"),
+                base64.b64decode(f["content_b64"]) if f.get("content_b64") is not None else None,
+            )
+            for f in body.get("files") or []
+        ]
+        return Change(str(body.get("patch") or ""), files)
 
     async def destroy(self, sandbox_id: str) -> None:
         try:

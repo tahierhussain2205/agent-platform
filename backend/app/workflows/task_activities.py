@@ -14,15 +14,21 @@ from app.agent.types import (
     ApprovalState,
     BudgetCheck,
     CaseFile,
+    ChangeCase,
     Composed,
     Delivered,
+    Exported,
     Findings,
+    Implemented,
     PlannedAction,
+    ReviewResult,
     StartResult,
     TaskRef,
     Understanding,
+    Verification,
 )
 from app.llm.gateway import LLMRequestError, LLMResponseError
+from app.sandbox import SandboxError
 from app.slack.client import SlackError
 from app.slack.service import SlackNotConnectedError
 from app.workflows.slack_activities import PERMANENT_SLACK_ERRORS
@@ -45,6 +51,8 @@ def translated[**P, R](fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R
             raise ApplicationError(str(exc), type="LLMRequestError", non_retryable=True) from exc
         except LLMResponseError as exc:  # retried: the model may answer properly next time
             raise ApplicationError(str(exc), type="LLMResponseError") from exc
+        except SandboxError as exc:  # retried: the provider may be back (the message names no secret)
+            raise ApplicationError(str(exc), type="SandboxError") from exc
 
     return wrapper
 
@@ -118,6 +126,58 @@ class TaskActivities:
     ) -> Composed:
         return await self.r.plan_investigation(ref, u, case, findings, tier)
 
+    @activity.defn(name="agent_prepare_change")
+    @translated
+    async def prepare_change(self, ref: TaskRef, u: Understanding) -> ChangeCase:
+        return await self.r.prepare_change(ref, u)
+
+    @activity.defn(name="agent_implement")
+    @translated
+    async def implement(
+        self, ref: TaskRef, u: Understanding, case: ChangeCase, tier: str, feedback: dict[str, Any]
+    ) -> Implemented:
+        return await self.r.implement(ref, u, case, tier, feedback)
+
+    @activity.defn(name="agent_verify_change")
+    @translated
+    async def verify_change(self, ref: TaskRef, u: Understanding, case: ChangeCase) -> Verification:
+        return await self.r.verify_change(ref, u, case)
+
+    @activity.defn(name="agent_review_change")
+    @translated
+    async def review_change(
+        self, ref: TaskRef, u: Understanding, case: ChangeCase, tier: str
+    ) -> ReviewResult:
+        return await self.r.review_change(ref, u, case, tier)
+
+    @activity.defn(name="agent_export_change")
+    @translated
+    async def export_change(
+        self,
+        ref: TaskRef,
+        u: Understanding,
+        case: ChangeCase,
+        verification: Verification,
+        review: ReviewResult | None,
+        implemented: Implemented,
+    ) -> Exported:
+        return await self.r.export_change(ref, u, case, verification, review, implemented)
+
+    @activity.defn(name="agent_report_change")
+    @translated
+    async def report_change(
+        self,
+        ref: TaskRef,
+        u: Understanding,
+        case: ChangeCase,
+        attempts: list[Implemented],
+        verification: Verification | None,
+        review: ReviewResult | None,
+        exported: Exported | None,
+        outcome: ActionOutcome | None,
+    ) -> Composed:
+        return await self.r.report_change(ref, u, case, attempts, verification, review, exported, outcome)
+
     @activity.defn(name="agent_plan")
     @translated
     async def plan(self, ref: TaskRef, u: Understanding, f: Findings, tier: str) -> list[PlannedAction]:
@@ -170,5 +230,7 @@ class TaskActivities:
             self.start, self.status, self.reply, self.set_status, self.finish, self.budget, self.usage,
             self.understand, self.gather, self.plan, self.compose, self.act, self.resolve_approval,
             self.execute, self.deliver, self.propose_schedule, self.orient, self.investigate,
-            self.plan_investigation,
+            self.plan_investigation, self.prepare_change, self.implement, self.verify_change,
+            self.review_change,
+            self.export_change, self.report_change,
         ]  # fmt: skip

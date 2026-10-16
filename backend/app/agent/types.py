@@ -164,3 +164,76 @@ class ReportComposed:
     dropped: int = 0
     denied: str | None = None  # the owner can no longer read a source: the schedule pauses
     stopped: str | None = None  # a budget is spent: the schedule pauses
+
+
+@dataclass
+class ChangeCase:
+    """What a change is about, prepared in code before the implementer starts: the thread's current
+    plan, the repository, the base commit and the branch, and for a revision the pull request's
+    feedback (reviews, comments, failing checks). Derived content and GitHub text only."""
+
+    repo: str
+    base_sha: str
+    branch: str
+    goal: str
+    plan: dict[str, Any] = field(default_factory=dict)
+    issue_key: str | None = None
+    revision: dict[str, Any] | None = None  # the pull request: number, url, reviews, comments, checks
+    recipe: str | None = None  # the repository's test command
+    private: bool = True
+    notes: list[str] = field(default_factory=list)
+    stopped: str | None = None  # nothing can be implemented: what to tell the thread
+
+
+@dataclass
+class Implemented:
+    summary: str
+    tests: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    stopped: str | None = None
+
+
+@dataclass
+class Verification:
+    ok: bool  # the tests ran and passed
+    ran: bool  # the tests could run at all
+    command: str | None
+    summary: str
+    output: str = ""  # the end of the output, redacted, for the implementer
+    exit_code: int | None = None
+    reproduced: bool | None = None  # the new test fails without the fix (None: not checked)
+
+
+@dataclass
+class ReviewResult:
+    approved: bool
+    summary: str
+    comments: list[dict[str, Any]] = field(default_factory=list)  # {"path", "line", "text"}
+
+
+@dataclass
+class Exported:
+    artifact_id: str | None
+    files: list[dict[str, Any]]  # {"path", "status"}
+    added: int
+    removed: int
+    blocked: list[str] = field(default_factory=list)
+    ask: list[str] = field(default_factory=list)
+    tests: list[str] = field(default_factory=list)
+    action: PlannedAction | None = None  # the push, when nothing blocks it
+
+
+@dataclass
+class GitHubNotice:
+    """A GitHub event on a pull request a task opened, for its thread (references and GitHub's own
+    small fields only; the activity reads the details within the requester's access)."""
+
+    org_id: str
+    task_id: str
+    delivery: str
+    kind: str  # review | checks_failed | closed
+    repo: str
+    number: int
+    review_id: int | None = None
+    state: str | None = None  # the review's state, the check suite's conclusion, merged or closed
+    sender: str | None = None

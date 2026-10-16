@@ -22,9 +22,11 @@ from app.llm.gateway import gateway_from_settings
 from app.settings import Settings
 from app.slack.client import SlackClient
 from app.slack.limiter import SlackRateLimiter
+from app.storage import store_from_settings
 from app.temporal import connect_temporal
 from app.vault_service.factory import vault_from_settings
 from app.workflows.catalog import CatalogActivities, CatalogProposalWorkflow
+from app.workflows.github import GitHubActivities, GitHubNoticeWorkflow
 from app.workflows.members import MemberActivities, MemberRemovedWorkflow
 from app.workflows.ping import PingWorkflow, ping
 from app.workflows.report_activities import ReportActivities
@@ -78,6 +80,7 @@ async def build_slack_activities(
             approval_ttl_hours=settings.approval_ttl_hours,
             settings=settings,
             http=integrations_http,
+            store=store_from_settings(settings),
         )
         tasks = TaskActivities(AgentRunner(deps))
         reports = ReportActivities(ReportRunner(deps))
@@ -112,8 +115,8 @@ def build_worker(client: Client, settings: Settings, slack: SlackActivities | No
             slack.publish_home,
         ]
         if slack.tasks is not None:
-            workflows.append(TaskWorkflow)
-            activities += slack.tasks.all()
+            workflows += [TaskWorkflow, GitHubNoticeWorkflow]
+            activities += [*slack.tasks.all(), GitHubActivities(slack.tasks.r).notice]
         if slack.reports is not None:
             workflows += [
                 ScheduledReportWorkflow,

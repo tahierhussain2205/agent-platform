@@ -23,11 +23,16 @@ with workflow.unsafe.imports_passed_through():
         ActionOutcome,
         ApprovalState,
         CaseFile,
+        ChangeCase,
         Composed,
+        Exported,
         Findings,
+        Implemented,
         PlannedAction,
+        ReviewResult,
         TaskRef,
         Understanding,
+        Verification,
     )
     from app.workflows.task_activities import TaskActivities
 
@@ -38,6 +43,7 @@ QUICK = timedelta(seconds=60)
 MODEL_STEP = timedelta(minutes=15)
 MAX_QUEUE_WAIT = timedelta(hours=1)
 APPROVAL_POLL = timedelta(minutes=15)
+MAX_FAILED_VERIFICATIONS = 2  # then stop and ask for the plan to be revised (spec 7.3)
 
 
 class StopTask(Exception):  # noqa: N818 - control flow, not an error
@@ -125,6 +131,8 @@ class TaskWorkflow:
         await self._check_budget(ref, done)
         if u.playbook_key == "investigate_issue":
             return await self._investigate(ref, u, tier, done)
+        if u.playbook_key == "implement_change":
+            return await self._implement(ref, u, tier, done)
         channels = ", ".join(f"#{c}" for c in ((u.brief or {}).get("entities") or {}).get("channels") or [])
         self.stage = "gathering"
         await self._status(ref, f"📖 Reading {channels or 'the conversation'}…")
@@ -196,6 +204,101 @@ class TaskWorkflow:
         self.stage = "completed"
         await self._status(ref, f"✅ Done · {int(usage['tokens']):,} tokens", running=False)
         return "completed"
+
+    async def _implement(self, ref: TaskRef, u: Understanding, tier: str, done: list[str]) -> str:
+        """Prepare in code; implement and verify (twice at most when verification fails); one review,
+        with one round of changes; export and check the diff; the push as an action through the policy
+        (and a person, when it asks); report. The working copy is the state between the steps."""
+        self.stage = "gathering"
+        await self._status(ref, "🧰 Preparing the change…")
+        case: ChangeCase = await self._do(TaskActivities.prepare_change, ref, u, limit=MODEL_STEP)
+        if case.stopped:
+            await self._do(TaskActivities.reply, ref, case.stopped, "change-stopped")
+            await self._do(TaskActivities.finish, ref, "completed", None)
+            await self._status(ref, "⏹ Nothing was changed.", running=False)
+            return "stopped"
+        done.append(f"prepared {case.repo} at {case.base_sha[:7]}")
+        attempts: list[Implemented] = []
+        feedback: dict[str, Any] = {}
+        failures = 0
+        review: ReviewResult | None = None
+        while True:
+            self.stage = "implementing"
+            await self._status(ref, "🛠 Implementing the plan…" if not attempts else "🛠 Revising the change…")
+            implemented: Implemented = await self._do(
+                TaskActivities.implement, ref, u, case, tier, feedback, limit=MODEL_STEP
+            )
+            if implemented.stopped:
+                raise StopTask(implemented.stopped, done)
+            attempts.append(implemented)
+            done.append(f"implemented ({len(attempts)})")
+            await self._check_budget(ref, done)
+            self.stage = "verifying"
+            await self._status(ref, "🧪 Running the tests…")
+            verification: Verification = await self._do(
+                TaskActivities.verify_change, ref, u, case, limit=MODEL_STEP
+            )
+            if verification.ran and not verification.ok:
+                failures += 1
+                if failures >= MAX_FAILED_VERIFICATIONS:
+                    return await self._report_change(ref, u, case, attempts, verification, review, None, None)
+                feedback = {
+                    "verification": {"summary": verification.summary, "output": verification.output[-3000:]},
+                    "previous": implemented.summary,
+                    "review": feedback.get("review"),
+                }
+                continue
+            if review is None:
+                await self._status(ref, "🔍 Reviewing the change…")
+                review = await self._do(TaskActivities.review_change, ref, u, case, tier, limit=MODEL_STEP)
+                if not review.approved:
+                    feedback = {"review": review.comments, "previous": implemented.summary}
+                    continue
+            break
+        self.stage = "checking"
+        await self._status(ref, "📦 Checking the change…")
+        exported: Exported = await self._do(
+            TaskActivities.export_change, ref, u, case, verification, review, attempts[-1], limit=MODEL_STEP
+        )
+        outcome: ActionOutcome | None = None
+        if exported.action is not None:
+            action = exported.action
+            outcome = await self._do(TaskActivities.act, ref, u, action, 1, "", [])
+            if outcome.status == "awaiting_approval":
+                self.stage = "awaiting_approval"
+                await self._status(ref, f"⏸ Waiting for approval: {action.summary}")
+                state = await self._await_approval(ref, outcome)
+                self.stage = "acting"
+                if state.status == "approved":
+                    await self._status(ref, "🚀 Pushing the change…")
+                    outcome = await self._do(TaskActivities.execute, ref, u, action, 1, "")
+                else:
+                    outcome = ActionOutcome("skipped", f"the push was {state.status}.")
+        return await self._report_change(ref, u, case, attempts, verification, review, exported, outcome)
+
+    async def _report_change(
+        self,
+        ref: TaskRef,
+        u: Understanding,
+        case: ChangeCase,
+        attempts: list[Implemented],
+        verification: Verification | None,
+        review: ReviewResult | None,
+        exported: Exported | None,
+        outcome: ActionOutcome | None,
+    ) -> str:
+        c: Composed = await self._do(
+            TaskActivities.report_change, ref, u, case, attempts, verification, review, exported, outcome
+        )
+        self.stage = "delivering"
+        await self._do(TaskActivities.deliver, ref, u, c, [])
+        usage = await self._do(TaskActivities.usage, ref)
+        await self._do(TaskActivities.finish, ref, "completed", c.stopped)
+        self.stage = "completed"
+        pushed = outcome is not None and outcome.status == "done"
+        icon = "✅ Done" if pushed else "⏹ Finished without a push"
+        await self._status(ref, f"{icon} · {int(usage['tokens']):,} tokens", running=False)
+        return "completed" if pushed else "stopped"
 
     async def _act_all(
         self, ref: TaskRef, u: Understanding, actions: list[PlannedAction], c: Composed

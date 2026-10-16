@@ -125,6 +125,7 @@ class ToolContext:
     settings: Any = None  # provider and MCP base URLs
     vault: Any = None
     cache: dict[str, Any] = field(default_factory=dict)  # per task lookups (identities, permissions)
+    store: Any = None  # ObjectStore for large artifacts (a change's diff)
 
 
 class ToolAdapter(Protocol):

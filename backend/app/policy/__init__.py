@@ -29,7 +29,8 @@ Outcome = Literal["allowed", "needs_approval", "denied"]
 AUDIT_DECISION = {"allowed": "allowed", "denied": "denied", "needs_approval": "info"}
 
 
-ALWAYS_ON = {"catalog"}  # built in tools over our own data (the service catalog)
+# Built in tools over our own data and infrastructure: the service catalog, the task's working copies.
+ALWAYS_ON = {"catalog", "sandbox"}
 
 
 @dataclass(frozen=True)

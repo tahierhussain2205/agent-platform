@@ -29,7 +29,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from fakes import investigator
+from fakes import implementer, investigator
 from fakes.config import Config
 
 CACHE_TTL = 300.0
@@ -175,6 +175,10 @@ class Anthropic:
             return [use(forced, narrative(last_user))]
         if forced == "submit_schedule":
             return [use(forced, schedule(last_user))]
+        if forced == "submit_review":
+            return [use(forced, implementer.review(last_user))]
+        if "submit_implementation" in tool_names:
+            return implementer.implement(body["messages"], first_user, forced == "submit_implementation")
         if "submit_findings" in tool_names and "<case>" in first_user:
             return investigator.investigate(
                 body["messages"], first_user, {str(t) for t in tool_names}, forced == "submit_findings"
@@ -201,6 +205,11 @@ QUESTION = re.compile(
 INVESTIGATE = re.compile(
     r"\b(investigate|look into|dig into|debug|root cause|figure out why|plan (a|the) fix)\b"
     r"|\bwhy (is|are|does|do|did)\b.*\b(fail\w*|broken|slow|erroring|crash\w*|down)\b",
+    re.IGNORECASE,
+)
+IMPLEMENT = re.compile(
+    r"\b(implement|go ahead|fix it|make the change|raise (a|the) (pr|pull request)|open (a|the) (pr|pull request)"
+    r"|address (the )?(review )?(comments|feedback|review)|fix (the )?(ci|build|checks))\b",
     re.IGNORECASE,
 )
 QUESTION_ONLY = re.compile(r"\b(summar\w*|recap|catch me up)\b", re.IGNORECASE)
@@ -268,6 +277,8 @@ def classify(user: str) -> dict[str, Any]:
     words = re.sub(r"@\S+", "", request).strip()
     if RECURRING.search(words) and re.search(r"\b(report|summar\w*|progress|send|post)\b", words, re.IGNORECASE):
         return {"playbook": "schedule_create", "confidence": 0.9, "clarifying_question": None}
+    if IMPLEMENT.search(words) and (tag(user, "current_plan") or tag(user, "pull_request")):
+        return {"playbook": "implement_change", "confidence": 0.9, "clarifying_question": None}
     if TICKETS.search(words):
         return {"playbook": "jira_tickets", "confidence": 0.9, "clarifying_question": None}
     if INVESTIGATE.search(words) or (tag(user, "current_plan") and not QUESTION_ONLY.search(words)):

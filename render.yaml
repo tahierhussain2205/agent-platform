@@ -174,6 +174,9 @@ projects:
                 sync: false
               - key: GITHUB_CLIENT_ID
                 sync: false
+              # The GitHub App's webhook secret (reviews and failed checks on the agent's pull requests).
+              - key: GITHUB_WEBHOOK_SECRET
+                sync: false
               - key: GOOGLE_CLIENT_ID
                 sync: false
               - key: GOOGLE_MCP_URL

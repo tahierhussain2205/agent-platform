@@ -14,7 +14,8 @@ through the file API, and runs commands, which the runner executes with no netwo
 - ``POST /sandbox/v1/sandboxes/{id}/search`` ``{"pattern", "regex", "path", "glob", "max_results"}``
 - ``POST /sandbox/v1/sandboxes/{id}/exec`` ``{"command", "cwd", "env", "timeout_seconds"}``: run by the
   runner container (no network), output capped
-- ``PUT /sandbox/v1/sandboxes/{id}/files/content?path=`` (the body is the file)
+- ``PUT /sandbox/v1/sandboxes/{id}/files/content?path=`` (the body is the file);
+  ``GET .../files/raw?path=`` reads one back unchanged
 - ``POST /sandbox/v1/sandboxes/{id}/diff`` ``{"path"}``: a git working tree's change: patch and files
 """
 
@@ -219,6 +220,20 @@ def build_router(sbx: Sandboxes) -> APIRouter:
         end = min(len(lines), int(q.get("end") or start + MAX_READ_LINES - 1), start + MAX_READ_LINES - 1)
         return JSONResponse({"path": q.get("path"), "start": start, "end": end, "total_lines": len(lines),
                              "content": "\n".join(line[:MAX_LINE] for line in lines[start - 1 : end])})  # fmt: skip
+
+    @router.get("/sandboxes/{sandbox_id}/files/raw")
+    async def raw(request: Request, sandbox_id: str) -> Response:
+        """A file's bytes, unchanged (at most 1 MB)."""
+        if not authorized(request):
+            return error(401, "unauthorized", "Invalid API key")
+        if sbx.live(sandbox_id) is None:
+            return error(404, "not_found", "No such sandbox")
+        target = sbx.resolve(sandbox_id, request.query_params.get("path", ""))
+        if target is None or not target.is_file():
+            return error(404, "not_found", "No such file")
+        if target.stat().st_size > 1024 * 1024:
+            return error(413, "too_large", "Files over 1 MB are not read whole")
+        return Response(target.read_bytes(), media_type="application/octet-stream")
 
     @router.post("/sandboxes/{sandbox_id}/search")
     async def search(request: Request, sandbox_id: str) -> JSONResponse:

@@ -177,7 +177,9 @@ class CodeOperations:
             )
         )
 
-    async def workspace(self, ctx: ToolContext, credential: Credential, repo: str) -> Workspace:
+    async def workspace(
+        self, ctx: ToolContext, credential: Credential, repo: str, baseline: bool = False
+    ) -> Workspace:
         provider = provider_from_settings(ctx.settings, ctx.http)
         if provider is None:
             raise SandboxError(
@@ -210,7 +212,9 @@ class CodeOperations:
                 raise SandboxError(f"GitHub did not provide the archive of {repo} ({response.status_code})")
             return response.content
 
-        return await Workspaces(ctx.pool, provider).ensure(ctx.org_id, ctx.task_id, repo, head, archive)
+        return await Workspaces(ctx.pool, provider).ensure(
+            ctx.org_id, ctx.task_id, repo, head, archive, baseline=baseline
+        )
 
     async def search(
         self, ctx: ToolContext, credential: Credential, repo: str, args: dict[str, Any]

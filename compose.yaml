@@ -67,6 +67,8 @@ x-backend: &backend
     GITHUB_APP_ID: "424242"
     GITHUB_APP_SLUG: agent-platform-local
     GITHUB_CLIENT_ID: Iv1.localclient
+    # Verifies the stand-in's signed GitHub webhooks (reviews, failed checks) on /webhooks/github.
+    GITHUB_WEBHOOK_SECRET: local-github-webhook-secret
     GOOGLE_AUTH_URL: http://localhost:4100/google/o/oauth2/v2/auth
     GOOGLE_MCP_URL: http://fakes:4100/google/mcp
     GOOGLE_CLIENT_ID: local-google-client

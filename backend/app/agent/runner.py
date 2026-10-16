@@ -25,6 +25,7 @@ import httpx
 from psycopg.types.json import Jsonb
 
 from app.agent import prompts, tickets
+from app.agent.implementation import Implementation
 from app.agent.investigation import Investigation
 from app.agent.outbox import Sink, SlackSink, post_once
 from app.agent.playbooks import BUILTIN, PlaybookSpec, keys, latest
@@ -33,13 +34,18 @@ from app.agent.types import (
     ApprovalState,
     BudgetCheck,
     CaseFile,
+    ChangeCase,
     Composed,
     Delivered,
+    Exported,
     Findings,
+    Implemented,
     PlannedAction,
+    ReviewResult,
     StartResult,
     TaskRef,
     Understanding,
+    Verification,
 )
 from app.db.tenant import tenant_tx
 from app.integrations.catalog import CATALOG
@@ -86,6 +92,7 @@ class AgentDeps:
     now: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
     settings: Any = None  # provider API and MCP base URLs for the integration adapters
     http: Any = None  # httpx.AsyncClient for the integration adapters
+    store: Any = None  # ObjectStore for large artifacts (diffs)
 
 
 @dataclass
@@ -232,6 +239,7 @@ class AgentRunner:
             http=self.d.http,
             settings=self.d.settings,
             vault=self.d.vault,
+            store=self.d.store,
         )
 
     def _here(self, ref: TaskRef, ctx: Context) -> Target:
@@ -398,6 +406,23 @@ class AgentRunner:
             ).fetchone()
         return dict(row[0]) if row and isinstance(row[0], dict) else None
 
+    async def _session_pull(self, ref: TaskRef) -> dict[str, Any] | None:
+        """The pull request a task of this thread opened most recently: ``{"repo", "number", "url"}``."""
+        if not ref.session_id:
+            return None
+        async with tenant_tx(self.d.pool, ref.org_id) as conn:
+            row = await (
+                await conn.execute(
+                    "select l.external_id, l.url from app.task_links l join app.tasks t on t.id = l.task_id "
+                    "where t.session_id = %s and l.kind = 'pull_request' order by l.created_at desc limit 1",
+                    (ref.session_id,),
+                )
+            ).fetchone()
+        if row is None or "#" not in row[0]:
+            return None
+        repo, _, number = str(row[0]).rpartition("#")
+        return {"repo": repo, "number": int(number), "url": row[1]} if number.isdigit() else None
+
     async def _release_sandboxes(self, ref: TaskRef) -> None:
         """The task's sandboxes go with it (best effort: they expire, and maintenance destroys them)."""
         provider = provider_from_settings(self.d.settings, self.d.http) if self.d.http else None
@@ -469,6 +494,10 @@ class AgentRunner:
             if prior
             else ""
         )
+        pull = await self._session_pull(ref)
+        if pull:
+            opened = json.dumps({"repo": pull["repo"], "number": pull["number"]})
+            current_plan += f"\n<pull_request>{opened}</pull_request>"
         try:
             result = await self.d.gateway.complete(
                 self._call(ref, "classify"),
@@ -612,53 +641,74 @@ class AgentRunner:
         """The tool loop of an isolated subagent: only ``tools`` (the last one is ``submit_findings``),
         every call through the policy, bounded rounds and tokens. ``seen`` collects each tool result
         for checks in code."""
-        allowed_names = {t["name"] for t in tools}
         denied: list[str] = []
         read: list[str] = []
-        used = 0
         try:
-            for round_no in range(MAX_GATHER_ROUNDS + 1):
-                force = round_no == MAX_GATHER_ROUNDS or used > STEP_TOKEN_CAP
-                result = await self.d.gateway.complete(
-                    self._call(ref, purpose),
-                    as_tier(tier),
-                    system=system,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice={"type": "tool", "name": "submit_findings"} if force else {"type": "auto"},
-                    max_tokens=2500,
-                )
-                used += result.usage.counted
-                calls = result.tool_uses()
-                submitted = next((c for c in calls if c.get("name") == "submit_findings"), None)
-                if submitted is not None:
-                    return self._findings(submitted.get("input") or {}, refs, denied, read)
-                if not calls:  # the model answered in prose: ask for the structured findings
-                    messages += [
-                        {"role": "assistant", "content": result.content or [{"type": "text", "text": "..."}]},
-                        {"role": "user", "content": "Call submit_findings now."},
-                    ]
-                    continue
-                results = []
-                for call in calls:
-                    text, is_error = await self._run_tool(call, allowed_names, executor, denied, read, seen)
-                    results.append(
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": call["id"],
-                            "content": text,
-                            "is_error": is_error,
-                        }
-                    )
-                messages += [
-                    {"role": "assistant", "content": result.content},
-                    {"role": "user", "content": results},
-                ]
+            raw = await self._tool_loop(
+                ref, tier, executor, tools, system, messages, "submit_findings", purpose, denied, read, seen
+            )
         except BudgetExceededError as exc:
             return Findings([], denied, read, stopped=str(exc))
-        return Findings(
-            [], [*denied, "The search ended before findings were submitted."], read
-        )  # pragma: no cover
+        if raw is None:  # pragma: no cover - the last round forces the submission
+            return Findings([], [*denied, "The search ended before findings were submitted."], read)
+        return self._findings(raw, refs, denied, read)
+
+    async def _tool_loop(
+        self,
+        ref: TaskRef,
+        tier: str,
+        executor: ToolExecutor,
+        tools: list[dict[str, Any]],
+        system: list[dict[str, Any]],
+        messages: list[dict[str, Any]],
+        submit: str,
+        purpose: str,
+        denied: list[str],
+        read: list[str],
+        seen: list[tuple[str, ExecResult]] | None = None,
+        rounds: int = MAX_GATHER_ROUNDS,
+        token_cap: int = STEP_TOKEN_CAP,
+        max_tokens: int = 2500,
+    ) -> dict[str, Any] | None:
+        """Model and tools in turn until the model calls ``submit`` (forced on the last round or past
+        the token cap): only ``tools``, every call through the policy. Returns what was submitted.
+        ``denied`` and ``read`` collect what could not be read and what was."""
+        allowed_names = {t["name"] for t in tools}
+        used = 0
+        for round_no in range(rounds + 1):
+            force = round_no == rounds or used > token_cap
+            result = await self.d.gateway.complete(
+                self._call(ref, purpose),
+                as_tier(tier),
+                system=system,
+                messages=messages,
+                tools=tools,
+                tool_choice={"type": "tool", "name": submit} if force else {"type": "auto"},
+                max_tokens=max_tokens,
+            )
+            used += result.usage.counted
+            calls = result.tool_uses()
+            submitted = next((c for c in calls if c.get("name") == submit), None)
+            if submitted is not None:
+                raw = submitted.get("input")
+                return raw if isinstance(raw, dict) else {}
+            if not calls:  # the model answered in prose: ask for the structured result
+                messages += [
+                    {"role": "assistant", "content": result.content or [{"type": "text", "text": "..."}]},
+                    {"role": "user", "content": f"Call {submit} now."},
+                ]
+                continue
+            results = []
+            for call in calls:
+                text, is_error = await self._run_tool(call, allowed_names, executor, denied, read, seen)
+                results.append(
+                    {"type": "tool_result", "tool_use_id": call["id"], "content": text, "is_error": is_error}
+                )
+            messages += [
+                {"role": "assistant", "content": result.content},
+                {"role": "user", "content": results},
+            ]
+        return None  # pragma: no cover
 
     async def _run_tool(
         self,
@@ -722,6 +772,50 @@ class AgentRunner:
         self, ref: TaskRef, u: Understanding, case: CaseFile, findings: list[Findings], tier: str
     ) -> Composed:
         return await Investigation(self).plan(ref, u, case, findings, tier)
+
+    # ------------------------------------------------------------------ implement
+
+    async def prepare_change(self, ref: TaskRef, u: Understanding) -> ChangeCase:
+        return await Implementation(self).prepare(ref, u)
+
+    async def implement(
+        self, ref: TaskRef, u: Understanding, case: ChangeCase, tier: str, feedback: dict[str, Any]
+    ) -> Implemented:
+        return await Implementation(self).implement(ref, u, case, tier, feedback)
+
+    async def verify_change(self, ref: TaskRef, u: Understanding, case: ChangeCase) -> Verification:
+        return await Implementation(self).verify(ref, u, case)
+
+    async def review_change(
+        self, ref: TaskRef, u: Understanding, case: ChangeCase, tier: str
+    ) -> ReviewResult:
+        return await Implementation(self).review(ref, u, case, tier)
+
+    async def export_change(
+        self,
+        ref: TaskRef,
+        u: Understanding,
+        case: ChangeCase,
+        verification: Verification,
+        review: ReviewResult | None,
+        implemented: Implemented,
+    ) -> Exported:
+        return await Implementation(self).export(ref, u, case, verification, review, implemented)
+
+    async def report_change(
+        self,
+        ref: TaskRef,
+        u: Understanding,
+        case: ChangeCase,
+        attempts: list[Implemented],
+        verification: Verification | None,
+        review: ReviewResult | None,
+        exported: Exported | None,
+        outcome: ActionOutcome | None,
+    ) -> Composed:
+        return await Implementation(self).report(
+            ref, u, case, attempts, verification, review, exported, outcome
+        )
 
     # ------------------------------------------------------------------ plan
 
@@ -983,6 +1077,8 @@ class AgentRunner:
     def _preview(action: PlannedAction, args: dict[str, Any], target: Target | None) -> str:
         if action.tool == "jira":
             return tickets.preview(action, args)
+        if action.tool == "github":
+            return f"{action.summary}:\n" + "\n".join(f"> {escape(e)}" for e in action.evidence[:8])
         where = f"#{target.name}" if target else str(args.get("channel"))
         text = str(args.get("text") or "")
         quoted = "\n".join(f"> {line}" for line in text[:700].splitlines())
@@ -1106,6 +1202,21 @@ class AgentRunner:
             )
         if result.is_error:
             return ActionOutcome("failed", f"{action.summary}: {result.text}")
+        if name == tool_name("github", "push_changes") and result.data.get("number"):
+            # The pull request belongs to this task: GitHub's webhooks find the thread through it.
+            async with tenant_tx(self.d.pool, ref.org_id) as conn:
+                await conn.execute(
+                    "insert into app.task_links (org_id, task_id, kind, external_id, url) "
+                    "values (%s, %s, 'pull_request', %s, %s) on conflict do nothing",
+                    (
+                        ref.org_id,
+                        ref.task_id,
+                        f"{result.data['repo']}#{result.data['number']}",
+                        result.data["url"],
+                    ),
+                )
+            await self.step(ref, "act", "completed", action.summary)
+            return ActionOutcome("done", f"Opened {result.data['url']}", result=result.data)
         await self.step(ref, "act", "completed", action.summary)
         if result.data.get("url") and result.data.get("key"):
             issue = tickets.issue_link(result.data)

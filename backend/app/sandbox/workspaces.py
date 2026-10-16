@@ -5,6 +5,9 @@ it pins the base commit, has the platform fetch the repository archive at that c
 caller's read only credential, outside the sandbox) and uploads it. Others wait until the row is
 ready. A failed build can be retried by the next caller. The task's end destroys its sandboxes; the
 maintenance job destroys what expired.
+
+A workspace that will be changed (``baseline=True``) gets a git baseline commit of exactly what was
+uploaded, so the change can later be exported as the diff against it; tool caches are excluded.
 """
 
 import asyncio
@@ -21,6 +24,21 @@ from app.sandbox import Limits, SandboxError, SandboxProvider
 
 log = logging.getLogger(__name__)
 WAIT_SECONDS = 120.0
+EXCLUDED = (
+    ".pytest_cache/",
+    "__pycache__/",
+    "*.pyc",
+    ".mypy_cache/",
+    ".ruff_cache/",
+    "node_modules/",
+    ".agent/",
+)
+BASELINE = (
+    "git init -q && git config user.name agent && git config user.email agent@sandbox.invalid "
+    "&& git config core.fileMode true && printf '%s\\n' "
+    + " ".join(f"'{p}'" for p in EXCLUDED)
+    + " >> .git/info/exclude && git add -A -f && git commit -q --no-verify --allow-empty -m baseline"
+)
 
 
 @dataclass(frozen=True)
@@ -53,13 +71,15 @@ class Workspaces:
         repository: str,
         head: Callable[[], Awaitable[str]],
         archive: Callable[[str], Awaitable[bytes]],
+        baseline: bool = False,
     ) -> Workspace:
-        """The task's sandbox for a repository, built on first use."""
+        """The task's sandbox for a repository, built on first use (with a baseline commit when it
+        will be changed)."""
         deadline = time.monotonic() + WAIT_SECONDS
         while True:
             claimed = await self._claim(org_id, task_id, repository)
             if claimed:
-                return await self._build(org_id, claimed, repository, head, archive)
+                return await self._build(org_id, claimed, repository, head, archive, baseline)
             row = await self._row(org_id, task_id, repository)
             if row is None:
                 continue  # removed meanwhile: claim again
@@ -71,11 +91,18 @@ class Workspaces:
             if status == "failed":
                 again = await self._retry(org_id, task_id, repository)
                 if again:
-                    return await self._build(org_id, again, repository, head, archive)
+                    return await self._build(org_id, again, repository, head, archive, baseline)
                 continue  # someone else retries it
             if time.monotonic() > deadline:
                 raise SandboxError("the sandbox is taking too long to prepare")
             await asyncio.sleep(0.5)
+
+    async def find(self, org_id: UUID, task_id: UUID, repository: str) -> Workspace | None:
+        """The task's ready sandbox for a repository, if it has one (never builds one)."""
+        row = await self._row(org_id, task_id, repository)
+        if row is None or row[0] != "ready":
+            return None
+        return Workspace(row[1], repository, row[2], root_of(repository))
 
     async def _claim(self, org_id: UUID, task_id: UUID, repository: str) -> UUID | None:
         async with tenant_tx(self.pool, org_id) as conn:
@@ -122,6 +149,7 @@ class Workspaces:
         repository: str,
         head: Callable[[], Awaitable[str]],
         archive: Callable[[str], Awaitable[bytes]],
+        baseline: bool = False,
     ) -> Workspace:
         started = time.monotonic()
         provider_id: str | None = None
@@ -134,6 +162,10 @@ class Workspaces:
             files = await self.provider.upload(
                 provider_id, await archive(base_sha), root_of(repository), strip=1
             )
+            if baseline:
+                ran = await self.provider.exec(provider_id, BASELINE, cwd=root_of(repository), seconds=120)
+                if not ran.ok:
+                    raise SandboxError("the workspace's baseline commit failed")
         except Exception as exc:
             reason = (
                 str(exc)

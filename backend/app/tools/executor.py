@@ -47,7 +47,7 @@ class ToolExecutor:
 
     async def credential_for(self, integration: str, mode: str) -> Credential | None:
         """The credential a mode names. Slack uses the bot token, the catalog none (None here)."""
-        if integration in ("slack", "catalog"):
+        if integration in ("slack", "catalog", "sandbox"):
             return None
         key = f"credential:{integration}:{'user' if mode == 'user_required' else 'org'}"
         cached: Credential | None = self.ctx.cache.get(key)
@@ -134,6 +134,7 @@ async def build_registry(ctx: ToolContext, bot_user_id: str | None, executor_fac
     from app.tools.jira import JiraAdapter
     from app.tools.logs import LogsAdapter
     from app.tools.mcp import McpAdapter
+    from app.tools.sandbox import SandboxAdapter
     from app.tools.slack import SlackAdapter
 
     registry = Registry()
@@ -160,4 +161,6 @@ async def build_registry(ctx: ToolContext, bot_user_id: str | None, executor_fac
             )
         elif kind == "custom_mcp" and approved and config.get("url"):
             registry.register(McpAdapter(key, str(config["url"]), config.get("tools") or [], "org"))
+    if "github" in registry.adapters and settings is not None and settings.sandbox_url:
+        registry.register(SandboxAdapter())  # working copies of the org's repositories
     return registry

@@ -114,3 +114,18 @@ class ObjectStore:
             return True
         except (ClientError, BotoCoreError):
             return False
+
+
+def store_from_settings(settings: Any) -> ObjectStore | None:
+    """The configured store, or None when no bucket is set (large artifacts are then refused)."""
+    if settings is None or not settings.s3_bucket:
+        return None
+    return ObjectStore(
+        settings.s3_bucket,
+        endpoint_url=settings.s3_endpoint_url,
+        region=settings.s3_region,
+        access_key_id=settings.s3_access_key_id.get_secret_value() if settings.s3_access_key_id else None,
+        secret_access_key=(
+            settings.s3_secret_access_key.get_secret_value() if settings.s3_secret_access_key else None
+        ),
+    )

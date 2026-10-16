@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     github_app_private_key: SecretStr | None = None
     github_client_id: str | None = None
     github_client_secret: SecretStr | None = None
+    github_webhook_secret: SecretStr | None = None  # verifies X-Hub-Signature-256 on /webhooks/github
     google_auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
     google_token_url: str = "https://oauth2.googleapis.com/token"  # noqa: S105 (a URL, not a secret)
     google_revoke_url: str = "https://oauth2.googleapis.com/revoke"
@@ -180,6 +181,7 @@ class Settings(BaseSettings):
         "github_app_private_key",
         "github_client_id",
         "github_client_secret",
+        "github_webhook_secret",
         "google_mcp_url",
         "google_client_id",
         "google_client_secret",

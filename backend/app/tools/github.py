@@ -17,6 +17,7 @@ from app.policy import Member
 from app.policy.redaction import redact
 from app.sandbox import SandboxError, SandboxProvider, provider_from_settings
 from app.tools.base import Operation, Source, Target, ToolContext, ToolResult, cap
+from app.tools.github_changes import CHANGE_OPERATIONS, ChangeOperations, GitHubWriteError
 from app.tools.github_code import CODE_OPERATIONS, CodeOperations
 from app.tools.http import request
 from app.vault_service import Credential
@@ -52,6 +53,7 @@ OPERATIONS = {
 
 
 OPERATIONS.update(CODE_OPERATIONS)
+OPERATIONS.update(CHANGE_OPERATIONS)
 
 
 class GitHubAdapter:
@@ -61,6 +63,7 @@ class GitHubAdapter:
         self.api_url = api_url.rstrip("/")
         self.operations = OPERATIONS
         self.code = CodeOperations(self)
+        self.changes = ChangeOperations(self)
 
     def sandbox_provider(self, ctx: ToolContext) -> SandboxProvider:
         provider = provider_from_settings(ctx.settings, ctx.http)
@@ -157,6 +160,12 @@ class GitHubAdapter:
                 return await self.code.commit(ctx, credential, repo, str(args.get("sha") or "").strip())
             if operation == "list_deployments":
                 return await self.code.deployments(ctx, credential, repo, args)
+            if operation == "prepare_workspace":
+                return await self.changes.prepare(ctx, credential, repo, args)
+            if operation == "get_pull_request":
+                return await self.changes.pull_request(ctx, credential, repo, args)
+            if operation == "push_changes":
+                return await self.changes.push(ctx, credential, repo, args)
             if operation == "get_codeowners":
                 for path in CODEOWNERS_PATHS:
                     result = await self._file(ctx, credential, repo, path, None)
@@ -164,7 +173,7 @@ class GitHubAdapter:
                         result.data["rules"] = parse_codeowners(str(result.data.pop("content", "")))
                         return result
                 return ToolResult(f"{repo} has no CODEOWNERS file.", is_error=True)
-        except GitHubError as exc:
+        except (GitHubError, GitHubWriteError) as exc:
             return ToolResult(f"GitHub refused the request: {exc}", is_error=True)
         except SandboxError as exc:
             return ToolResult(f"Code is not available: {exc}.", is_error=True)
