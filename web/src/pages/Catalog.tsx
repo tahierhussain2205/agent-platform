@@ -60,6 +60,7 @@ function Links({ service }: { service: CatalogService }) {
     service.jira_project &&
       `Jira ${service.jira_project}${service.jira_component ? ` / ${service.jira_component}` : ''}`,
     service.paths.length > 0 && `Paths ${service.paths.join(', ')}`,
+    service.log_source && `Logs ${service.log_source.project}`,
     service.channels.length > 0 &&
       `Channels ${service.channels.map((c) => `#${c.name}`).join(', ')}`,
   ].filter(Boolean)
@@ -147,6 +148,10 @@ interface FormValue {
   paths: string
   owners: string[]
   channels: string[]
+  log_project: string
+  log_resource: string
+  log_label: string
+  log_value: string
 }
 
 function initial(service?: CatalogService): FormValue {
@@ -159,6 +164,10 @@ function initial(service?: CatalogService): FormValue {
     paths: (service?.paths ?? []).join('\n'),
     owners: (service?.owners ?? []).map((o) => o.membership_id),
     channels: (service?.channels ?? []).map((c) => c.id),
+    log_project: service?.log_source?.project ?? '',
+    log_resource: service?.log_source?.resource_type ?? '',
+    log_label: service?.log_source?.label ?? '',
+    log_value: service?.log_source?.value ?? '',
   }
 }
 
@@ -189,6 +198,14 @@ function ServiceForm({
           paths: v.paths.split('\n'),
           owners: v.owners,
           channels: v.channels,
+          log_source: v.log_project
+            ? {
+                project: v.log_project.trim(),
+                ...(v.log_resource.trim() ? { resource_type: v.log_resource.trim() } : {}),
+                ...(v.log_label.trim() ? { label: v.log_label.trim() } : {}),
+                ...(v.log_value.trim() ? { value: v.log_value.trim() } : {}),
+              }
+            : null,
         }),
       }),
     ['catalog'],
@@ -261,6 +278,43 @@ function ServiceForm({
           onChange={(e) => set({ paths: e.target.value })}
         />
       </Field>
+      <fieldset className="space-y-2">
+        <legend className="text-sm font-medium text-slate-700">Logs (Google Cloud Logging)</legend>
+        <div className="grid grid-cols-2 gap-3">
+          <Field
+            label="Log project"
+            htmlFor="svc-log-project"
+            hint="The Google Cloud project, e.g. acme-prod"
+          >
+            <Input
+              id="svc-log-project"
+              value={value.log_project}
+              onChange={(e) => set({ log_project: e.target.value })}
+            />
+          </Field>
+          <Field label="Resource type" htmlFor="svc-log-resource" hint="e.g. cloud_run_revision">
+            <Input
+              id="svc-log-resource"
+              value={value.log_resource}
+              onChange={(e) => set({ log_resource: e.target.value })}
+            />
+          </Field>
+          <Field label="Service label" htmlFor="svc-log-label" hint="Default: service_name">
+            <Input
+              id="svc-log-label"
+              value={value.log_label}
+              onChange={(e) => set({ log_label: e.target.value })}
+            />
+          </Field>
+          <Field label="Label value" htmlFor="svc-log-value" hint="Default: the service's name">
+            <Input
+              id="svc-log-value"
+              value={value.log_value}
+              onChange={(e) => set({ log_value: e.target.value })}
+            />
+          </Field>
+        </div>
+      </fieldset>
       <fieldset>
         <legend className="text-sm font-medium text-slate-700">Owners</legend>
         <div className="mt-1 max-h-40 space-y-1 overflow-y-auto">

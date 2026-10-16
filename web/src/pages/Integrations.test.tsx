@@ -337,4 +337,69 @@ describe('Integrations page', () => {
     expect(await within(jira).findByText('Approve it first.')).toBeInTheDocument()
     expect(within(jira).getByLabelText('Enable Jira')).not.toBeChecked()
   })
+
+  it('connects Cloud Logging with a service account key file', async () => {
+    let sent: unknown = null
+    let connected = false
+    const logs = () =>
+      integration({
+        key: 'google_cloud_logging',
+        title: 'Google Cloud Logging',
+        auth: 'service_account',
+        user_links: false,
+        enabled: connected,
+        connection: connected ? connection('agent-reader@acme-prod.iam.gserviceaccount.com') : null,
+      })
+    const mock = mockFetch({
+      'GET /api/me': () => ({ body: me('admin') }),
+      'GET /api/integrations': () => ({ body: { integrations: [logs()] } }),
+      'POST /api/integrations/google_cloud_logging/service-account': (init) => {
+        sent = JSON.parse(String(init?.body))
+        connected = true
+        return {
+          body: {
+            key: 'google_cloud_logging',
+            account: 'agent-reader@acme-prod.iam.gserviceaccount.com',
+            project_id: 'acme-prod',
+          },
+        }
+      },
+    })
+    vi.stubGlobal('fetch', mock.fn)
+    renderRoutes(routes, { path: '/integrations' })
+    const card = await screen.findByRole('region', { name: 'Google Cloud Logging' })
+    expect(within(card).queryByRole('button', { name: /Connect Google/ })).not.toBeInTheDocument()
+    const connect = within(card).getByRole('button', { name: 'Connect' })
+    expect(connect).toBeDisabled()
+    const key = '{"type": "service_account", "client_email": "x"}'
+    await userEvent.upload(
+      within(card).getByLabelText('Service account key file'),
+      new File([key], 'key.json', { type: 'application/json' }),
+    )
+    await userEvent.click(connect)
+    expect(
+      await within(card).findByText(
+        'Connected as agent-reader@acme-prod.iam.gserviceaccount.com (project acme-prod).',
+      ),
+    ).toBeInTheDocument()
+    expect(sent).toEqual({ key_json: key })
+    expect(await within(card).findByRole('button', { name: 'Replace key' })).toBeInTheDocument()
+    expect(within(card).getByTestId('google_cloud_logging-connection')).toHaveTextContent(
+      'connected as agent-reader@acme-prod.iam.gserviceaccount.com',
+    )
+  })
+
+  it('does not offer members the key upload', async () => {
+    stub('user', [
+      integration({
+        key: 'google_cloud_logging',
+        title: 'Google Cloud Logging',
+        auth: 'service_account',
+        user_links: false,
+      }),
+    ])
+    renderRoutes(routes, { path: '/integrations' })
+    const card = await screen.findByRole('region', { name: 'Google Cloud Logging' })
+    expect(within(card).queryByLabelText('Service account key file')).not.toBeInTheDocument()
+  })
 })

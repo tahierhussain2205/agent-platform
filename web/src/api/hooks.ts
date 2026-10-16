@@ -150,7 +150,7 @@ export interface Integration {
   key: string
   title: string
   kind: 'native' | 'vendor_mcp' | 'custom_mcp'
-  auth: 'slack' | 'oauth2' | 'github_app' | 'api_key' | 'none'
+  auth: 'slack' | 'oauth2' | 'github_app' | 'service_account' | 'api_key' | 'none'
   description: string
   user_links: boolean
   enabled: boolean
@@ -205,6 +205,14 @@ export interface CatalogOwner {
   active: boolean
 }
 
+export interface LogSource {
+  provider: 'google_cloud_logging'
+  project: string
+  resource_type?: string
+  label?: string
+  value?: string
+}
+
 export interface CatalogService {
   id: string
   name: string
@@ -215,6 +223,7 @@ export interface CatalogService {
   jira_component: string | null
   paths: string[]
   evidence: string[]
+  log_source: LogSource | null
   confirmed_at: string | null
   confirmed_by: string | null
   created_at: string

@@ -115,6 +115,55 @@ function account(connection: IntegrationConnection) {
   return connection.external_account_id ?? 'an account'
 }
 
+/** Connect with a service account key file: read in the browser, sent once to the API, kept by
+ * the vault. The page never shows the key again. */
+function KeyUpload({ integration }: { integration: Integration }) {
+  const { key, connection } = integration
+  const [file, setFile] = useState<File | null>(null)
+  const upload = useApiMutation<File, { account: string; project_id: string | null }>(
+    async (api, chosen) =>
+      api(`/api/integrations/${key}/service-account`, {
+        method: 'POST',
+        ...json({ key_json: await chosen.text() }),
+      }),
+    ['integrations'],
+  )
+  return (
+    <form
+      className="flex flex-wrap items-end gap-2"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (file) upload.mutate(file, { onSuccess: () => setFile(null) })
+      }}
+    >
+      <Field
+        label="Service account key file"
+        htmlFor={`${key}-key`}
+        hint="A JSON key with read access to logs"
+      >
+        <Input
+          id={`${key}-key`}
+          type="file"
+          accept="application/json,.json"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+        />
+      </Field>
+      <Button type="submit" busy={upload.isPending} disabled={!file}>
+        {connection ? 'Replace key' : 'Connect'}
+      </Button>
+      {upload.data && (
+        <p className="w-full text-sm text-green-700">
+          Connected as {upload.data.account}
+          {upload.data.project_id ? ` (project ${upload.data.project_id})` : ''}.
+        </p>
+      )}
+      <div className="w-full">
+        <ErrorNotice error={upload.error} onDismiss={() => upload.reset()} />
+      </div>
+    </form>
+  )
+}
+
 function OrgConnection({ integration, isAdmin }: { integration: Integration; isAdmin: boolean }) {
   const { key, title, connection } = integration
   const connect = useRedirect(`/api/integrations/${key}/connect`)
@@ -170,6 +219,7 @@ function OrgConnection({ integration, isAdmin }: { integration: Integration; isA
           </div>
         )}
       </div>
+      {isAdmin && integration.auth === 'service_account' && <KeyUpload integration={integration} />}
       <Dialog open={confirm} title={`Disconnect ${title}`} onClose={() => setConfirm(false)}>
         <div className="space-y-4">
           <p className="text-sm text-slate-700">
@@ -408,7 +458,7 @@ function IntegrationCard({ integration, isAdmin }: { integration: Integration; i
   const health = HEALTH[integration.health]
   const custom = integration.kind === 'custom_mcp'
   const slack = integration.auth === 'slack'
-  const connectable = integration.auth === 'oauth2' || integration.auth === 'github_app'
+  const connectable = ['oauth2', 'github_app', 'service_account'].includes(integration.auth)
   const result = check.data ?? approve.data
   return (
     <section

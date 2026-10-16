@@ -38,6 +38,7 @@ function service(overrides: Partial<CatalogService> = {}): CatalogService {
     jira_component: 'Checkout',
     paths: ['/src/pricing/'],
     evidence: [],
+    log_source: { provider: 'google_cloud_logging', project: 'acme-prod' },
     confirmed_at: '2026-10-16T00:00:00Z',
     confirmed_by: 'alice@acme.test',
     created_at: '2026-10-16T00:00:00Z',
@@ -199,6 +200,7 @@ describe('Catalog page', () => {
       paths: ['/src/pricing/'],
       owners: ['m-quinn'],
       channels: ['c-bugs'],
+      log_source: { project: 'acme-prod' },
     })
   })
 
@@ -220,5 +222,27 @@ describe('Catalog page', () => {
     expect(
       await within(dialog).findByText('Another service in the catalog has this name.'),
     ).toBeInTheDocument()
+  })
+
+  it('sets and clears a log source', async () => {
+    const sent: unknown[] = []
+    stub('admin', [service({ log_source: null })], {
+      'PATCH /api/catalog/s-cart': (init?: RequestInit) => {
+        sent.push(JSON.parse(String(init?.body)))
+        return { body: {} }
+      },
+    })
+    renderRoutes(routes, { path: '/catalog' })
+    const row = await screen.findByRole('listitem', { name: 'cart-service' })
+    expect(within(row).queryByText(/Logs /)).not.toBeInTheDocument()
+    await userEvent.click(within(row).getByRole('button', { name: 'Edit' }))
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.type(within(dialog).getByLabelText('Log project'), 'acme-prod')
+    await userEvent.type(within(dialog).getByLabelText('Resource type'), 'cloud_run_revision')
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    expect(sent[0]).toMatchObject({
+      log_source: { project: 'acme-prod', resource_type: 'cloud_run_revision' },
+    })
   })
 })
