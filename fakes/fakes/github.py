@@ -1,0 +1,339 @@
+"""GitHub stand-in: a GitHub App and the REST subset the platform reads.
+
+- App installation: ``/github/apps/{slug}/installations/new`` (pick the account and the GitHub user
+  installing it) redirects to the app's setup URL with ``installation_id``, ``setup_action`` and a
+  user authorization ``code`` (GitHub's "request user authorization during installation").
+- Installation tokens: ``POST /github/api/app/installations/{id}/access_tokens`` with an RS256 app
+  JWT verified against the configured public key; one hour tokens.
+- User OAuth (user-to-server): ``/github/login/oauth/authorize`` and ``/access_token`` (expiring
+  user tokens with rotating refresh tokens), ``DELETE /applications/{client_id}/token``.
+- REST: ``/installation/repositories``, ``/user``, ``/user/installations``,
+  ``/repos/{o}/{r}/contents/{path}``, ``/repos/{o}/{r}/collaborators/{u}/permission``.
+"""
+
+import base64
+import secrets
+import time
+from datetime import UTC, datetime
+from typing import Any
+
+import jwt
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+
+from fakes import oauthkit
+from fakes.config import Config
+from fakes.store import Store
+
+PERMISSION_RANK = {"none": 0, "read": 1, "triage": 2, "write": 3, "maintain": 4, "admin": 5}
+
+
+def seed() -> dict[str, Any]:
+    users = {
+        "alice-gh": {"login": "alice-gh", "id": 1001, "email": "alice@acme.test", "orgs": ["acme"]},
+        "bob-gh": {"login": "bob-gh", "id": 1002, "email": "bob@acme.test", "orgs": ["acme"]},
+        "quinn-gh": {"login": "quinn-gh", "id": 1003, "email": "quinn@acme.test", "orgs": ["acme"]},
+        "dave-gh": {"login": "dave-gh", "id": 1004, "email": "dave@globex.test", "orgs": ["globex"]},
+    }
+    repos = {
+        "acme/cart-service": {
+            "private": True, "access": {"alice-gh": "admin", "bob-gh": "write", "quinn-gh": "read"},
+            "files": {
+                "README.md": "# cart-service\n\nPrices carts and applies discounts.\n",
+                "CODEOWNERS": "* @acme/platform\n/src/pricing/ @bob-gh\n/docs/ @quinn-gh\n",
+                "src/pricing/cart.py": "def total(items):\n    # BUG: assumes at most 19 items\n    return sum(i.price for i in items[:19])\n",
+            },
+        },
+        "acme/web-app": {
+            "private": False, "access": {"alice-gh": "admin", "quinn-gh": "write"},
+            "files": {
+                "README.md": "# web-app\n\nThe customer facing website.\n",
+                ".github/CODEOWNERS": "* @quinn-gh\n/search/ @alice-gh\n",
+            },
+        },
+        "acme/infra": {
+            "private": True, "access": {"alice-gh": "admin"},
+            "files": {"README.md": "# infra\n\nTerraform for production.\n", "terraform/main.tf": 'resource "aws_db_instance" "main" {}\n'},
+        },
+        "globex/payments": {
+            "private": True, "access": {"dave-gh": "admin"},
+            "files": {"README.md": "# payments\n\nGlobex payment webhooks.\n", "CODEOWNERS": "* @dave-gh\n"},
+        },
+    }  # fmt: skip
+    return {
+        "users": users,
+        "repos": repos,
+        "installations": {},
+        "codes": {},
+        "access": {},
+        "refresh": {},
+        "install_tokens": {},
+    }
+
+
+class GitHub:
+    def __init__(self, config: Config, store: Store) -> None:
+        self.config = config
+        self.store = store
+
+    @property
+    def s(self) -> dict[str, Any]:
+        state: dict[str, Any] = self.store.data["github"]
+        return state
+
+    def reset(self) -> None:
+        self.store.data["github"] = seed()
+
+    def permission(self, login: str, repo: str) -> str:
+        r = self.s["repos"].get(repo)
+        if r is None:
+            return "none"
+        if login in r["access"]:
+            return str(r["access"][login])
+        owner = repo.split("/")[0]
+        if not r["private"] and owner in self.s["users"].get(login, {}).get("orgs", []):
+            return "read"
+        return "none"
+
+    def repo_json(self, name: str) -> dict[str, Any]:
+        r = self.s["repos"][name]
+        owner, short = name.split("/")
+        return {
+            "id": abs(sum(map(ord, name))), "name": short, "full_name": name, "private": r["private"],
+            "owner": {"login": owner}, "html_url": f"https://github.com/{name}", "default_branch": "main",
+            "description": r["files"].get("README.md", "").splitlines()[-1] if r["files"].get("README.md") else "",
+        }  # fmt: skip
+
+
+def gh_error(status: int, message: str) -> JSONResponse:
+    return JSONResponse({"message": message, "documentation_url": "https://docs.github.com/rest"}, status_code=status)
+
+
+def build_router(gh: GitHub) -> APIRouter:
+    router = APIRouter()
+    cfg = gh.config
+
+    def accounts_page(title: str, action: str, hidden: dict[str, str], with_org: bool) -> str:
+        options = []
+        for user in gh.s["users"].values():
+            if with_org:
+                options += [(f"{user['login']}|{org}", f"{user['login']} installing on {org}") for org in user["orgs"]]
+            else:
+                options.append((user["login"], f"{user['login']} ({user['email']})"))
+        return oauthkit.consent_page(title, action, hidden, options, "contents: read, metadata: read")
+
+    @router.get("/github/apps/{slug}/installations/new")
+    async def install_page(request: Request, slug: str) -> HTMLResponse:
+        if slug != cfg.github_app_slug:
+            return HTMLResponse("Not Found", status_code=404)
+        hidden = {"state": request.query_params.get("state", "")}
+        return HTMLResponse(accounts_page(f"Install {slug}", f"/github/apps/{slug}/installations/new", hidden, True))
+
+    @router.post("/github/apps/{slug}/installations/new")
+    async def install(request: Request, slug: str) -> RedirectResponse:
+        f = await request.form()
+        state = str(f.get("state", ""))
+        if f.get("decision") != "allow":
+            return RedirectResponse(
+                oauthkit.redirect_to(cfg.github_setup_url, state=state, error="access_denied"), status_code=302
+            )
+        login, org = str(f.get("account", "")).split("|")
+        with gh.store.lock:
+            existing = next((i for i in gh.s["installations"].values() if i["account"] == org), None)
+            if existing is None:
+                existing = {"id": 70000 + len(gh.s["installations"]) + 1, "account": org}
+                gh.s["installations"][str(existing["id"])] = existing
+            code = oauthkit.new_code(gh.s["codes"], login=login, redirect_uri=cfg.github_setup_url)
+            gh.store.save()
+        return RedirectResponse(
+            oauthkit.redirect_to(
+                cfg.github_setup_url,
+                installation_id=str(existing["id"]),
+                setup_action="install",
+                code=code,
+                state=state,
+            ),
+            status_code=302,
+        )
+
+    @router.get("/github/login/oauth/authorize")
+    async def authorize(request: Request) -> HTMLResponse:
+        p = request.query_params
+        if p.get("client_id") != cfg.github_client_id:
+            return HTMLResponse("Unknown client_id", status_code=404)
+        hidden = {"state": p.get("state", ""), "redirect_uri": p.get("redirect_uri", "")}
+        return HTMLResponse(
+            accounts_page("Authorize the agent platform", "/github/login/oauth/authorize", hidden, False)
+        )
+
+    @router.post("/github/login/oauth/authorize")
+    async def user_decide(request: Request) -> RedirectResponse:
+        f = await request.form()
+        uri, state = str(f.get("redirect_uri", "")), str(f.get("state", ""))
+        if f.get("decision") != "allow":
+            return RedirectResponse(oauthkit.redirect_to(uri, error="access_denied", state=state), status_code=302)
+        with gh.store.lock:
+            code = oauthkit.new_code(gh.s["codes"], login=str(f.get("account")), redirect_uri=uri)
+            gh.store.save()
+        return RedirectResponse(oauthkit.redirect_to(uri, code=code, state=state), status_code=302)
+
+    @router.post("/github/login/oauth/access_token")
+    async def access_token(request: Request) -> JSONResponse:
+        is_json = request.headers.get("content-type", "").startswith("application/json")
+        body: dict[str, Any] = await request.json() if is_json else dict(await request.form())
+        if body.get("client_id") != cfg.github_client_id or body.get("client_secret") != cfg.github_client_secret:
+            return JSONResponse({"error": "incorrect_client_credentials"})  # GitHub answers 200 with an error
+        with gh.store.lock:
+            if body.get("grant_type") == "refresh_token":
+                old = gh.s["refresh"].pop(str(body.get("refresh_token")), None)
+                if old is None:
+                    return JSONResponse(
+                        {"error": "bad_refresh_token", "error_description": "The refresh token is invalid."}
+                    )
+                login = old["login"]
+            else:
+                data = oauthkit.take_code(gh.s["codes"], str(body.get("code")))
+                if data is None or (body.get("redirect_uri") and data["redirect_uri"] != body.get("redirect_uri")):
+                    return JSONResponse(
+                        {
+                            "error": "bad_verification_code",
+                            "error_description": "The code passed is incorrect or expired.",
+                        }
+                    )
+                login = data["login"]
+            tokens = oauthkit.issue_tokens(gh.s, "gh", cfg.github_user_token_ttl, login=login)
+            gh.store.save()
+        return JSONResponse({**tokens, "refresh_token_expires_in": 15897600, "token_type": "bearer", "scope": ""})
+
+    def user_of(request: Request) -> dict[str, Any] | None:
+        return oauthkit.bearer(gh.s, request.headers.get("authorization"))
+
+    def installation_of(request: Request) -> dict[str, Any] | None:
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith(("bearer ", "token ")):
+            return None
+        record = gh.s["install_tokens"].get(auth.split(" ", 1)[1].strip())
+        if record is None or record["exp"] < time.time():
+            return None
+        return gh.s["installations"].get(str(record["installation"]))  # type: ignore[no-any-return]
+
+    @router.delete("/github/api/applications/{client_id}/token")
+    async def revoke(request: Request, client_id: str) -> Response:
+        auth = request.headers.get("authorization", "")
+        expected = base64.b64encode(f"{cfg.github_client_id}:{cfg.github_client_secret}".encode()).decode()
+        if client_id != cfg.github_client_id or auth != f"Basic {expected}":
+            return gh_error(404, "Not Found")
+        token = (await request.json()).get("access_token")
+        with gh.store.lock:
+            gone = gh.s["access"].pop(str(token), None)
+            if gone:
+                for key in [k for k, v in gh.s["refresh"].items() if v.get("login") == gone["login"]]:
+                    gh.s["refresh"].pop(key)
+            gh.store.save()
+        return Response(status_code=204) if gone else gh_error(404, "Not Found")
+
+    @router.post("/github/api/app/installations/{installation_id}/access_tokens")
+    async def installation_token(request: Request, installation_id: str) -> JSONResponse:
+        auth = request.headers.get("authorization", "")
+        if not auth.startswith("Bearer ") or not cfg.github_app_public_key:
+            return gh_error(401, "A JSON web token could not be decoded")
+        try:
+            claims = jwt.decode(
+                auth[7:], cfg.github_app_public_key, algorithms=["RS256"], options={"require": ["iat", "exp", "iss"]}
+            )
+        except jwt.PyJWTError as exc:
+            return gh_error(401, f"A JSON web token could not be decoded ({type(exc).__name__})")
+        if str(claims["iss"]) != cfg.github_app_id or claims["exp"] - claims["iat"] > 600 + 60:
+            return gh_error(401, "'Expiration time' claim ('exp') is too far in the future")
+        if installation_id not in gh.s["installations"]:
+            return gh_error(404, "Not Found")
+        token = f"ghs_{secrets.token_urlsafe(24)}"
+        expires = time.time() + 3600
+        with gh.store.lock:
+            gh.s["install_tokens"][token] = {"installation": installation_id, "exp": expires}
+            gh.store.save()
+        return JSONResponse(
+            {"token": token, "expires_at": datetime.fromtimestamp(expires, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "permissions": {"contents": "read", "metadata": "read"}, "repository_selection": "all"},
+            status_code=201,
+        )  # fmt: skip
+
+    @router.get("/github/api/installation/repositories")
+    async def installation_repos(request: Request) -> JSONResponse:
+        inst = installation_of(request)
+        if inst is None:
+            return gh_error(401, "Bad credentials")
+        names = sorted(n for n in gh.s["repos"] if n.split("/")[0] == inst["account"])
+        return JSONResponse({"total_count": len(names), "repositories": [gh.repo_json(n) for n in names]})
+
+    @router.get("/github/api/user")
+    async def user(request: Request) -> JSONResponse:
+        record = user_of(request)
+        if record is None:
+            return gh_error(401, "Bad credentials")
+        u = gh.s["users"][record["login"]]
+        return JSONResponse({"login": u["login"], "id": u["id"], "email": u["email"], "type": "User"})
+
+    @router.get("/github/api/user/installations")
+    async def user_installations(request: Request) -> JSONResponse:
+        record = user_of(request)
+        if record is None:
+            return gh_error(401, "Bad credentials")
+        orgs = gh.s["users"][record["login"]]["orgs"]
+        mine = [
+            {"id": i["id"], "account": {"login": i["account"]}}
+            for i in gh.s["installations"].values()
+            if i["account"] in orgs
+        ]
+        return JSONResponse({"total_count": len(mine), "installations": mine})
+
+    def caller(request: Request) -> tuple[str | None, dict[str, Any] | None]:
+        """(user login, installation) for whichever kind of token was sent."""
+        record = user_of(request)
+        return (record["login"], None) if record else (None, installation_of(request))
+
+    @router.get("/github/api/repos/{owner}/{repo}/contents/{path:path}")
+    async def contents(request: Request, owner: str, repo: str, path: str) -> JSONResponse:
+        login, inst = caller(request)
+        name = f"{owner}/{repo}"
+        r = gh.s["repos"].get(name)
+        allowed = r is not None and (
+            (inst is not None and inst["account"] == owner)
+            or (login is not None and gh.permission(login, name) != "none")
+        )
+        if login is None and inst is None:
+            return gh_error(401, "Bad credentials")
+        if not allowed or r is None:
+            return gh_error(404, "Not Found")
+        if path not in r["files"]:
+            return gh_error(404, "Not Found")
+        content = r["files"][path].encode()
+        return JSONResponse(
+            {"type": "file", "encoding": "base64", "size": len(content), "name": path.rsplit("/", 1)[-1], "path": path,
+             "content": base64.encodebytes(content).decode(), "sha": secrets.token_hex(20),
+             "html_url": f"https://github.com/{name}/blob/main/{path}"}
+        )  # fmt: skip
+
+    @router.get("/github/api/repos/{owner}/{repo}/collaborators/{username}/permission")
+    async def permission(request: Request, owner: str, repo: str, username: str) -> JSONResponse:
+        _, inst = caller(request)
+        name = f"{owner}/{repo}"
+        if inst is None or inst["account"] != owner or name not in gh.s["repos"]:
+            return gh_error(404, "Not Found")
+        if username not in gh.s["users"]:
+            return gh_error(404, "Not Found")
+        level = gh.permission(username, name)
+        return JSONResponse(
+            {"permission": "read" if level == "triage" else level, "role_name": level, "user": {"login": username}}
+        )
+
+    @router.post("/_admin/github/expire-tokens")
+    def expire() -> dict[str, int]:
+        with gh.store.lock:
+            n = oauthkit.expire_all(gh.s)
+            for record in gh.s["install_tokens"].values():
+                record["exp"] = 0
+            gh.store.save()
+        return {"expired": n}
+
+    return router

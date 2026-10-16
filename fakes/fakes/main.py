@@ -11,8 +11,14 @@ from starlette.middleware.cors import CORSMiddleware
 
 from fakes.anthropic import Anthropic
 from fakes.anthropic import build_router as build_anthropic_router
+from fakes.atlassian import Atlassian
+from fakes.atlassian import build_router as build_atlassian_router
 from fakes.clerk import Clerk, build_router, clerk_error_handler
 from fakes.config import Config
+from fakes.github import GitHub
+from fakes.github import build_router as build_github_router
+from fakes.google import Google
+from fakes.google import build_router as build_google_router
 from fakes.slack import Slack, SlackDeliverer
 from fakes.slack import build_admin_router as build_slack_admin_router
 from fakes.slack import build_router as build_slack_router
@@ -30,6 +36,9 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     slack_deliverer = SlackDeliverer(config.slack_signing_secret)
     slack = Slack(config, store, slack_deliverer)
     anthropic = Anthropic(config)
+    atlassian = Atlassian(config, store)
+    github = GitHub(config, store)
+    google = Google(config, store)
 
     def fixture() -> dict[str, Any] | None:
         return json.loads(config.seed_fixture.read_text()) if config.seed_fixture.exists() else None
@@ -41,10 +50,13 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
             clerk.reset(fixture(), keep_key=key)
             slack.reset(fixture())
         anthropic.reset()
+        atlassian.reset()
+        github.reset()
+        google.reset()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if not store.load() or "clerk" not in store.data or "slack" not in store.data:
+        if not store.load() or any(k not in store.data for k in ("clerk", "slack", "atlassian", "github", "google")):
             reset()
         deliverer.start()
         slack_deliverer.start()
@@ -65,6 +77,9 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     app.include_router(build_slack_router(slack))
     app.include_router(build_slack_admin_router(slack))
     app.include_router(build_anthropic_router(anthropic))
+    app.include_router(build_atlassian_router(atlassian))
+    app.include_router(build_github_router(github))
+    app.include_router(build_google_router(google))
     app.state.clerk = clerk
     app.state.deliverer = deliverer
     app.state.slack = slack
