@@ -89,6 +89,19 @@ def test_only_the_vault_reads_secrets_and_only_for_the_current_org(world: World)
             conn.execute("select count(*) from app.connection_secrets")
 
 
+def test_the_vault_records_the_account_but_never_moves_a_connection(world: World) -> None:
+    with tx(world.url, "app_vault", world.acme.id) as conn:
+        updated = conn.execute(
+            "update app.connections set external_account_id = 'cloud-1', external_account_label = 'Acme site'"
+        ).rowcount
+        assert updated >= 1
+        for column in ("integration_key", "scope", "membership_id", "org_id"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+                conn.execute(
+                    sql.SQL("update app.connections set {col} = {col}").format(col=sql.Identifier(column))
+                )
+
+
 def test_identity_sync_cannot_read_work_data(world: World) -> None:
     for table in ("tasks", "artifacts", "channels", "schedules"):
         with tx(world.url, "app_identity_sync") as conn, pytest.raises(psycopg.errors.InsufficientPrivilege):

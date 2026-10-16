@@ -112,7 +112,8 @@ function useRedirect(path: string) {
 }
 
 function account(connection: IntegrationConnection) {
-  return connection.external_account_id ?? 'an account'
+  const label = connection.external_account_label?.replace(/^https?:\/\//, '')
+  return label || connection.external_account_id || 'an account'
 }
 
 /** Connect with a service account key file: read in the browser, sent once to the API, kept by

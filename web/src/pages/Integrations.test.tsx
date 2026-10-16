@@ -19,10 +19,15 @@ const routes = [
   },
 ]
 
-const connection = (account: string, status: 'active' | 'expired' = 'active') => ({
+const connection = (
+  account: string,
+  status: 'active' | 'expired' = 'active',
+  label: string | null = null,
+) => ({
   id: `c-${account}`,
   status,
   external_account_id: account,
+  external_account_label: label,
   created_at: '2026-10-01T00:00:00Z',
   expires_at: null,
   last_refreshed_at: null,
@@ -146,6 +151,25 @@ describe('Integrations page', () => {
     await userEvent.click(within(jira).getByText(/Operations \(1/))
     expect(within(jira).queryByLabelText('Credential for search_issues')).not.toBeInTheDocument()
     expect(within(jira).getByLabelText('Allow search_issues')).toBeDisabled()
+  })
+
+  it('names accounts by their label when there is one', async () => {
+    stub('user', [
+      integration({
+        enabled: true,
+        health: 'ok',
+        connection: connection('f6b9594d-cloud', 'active', 'https://acme.atlassian.net'),
+        link: connection('712020:acc-bob', 'expired', 'Bob Builder'),
+      }),
+    ])
+    renderRoutes(routes, { path: '/integrations' })
+    const jira = await screen.findByRole('region', { name: 'Jira' })
+    expect(within(jira).getByTestId('jira-connection')).toHaveTextContent(
+      'connected as acme.atlassian.net',
+    )
+    expect(within(jira).getByTestId('jira-link')).toHaveTextContent(
+      'expired (Bob Builder), link it again',
+    )
   })
 
   it('starts the OAuth flow with the URL the API returns', async () => {

@@ -98,9 +98,9 @@ async def test_jira_exchange_credential_and_api_call(stack: Stack, env: Env) -> 
     conn = connection(env, acme, "jira")
     result = await stack.vault.exchange(acme.id, conn, "jira", await jira_code("acc-alice"), REDIRECT)
     assert result == {"external_account_id": "cloud-acme", "label": "https://acme.atlassian.net"}
-    row = sql(env, "select external_account_id, granted_scopes, expires_at > now(), last_refreshed_at is not null "
-                   "from app.connections where id = %s", (conn,))[0]  # fmt: skip
-    assert row == ("cloud-acme", ["read:jira-work"], True, True)
+    row = sql(env, "select external_account_id, external_account_label, granted_scopes, expires_at > now(), "
+                   "last_refreshed_at is not null from app.connections where id = %s", (conn,))[0]  # fmt: skip
+    assert row == ("cloud-acme", "https://acme.atlassian.net", ["read:jira-work"], True, True)
     stored = sql(env, "select ciphertext from app.connection_secrets where connection_id = %s", (conn,))[0][0]
     assert b"atl_" not in bytes(stored)  # encrypted at rest
     cred = await stack.vault.credential(acme.id, conn)
