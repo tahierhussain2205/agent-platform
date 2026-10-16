@@ -492,6 +492,16 @@ class Slack:
         page, meta = self._page(items, p)
         return {"channels": page, **meta}
 
+    def m_conversations_open(
+        self, team: dict[str, Any], bot: str, p: dict[str, Any], token: str | None
+    ) -> dict[str, Any]:
+        """The bot's DM with one person (Slack's ``users`` is a comma separated list; one is enough here)."""
+        users = [u for u in str(p.get("users") or "").split(",") if u]
+        if len(users) != 1:
+            raise SlackApiError("not_enough_users" if not users else "too_many_users")
+        im = self.im_for(team, users[0])
+        return {"channel": {"id": im["id"], "is_im": True, "user": users[0]}}
+
     def m_conversations_info(
         self, team: dict[str, Any], bot: str, p: dict[str, Any], token: str | None
     ) -> dict[str, Any]:

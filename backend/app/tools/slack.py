@@ -37,6 +37,8 @@ SKIP_SUBTYPES = {
 }
 MAX_THREADS = 10
 NAME_TTL = 3600
+MAX_STATS_MESSAGES = 10_000
+MAX_STATS_THREADS = 300
 
 OPERATIONS = {
     "list_channels": Operation(
@@ -79,6 +81,22 @@ OPERATIONS = {
             "required": ["channel", "ts"],
         },
         credential_mode="org_with_check",
+    ),
+    "channel_stats": Operation(
+        "channel_stats",
+        "Counts for a report: top level messages, people, threads started and their replies in a window "
+        "(the agent's own messages excluded).",
+        {
+            "type": "object",
+            "properties": {
+                "channel": CHANNEL_ARG,
+                "start": {"type": "string", "description": f"Window start, {TIME_ARG}"},
+                "end": {"type": "string", "description": f"Window end, {TIME_ARG}"},
+            },
+            "required": ["channel", "start", "end"],
+        },
+        credential_mode="org_with_check",
+        internal=True,
     ),
     "post_message": Operation(
         "post_message",
@@ -161,6 +179,8 @@ class SlackAdapter:
                 return await self._read_channel(ctx, target, args)
             if operation == "read_thread":
                 return await self._read_thread(ctx, target, str(args.get("ts", "")))
+            if operation == "channel_stats":
+                return await self._channel_stats(ctx, target, args)
             if operation == "post_message":
                 return await self._post(ctx, target, args)
         except SlackError as exc:
@@ -235,6 +255,58 @@ class SlackAdapter:
             lines.append(self._line(ctx, target, message, names))
             lines += ["  ↳ " + self._line(ctx, target, r, names) for r in threads.get(message["ts"], [])]
         return self._result(lines)
+
+    async def _channel_stats(self, ctx: ToolContext, target: Target, args: dict[str, Any]) -> ToolResult:
+        """Exact counts over the whole window (not the capped read the model gets). Only numbers and
+        user ids leave this function, never message text."""
+        oldest, latest = parse_time(args.get("start")), parse_time(args.get("end"))
+        if oldest is None or latest is None or oldest > latest:
+            raise ValueError("a window with a start before its end is required")
+        top: list[dict[str, Any]] = []
+        truncated = False
+        async for message in ctx.slack.paginate(
+            "conversations.history",
+            "messages",
+            ctx.token,
+            ctx.team_id,
+            limit=200,
+            channel=target.external_id,
+            oldest=f"{oldest:.6f}",
+            latest=f"{latest:.6f}",
+        ):
+            if self._keep(message):
+                top.append(message)
+            if len(top) >= MAX_STATS_MESSAGES:
+                truncated = True
+                break
+        people = {str(m["user"]) for m in top if m.get("user")}
+        threads = [m for m in top if m.get("reply_count")]
+        if len(threads) > MAX_STATS_THREADS:
+            threads, truncated = threads[:MAX_STATS_THREADS], True
+        replies = 0
+        for parent in threads:
+            async for reply in ctx.slack.paginate(
+                "conversations.replies", "messages", ctx.token, ctx.team_id,
+                channel=target.external_id, ts=parent["ts"],
+            ):  # fmt: skip
+                if reply["ts"] != parent["ts"] and self._keep(reply):
+                    replies += 1
+                    if reply.get("user"):
+                        people.add(str(reply["user"]))
+        data = {
+            "channel": target.name,
+            "channel_id": target.external_id,
+            "messages": len(top),
+            "threads": len(threads),
+            "replies": replies,
+            "people": sorted(people),
+            "truncated": truncated,
+        }
+        text = (
+            f"#{target.name}: {len(top)} messages, {len(threads)} threads with {replies} replies, "
+            f"{len(people)} people"
+        )
+        return ToolResult(text, data=data)
 
     async def _read_thread(self, ctx: ToolContext, target: Target, ts: str) -> ToolResult:
         if not re.fullmatch(r"\d{6,12}\.\d{1,6}", ts):

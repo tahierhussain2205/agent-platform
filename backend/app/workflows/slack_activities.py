@@ -53,10 +53,11 @@ class SlackDeps:
 
 
 class SlackActivities:
-    def __init__(self, deps: SlackDeps, tasks: Any = None) -> None:
+    def __init__(self, deps: SlackDeps, tasks: Any = None, reports: Any = None) -> None:
         self.d = deps
         self.adapter = ChannelAdapter(deps.slack, deps.kv)
         self.tasks = tasks  # TaskActivities when the agent runtime is configured
+        self.reports = reports  # ReportActivities, likewise
 
     async def _token(self, org_id: str) -> tuple[str, str]:
         try:

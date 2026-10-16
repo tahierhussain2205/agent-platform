@@ -30,6 +30,8 @@ class Operation:
     outward_facing: bool = False
     credential_mode: CredentialMode = "org"
     approver_rule: ApproverRule = "requester_or_admin"
+    # Called by code only (report figures), never offered to a model; policy and audit still apply.
+    internal: bool = False
 
     @property
     def tier(self) -> ActionTier:
@@ -156,6 +158,7 @@ def definitions(adapter: ToolAdapter, operations: list[str]) -> list[dict[str, A
             "input_schema": adapter.operations[name].input_schema,
         }
         for name in operations
+        if not adapter.operations[name].internal
     ]
 
 

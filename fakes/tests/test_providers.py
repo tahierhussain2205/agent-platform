@@ -143,10 +143,22 @@ def test_jira_jql_and_permission_lookups(client: TestClient) -> None:
     def keys(jql: str) -> list[str]:
         return sorted(i["key"] for i in jira(client, alice, "search/jql", "POST", json={"jql": jql}).json()["issues"])
 
-    assert keys("project = PAY") == ["PAY-101", "PAY-102", "PAY-103"]
+    assert keys("project = PAY") == ["PAY-101", "PAY-102", "PAY-103", "PAY-104", "PAY-105", "PAY-106"]
     assert keys('project in (PAY, WEB) AND status = "In Progress"') == ["PAY-101", "WEB-7"]
     assert keys('text ~ "checkout"') == ["PAY-101"]
-    assert keys("assignee = currentUser()") == ["PAY-103", "SEC-3"]
+    assert keys("assignee = currentUser()") == ["PAY-103", "PAY-106", "SEC-3"]
+    # What progress reports ask: created, resolved, open by status category.
+    assert keys("project = PAY AND created >= -1d") == ["PAY-104", "PAY-106"]
+    assert keys("project = PAY AND resolved >= -1d") == ["PAY-105", "PAY-106"]
+    assert keys("project = PAY AND resolutiondate < -1d") == ["PAY-103"]
+    assert keys("project = PAY AND statusCategory != Done") == ["PAY-101", "PAY-102", "PAY-104"]
+    assert keys('project = PAY AND statusCategory in ("To Do", indeterminate)') == ["PAY-101", "PAY-102", "PAY-104"]
+    assert keys('project = PAY AND created >= "2000-01-01" AND created < "2000-01-02 10:30"') == []
+    assert jira(client, alice, "search/jql", "POST", json={"jql": 'created >= "yesterday"'}).status_code == 400
+    done = jira(client, alice, "issue/PAY-105").json()["fields"]
+    assert done["status"]["statusCategory"]["key"] == "done"
+    assert done["resolutiondate"] == done["updated"]
+    assert jira(client, alice, "issue/PAY-101").json()["fields"]["resolutiondate"] is None
     assert keys("updated >= -2d AND project = WEB") == ["WEB-7", "WEB-8"]
     assert keys("updated >= -13h AND project = WEB") == ["WEB-8"]
     assert jira(client, alice, "search/jql", "POST", json={"jql": "nonsense ~~ x"}).status_code == 400

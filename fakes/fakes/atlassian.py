@@ -80,6 +80,13 @@ def seed() -> dict[str, Any]:
          "Customers in the EU report refunds arriving two days late."),
         ("PAY-103", "Add retries to the payment webhook consumer", "Done", "acc-alice", "Low", 9,
          "Webhook deliveries are dropped when the consumer restarts."),
+        # Activity in the last day, for daily progress reports (created ages in CREATED below).
+        ("PAY-104", "Invoice totals are rounded down by one cent", "To Do", None, "Medium", 0.4,
+         "Invoices with more than ten lines show totals one cent lower than the sum of the lines."),
+        ("PAY-105", "Stripe webhook signature check fails after key rotation", "Done", "acc-bob", "High", 0.3,
+         "After rotating the signing key, webhook signature checks fail until the service restarts."),
+        ("PAY-106", "Add an audit entry for every refund", "Done", "acc-alice", "Low", 0.1,
+         "Finance wants an audit entry with who refunded what and why."),
         ("WEB-7", "Search is slow in the EU region", "In Progress", "acc-quinn", "High", 1,
          "p95 above 4 seconds for EU customers since yesterday."),
         ("WEB-8", "SSO login loops on Safari 17", "To Do", None, "High", 0.5,
@@ -89,6 +96,7 @@ def seed() -> dict[str, Any]:
         ("OPS-1", "Payment webhooks delayed by 15 minutes", "In Progress", "acc-dave", "High", 0.3,
          "Provider status page shows degraded webhooks."),
     ]  # fmt: skip
+    created = {"PAY-104": 0.4, "PAY-105": 2.0, "PAY-106": 0.6}  # days ago; otherwise a day before the update
     return {
         "sites": {
             "cloud-acme": {"id": "cloud-acme", "url": "https://acme.atlassian.net", "name": "acme"},
@@ -104,7 +112,8 @@ def seed() -> dict[str, Any]:
                 "assignee": a,
                 "priority": p,
                 "updated": _ago(d),
-                "created": _ago(d + 1),
+                "created": _ago(created.get(key, d + 1)),
+                "resolved": _ago(d) if st == "Done" else None,  # done at its last update
                 "description": desc,
                 "project": key.split("-")[0],
             }
@@ -120,8 +129,30 @@ class JqlError(ValueError):
     pass
 
 
+CATEGORIES = {
+    "To Do": {"key": "new", "name": "To Do"},
+    "In Progress": {"key": "indeterminate", "name": "In Progress"},
+    "Done": {"key": "done", "name": "Done"},
+}
+TIME = "%Y-%m-%dT%H:%M:%S.000+0000"
+
+
+def _when(value: str) -> datetime:
+    """A JQL date: relative (-1d, -4h) or absolute ("2026-10-16" or "2026-10-16 09:30"). Real Jira reads
+    absolute dates in the account's time zone; the stand-in's accounts are all on UTC."""
+    if rel := re.fullmatch(r"-(\d+)([dhm])", value):
+        unit = {"d": "days", "h": "hours", "m": "minutes"}[rel[2]]
+        return datetime.now(UTC) - timedelta(**{unit: int(rel[1])})
+    for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(value, fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    raise JqlError(f"Date value '{value}' for a date field is invalid.")
+
+
 CLAUSE = re.compile(
-    r"""^\s*(?P<field>[a-zA-Z]+)\s*(?P<op>=|!=|~|>=|<=|\bin\b|\bis\b)\s*(?P<value>\([^)]*\)|"[^"]*"|'[^']*'|[^\s]+(?:\(\))?)\s*$""",
+    r"""^\s*(?P<field>[a-zA-Z]+)\s*(?P<op>=|!=|~|>=|<=|>|<|\bnot in\b|\bin\b|\bis not\b|\bis\b)\s*(?P<value>\([^)]*\)|"[^"]*"|'[^']*'|[^\s]+(?:\(\))?)\s*$""",
     re.IGNORECASE,
 )
 
@@ -163,21 +194,28 @@ def match_jql(jql: str, issue: dict[str, Any], me: str) -> bool:
             if not all(w in haystack for w in values[0].lower().split()):
                 return False
             continue
-        elif field in ("updated", "created"):
-            rel = re.fullmatch(r"-(\d+)([dh])", values[0])
-            if not rel or op not in (">=", "<="):
+        elif field in ("updated", "created", "resolved", "resolutiondate"):
+            if op not in (">=", "<=", ">", "<"):
                 raise JqlError(f"Unsupported date condition '{clause.strip()}'")
-            delta = timedelta(days=int(rel[1])) if rel[2] == "d" else timedelta(hours=int(rel[1]))
-            when = datetime.strptime(issue[field], "%Y-%m-%dT%H:%M:%S.000+0000").replace(tzinfo=UTC)
-            limit = datetime.now(UTC) - delta
-            if (op == ">=" and when < limit) or (op == "<=" and when > limit):
+            stamp = issue.get("resolved" if field.startswith("resol") else field)
+            if stamp is None:  # unresolved issues match no resolution date condition
+                return False
+            when, limit = datetime.strptime(stamp, TIME).replace(tzinfo=UTC), _when(values[0])
+            if not {">=": when >= limit, "<=": when <= limit, ">": when > limit, "<": when < limit}[op]:
+                return False
+            continue
+        elif field == "statuscategory":
+            category = CATEGORIES[issue["status"]]
+            names = {v.lower() for v in values}
+            hit = category["name"].lower() in names or category["key"] in names
+            if (op in ("=", "in", "is") and not hit) or (op in ("!=", "not in", "is not") and hit):
                 return False
             continue
         else:
             raise JqlError(f"Field '{field}' does not exist or you do not have permission to view it.")
         wanted = [v.lower() for v in values]
         hit = actual.lower() in wanted
-        if (op in ("=", "in", "is") and not hit) or (op == "!=" and hit):
+        if (op in ("=", "in", "is") and not hit) or (op in ("!=", "not in", "is not") and hit):
             return False
     return True
 
@@ -200,13 +238,14 @@ class Atlassian:
         project = self.s["projects"][issue["project"]]
         full = {
             "summary": issue["summary"],
-            "status": {"name": issue["status"]},
+            "status": {"name": issue["status"], "statusCategory": CATEGORIES[issue["status"]]},
             "assignee": {"accountId": account["accountId"], "displayName": account["displayName"]} if account else None,
             "priority": {"name": issue["priority"]},
             "project": {"key": project["key"], "name": project["name"]},
             "issuetype": {"name": "Bug"},
             "updated": issue["updated"],
             "created": issue["created"],
+            "resolutiondate": issue.get("resolved"),
             "description": adf(issue["description"]),
         }
         chosen = full if not fields or "*all" in fields else {k: v for k, v in full.items() if k in fields}

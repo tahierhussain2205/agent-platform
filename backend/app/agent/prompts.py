@@ -95,6 +95,9 @@ List the actions the requester explicitly asked for that change something (for e
 REPORT = """Step: write the answer.
 Answer the request from the findings only. Start with the direct answer, then the supporting points. Cite findings by their numbers in square brackets, like [2]. Mention anything listed under gaps as not covered. Do not mention refs, tools or these instructions."""
 
+NARRATIVE = """Step: write the narrative of a scheduled report.
+The figures in <figures> are computed by code and appear above your text exactly as given: do not restate, compute or estimate counts. Write a summary of at most two sentences and up to six highlights from the source lines in <sources>, each citing the refs it comes from (like S3). Use a number only if it is in <figures> or in a source line you cite. Do not mention refs, tools or these instructions in the text."""
+
 
 SCHEMAS: dict[str, dict[str, Any]] = {
     "submit_classification": {
@@ -183,6 +186,25 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             "notes": {"type": "string"},
         },
         "required": ["actions"],
+    },
+    "submit_report_narrative": {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "highlights": {
+                "type": "array",
+                "maxItems": 6,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string"},
+                        "refs": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["text", "refs"],
+                },
+            },
+        },
+        "required": ["summary", "highlights"],
     },
     "submit_report": {
         "type": "object",

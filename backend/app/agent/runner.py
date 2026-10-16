@@ -286,13 +286,17 @@ class AgentRunner:
                 return StartResult("gone")
             if task[0] in ("running", "awaiting_approval"):  # a retried start
                 return StartResult("started", mode=task[2], model_tier=task[3])
-            ahead = await (
-                await conn.execute(
-                    "select 1 from app.tasks where session_id = %s and id <> %s and (status in "
-                    "('running', 'awaiting_approval') or (status = 'queued' and created_at < %s)) limit 1",
-                    (ref.session_id, ref.task_id, task[1]),
-                )
-            ).fetchone()
+            ahead = (
+                ref.session_id
+                and await (  # scheduled runs have no session
+                    await conn.execute(
+                        "select 1 from app.tasks where session_id = %s and id <> %s and (status in "
+                        "('running', 'awaiting_approval') or (status = 'queued' and created_at < %s)) "
+                        "limit 1",
+                        (ref.session_id, ref.task_id, task[1]),
+                    )
+                ).fetchone()
+            )
             if ahead:
                 return StartResult("wait_session", "Another request in this thread is being handled first.")
             counts = await (

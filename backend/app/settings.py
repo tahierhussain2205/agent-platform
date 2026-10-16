@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     task_token_budget: int = Field(default=300_000, ge=1_000)
     approval_ttl_hours: int = Field(default=24, ge=1, le=24 * 30)
 
+    # Scheduled reports: random delay Temporal adds to each run (so every tenant's 9 AM report does not
+    # start at once), and how late a missed run may still start (after an outage).
+    schedule_jitter_seconds: int = Field(default=300, ge=0, le=3600)
+    schedule_catchup_minutes: int = Field(default=60, ge=1, le=24 * 60)
+
     # Token vault service (`app vault`): the API and worker call it at VAULT_URL with the shared
     # service token. Unset VAULT_URL: the vault runs in process (needs the vault database user).
     vault_url: str | None = None

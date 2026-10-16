@@ -168,6 +168,8 @@ class Anthropic:
             return [use(forced, plan(last_user))]
         if forced == "submit_report":
             return [use(forced, report(last_user))]
+        if forced == "submit_report_narrative":
+            return [use(forced, narrative(last_user))]
         if "submit_findings" in tool_names:
             return gather(body["messages"], first_user, {str(t) for t in tool_names})
         return [{"type": "text", "text": "OK."}]
@@ -380,6 +382,27 @@ def report(user: str) -> dict[str, Any]:
     if gaps:
         lines.append("_Not covered: " + "; ".join(gaps) + "_")
     return {"answer": "\n".join(lines), "used_sources": used, "confidence": "high", "not_verified": []}
+
+
+ISSUE_LINE = re.compile(r"^\s*\[([A-Z]\d+)\]\s+\(([^)]*)\)\s+([A-Z][A-Z0-9]+-\d+):\s?(.*)$")
+
+
+def narrative(user: str) -> dict[str, Any]:
+    """A scheduled report's narrative: highlights from the first Jira issues (most recently updated
+    first) or the latest Slack messages, each citing its line; a summary without numbers."""
+    lines = (tag(user, "sources") or "").splitlines()
+    issues = [m for line in lines if (m := ISSUE_LINE.match(line))]
+    if issues:
+        highlights = []
+        for m in issues[:4]:
+            meta = [part.strip() for part in m[2].split("·")]
+            assignee = next((p.removeprefix("assignee ") for p in meta if p.startswith("assignee ")), "unassigned")
+            highlights.append({"text": f"{m[3]}: {m[4]} ({meta[0]}, {assignee})", "refs": [m[1]]})
+        return {"summary": "Here is how the project moved in this period.", "highlights": highlights}
+    messages = [m for line in lines if not line.lstrip().startswith("↳") and (m := LINE.match(line))]
+    highlights = [{"text": f"{m[2]}: {m[3][:160]}", "refs": [m[1]]} for m in messages[-4:]]
+    summary = "The main points from this period are below." if highlights else "It was a quiet period."
+    return {"summary": summary, "highlights": highlights}
 
 
 def build_router(anthropic: Anthropic) -> APIRouter:

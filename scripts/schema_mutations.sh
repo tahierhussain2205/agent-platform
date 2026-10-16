@@ -20,6 +20,8 @@ declare -a MUTATIONS=(
   "grant execute on function app.maintenance_fail_task(uuid, text) to app_user"
   "grant select on app.tasks to app_vault"
   "grant select on app.task_steps to app_vault"
+  "drop trigger schedules_track on app.schedules"
+  "grant execute on function app.maintenance_schedule_orgs() to app_user"
 )
 
 failed=0

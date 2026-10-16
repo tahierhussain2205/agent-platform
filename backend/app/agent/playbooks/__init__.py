@@ -1,8 +1,10 @@
 """Built in playbooks: versioned Markdown instructions plus metadata in code (spec 7.1).
 
 Each ``<key>.v<version>.md`` file has a small front matter block (key, version, title,
-description, and the operations the playbook may load as ``adapter.operation`` lists) followed by
-the instructions. Old versions stay in this directory: a task pins the version it started with.
+description, kind, and the operations the playbook may load as ``adapter.operation`` lists) followed
+by the instructions. ``kind: report`` playbooks run scheduled reports and are never offered to the
+classifier; everything else is ``task``. Old versions stay in this directory: a task pins the
+version it started with.
 
 ``sync_builtin_playbooks`` runs at deploy time (``app migrate``) as the table owner and inserts
 versions the database does not have yet. Versions are immutable: changing a released file without
@@ -33,6 +35,7 @@ class PlaybookSpec:
     instructions: str
     read: tuple[str, ...]
     write: tuple[str, ...]
+    kind: str = "task"  # task | report
 
     def allows(self, adapter: str, operation: str, tier: str, is_mcp: bool = False) -> bool:
         """Whether an operation may be loaded: ``adapter.operation``, ``adapter.*`` (every operation of
@@ -67,6 +70,7 @@ def parse(text: str) -> PlaybookSpec:
             instructions=body.strip(),
             read=tuple(v.strip() for v in meta.get("read", "").split(",") if v.strip()),
             write=tuple(v.strip() for v in meta.get("write", "").split(",") if v.strip()),
+            kind=meta.get("kind", "task"),
         )
     except (KeyError, ValueError) as exc:
         raise PlaybookError(f"bad front matter: {exc}") from exc
@@ -92,8 +96,9 @@ def latest(key: str, specs: dict[tuple[str, int], PlaybookSpec] = BUILTIN) -> Pl
     return max(versions, key=lambda s: s.version)
 
 
-def keys(specs: dict[tuple[str, int], PlaybookSpec] = BUILTIN) -> list[str]:
-    return sorted({k for k, _ in specs})
+def keys(specs: dict[tuple[str, int], PlaybookSpec] = BUILTIN, kind: str | None = "task") -> list[str]:
+    """Playbook keys of one kind (``None``: every kind)."""
+    return sorted({k for (k, _), spec in specs.items() if kind is None or spec.kind == kind})
 
 
 def sync_builtin_playbooks(

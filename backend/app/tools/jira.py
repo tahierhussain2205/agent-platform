@@ -8,6 +8,7 @@ link (``user_required``), Jira itself applies the requester's permissions.
 
 import logging
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -53,7 +54,29 @@ OPERATIONS = {
         {"type": "object", "properties": {}},
         credential_mode="org_with_check",
     ),
+    "report_issues": Operation(
+        "report_issues",
+        "The issues a progress report counts: every open issue of a project, and those updated since a time.",
+        {
+            "type": "object",
+            "properties": {"project": {"type": "string"}, "since": {"type": "string"}},
+            "required": ["project", "since"],
+        },
+        credential_mode="org_with_check",
+        internal=True,
+    ),
 }
+REPORT_FIELDS = [
+    "summary",
+    "status",
+    "assignee",
+    "priority",
+    "project",
+    "updated",
+    "created",
+    "resolutiondate",
+]
+MAX_REPORT_ISSUES = 1000
 
 
 def adf_text(node: Any) -> str:
@@ -181,6 +204,8 @@ class JiraAdapter:
                 return await self._get(ctx, credential, str(args.get("key", "")).strip().upper())
             if operation == "list_projects":
                 return await self._projects(ctx, credential)
+            if operation == "report_issues":
+                return await self._report_issues(ctx, credential, args)
         except JiraError as exc:
             return ToolResult(f"Jira refused the request: {exc}", is_error=True)
         except (ValueError, httpx.HTTPError) as exc:
@@ -266,6 +291,58 @@ class JiraAdapter:
             lines.append("  Description: " + description.replace("\n", " ⏎ ")[:3000])
         return ToolResult(cap(redact("\n".join(lines))[0]))
 
+    async def _all(
+        self, ctx: ToolContext, credential: Credential, jql: str
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Every issue a query matches, page by page, up to MAX_REPORT_ISSUES (then truncated)."""
+        issues: list[dict[str, Any]] = []
+        token: str | None = None
+        while True:
+            body: dict[str, Any] = {"jql": jql, "maxResults": 100, "fields": REPORT_FIELDS}
+            if token:
+                body["nextPageToken"] = token
+            page = await self._call(ctx, credential, "POST", "search/jql", json=body) or {}
+            issues += page.get("issues") or []
+            token = page.get("nextPageToken")
+            if page.get("isLast", True) or not token:
+                return issues, False
+            if len(issues) >= MAX_REPORT_ISSUES:
+                return issues[:MAX_REPORT_ISSUES], True
+
+    async def _report_issues(
+        self, ctx: ToolContext, credential: Credential, args: dict[str, Any]
+    ) -> ToolResult:
+        """Figures are computed by the caller from ``data``; ``text`` lists the issues with refs for the
+        narrative. Created and resolved times are exact timestamps: the date bound in the JQL is a day
+        early because Jira reads date literals in its account's time zone."""
+        project = str(args.get("project") or "").strip().upper()
+        if not PROJECT_RE.match(project):
+            raise ValueError(f"{project or 'That'} is not a project key")
+        since = datetime.fromisoformat(str(args.get("since")).replace("Z", "+00:00"))
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
+        allowed, note = await self._filter(ctx, credential, [project])
+        if note or project not in allowed:
+            message = note or f"Access denied: you can't browse the {project} project."
+            return ToolResult(message, is_error=True, data={"denied": True})
+        day = (since.astimezone(UTC) - timedelta(days=1)).strftime("%Y-%m-%d")
+        open_now, cut_open = await self._all(
+            ctx, credential, f"project = {project} AND statusCategory != Done"
+        )
+        recent, cut_recent = await self._all(ctx, credential, f'project = {project} AND updated >= "{day}"')
+        found = {str(i["key"]): i for i in [*open_now, *recent]}
+        issues = sorted(
+            found.values(), key=lambda i: str((i.get("fields") or {}).get("updated", "")), reverse=True
+        )
+        data = {
+            "project": project,
+            "issues": [_report_fields(i) for i in issues],
+            "truncated": cut_open or cut_recent,
+        }
+        lines = [f"Issues of {project} (open now, or updated since {day}): {len(issues)}"]
+        lines += [self._line(ctx, credential, i) for i in issues]
+        return ToolResult(cap(redact("\n".join(lines))[0]), data=data)
+
     async def _projects(self, ctx: ToolContext, credential: Credential) -> ToolResult:
         values = (await self._call(ctx, credential, "GET", "project/search") or {}).get("values") or []
         allowed, note = await self._filter(ctx, credential, [str(p["key"]) for p in values])
@@ -273,6 +350,21 @@ class JiraAdapter:
         if note:
             lines.append(note)
         return ToolResult("Jira projects you can browse:\n" + ("\n".join(lines) or "none"))
+
+
+def _report_fields(issue: dict[str, Any]) -> dict[str, Any]:
+    f = issue.get("fields") or {}
+    status = f.get("status") or {}
+    return {
+        "key": str(issue.get("key")),
+        "status": status.get("name"),
+        "category": (status.get("statusCategory") or {}).get("key"),
+        "priority": (f.get("priority") or {}).get("name"),
+        "assignee": (f.get("assignee") or {}).get("displayName"),
+        "created": f.get("created"),
+        "resolved": f.get("resolutiondate"),
+        "updated": f.get("updated"),
+    }
 
 
 class JiraError(Exception):

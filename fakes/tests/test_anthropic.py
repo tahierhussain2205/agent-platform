@@ -244,3 +244,26 @@ def test_channel_names_do_not_trigger_tool_calls() -> None:
     brief = {"goal": "summarize today's discussion in #bugs", "entities": {"channels": ["bugs"], "ids": []}}
     assert tool_calls(tools, brief) == []
     assert tool_calls(tools, {"goal": "list open bugs in PAY", "entities": {}})[0]["name"] == "jira_search_issues"
+
+
+def test_report_narrative_cites_lines_and_states_no_numbers_of_its_own(client: TestClient) -> None:
+    jira = (
+        "<figures>\nCreated: *2*\n</figures>\n<sources>\n"
+        "[S1] (In Progress · High · assignee Bob Builder · updated 2026-10-16) PAY-101: Checkout fails for 20 items\n"
+        "[S2] (To Do · Medium · assignee unassigned · updated 2026-10-15) PAY-104: Invoice totals are low\n"
+        "</sources>"
+    )
+    out = tool_input(call(client, messages=[{"role": "user", "content": jira}], **forced("submit_report_narrative")))
+    assert out["highlights"][0] == {
+        "text": "PAY-101: Checkout fails for 20 items (In Progress, Bob Builder)",
+        "refs": ["S1"],
+    }
+    assert not any(ch.isdigit() for ch in out["summary"])
+    slack = (
+        "<sources>\n[S1] (2026-10-16 09:00 UTC) Quinn Tester: Checkout 500s again\n  ↳ [S2] (x) Bob: on it\n</sources>"
+    )
+    out = tool_input(call(client, messages=[{"role": "user", "content": slack}], **forced("submit_report_narrative")))
+    assert out["highlights"] == [{"text": "Quinn Tester: Checkout 500s again", "refs": ["S1"]}]
+    empty = tool_input(call(client, messages=[{"role": "user", "content": "<sources>\n</sources>"}],
+                            **forced("submit_report_narrative")))  # fmt: skip
+    assert empty == {"summary": "It was a quiet period.", "highlights": []}

@@ -12,6 +12,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from app import kv
+from app.agent.reports import ReportRunner
 from app.agent.runner import AgentDeps, AgentRunner
 from app.db.pool import open_pool
 from app.llm.gateway import gateway_from_settings
@@ -21,6 +22,8 @@ from app.slack.limiter import SlackRateLimiter
 from app.temporal import connect_temporal
 from app.vault_service.factory import vault_from_settings
 from app.workflows.ping import PingWorkflow, ping
+from app.workflows.report_activities import ReportActivities
+from app.workflows.reports import ScheduledReportWorkflow, ScheduleSyncWorkflow
 from app.workflows.slack import AgentRequestWorkflow, PublishHomeWorkflow, SyncWorkspaceWorkflow
 from app.workflows.slack_activities import SlackActivities, SlackDeps
 from app.workflows.task import TaskWorkflow
@@ -55,26 +58,24 @@ async def build_slack_activities(
     gateway = gateway_from_settings(settings, pool, kv_client)
     integrations_http = httpx.AsyncClient(timeout=30.0)
     closers.append(integrations_http.aclose)
-    tasks = None
+    tasks = reports = None
     if gateway is None:
         log.warning("no model provider key (ANTHROPIC_API_KEY): the agent only acknowledges requests")
     else:
         closers.append(gateway.aclose)
-        tasks = TaskActivities(
-            AgentRunner(
-                AgentDeps(
-                    pool=pool,
-                    vault=vault,
-                    slack=slack,
-                    kv=kv_client,
-                    gateway=gateway,
-                    console_url=settings.console_url,
-                    approval_ttl_hours=settings.approval_ttl_hours,
-                    settings=settings,
-                    http=integrations_http,
-                )
-            )
+        deps = AgentDeps(
+            pool=pool,
+            vault=vault,
+            slack=slack,
+            kv=kv_client,
+            gateway=gateway,
+            console_url=settings.console_url,
+            approval_ttl_hours=settings.approval_ttl_hours,
+            settings=settings,
+            http=integrations_http,
         )
+        tasks = TaskActivities(AgentRunner(deps))
+        reports = ReportActivities(ReportRunner(deps))
     return SlackActivities(
         SlackDeps(
             pool=pool,
@@ -86,6 +87,7 @@ async def build_slack_activities(
             task_token_budget=settings.task_token_budget,
         ),
         tasks,
+        reports,
     )
 
 
@@ -107,6 +109,9 @@ def build_worker(client: Client, settings: Settings, slack: SlackActivities | No
         if slack.tasks is not None:
             workflows.append(TaskWorkflow)
             activities += slack.tasks.all()
+        if slack.reports is not None:
+            workflows += [ScheduledReportWorkflow, ScheduleSyncWorkflow]
+            activities += slack.reports.all()
     return Worker(
         client,
         task_queue=settings.temporal_task_queue,

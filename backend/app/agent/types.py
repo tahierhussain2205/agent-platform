@@ -101,3 +101,40 @@ class BudgetCheck:
 class Delivered:
     where: str  # thread | private | dm
     ts: str | None = None
+
+
+@dataclass
+class ReportInput:
+    """What a Temporal Schedule's action passes to each run."""
+
+    org_id: str
+    schedule_id: str
+
+
+@dataclass
+class ReportStart:
+    status: str  # run | skip (deleted, paused, or paused now: see message)
+    message: str = ""
+    ref: TaskRef | None = None
+    playbook_key: str = ""
+    title: str = ""
+    window_start: str = ""  # ISO 8601, UTC
+    window_end: str = ""
+    scheduled_at: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
+    delivery: str = "dm"  # channel | dm
+    delivery_name: str = ""
+    model_tier: str = "standard"
+    paused: bool = False  # this run paused the schedule (admins must hear about it)
+
+
+@dataclass
+class ReportComposed:
+    figures: dict[str, Any]
+    figure_lines: list[str]
+    summary: str
+    highlights: list[dict[str, Any]]  # {"text", "refs": [numbers into sources, 1 based]}
+    sources: list[dict[str, Any]]
+    dropped: int = 0
+    denied: str | None = None  # the owner can no longer read a source: the schedule pauses
+    stopped: str | None = None  # a budget is spent: the schedule pauses

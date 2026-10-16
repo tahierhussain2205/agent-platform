@@ -214,6 +214,9 @@ def test_dms_emit_message_im_and_the_bot_can_reply(client: TestClient, receiver:
     assert receiver.events()[0]["event"]["channel_type"] == "im"
     sent = api(client, "chat.postMessage", channel="U0BOB", text="hi Bob").json()
     assert sent["channel"] == dm
+    assert api(client, "conversations.open", users="U0BOB").json()["channel"]["id"] == dm
+    assert api(client, "conversations.open", users="U0NOBODY").json()["error"] == "user_not_found"
+    assert api(client, "conversations.open").json()["error"] == "not_enough_users"
     assert (
         client.get("/_admin/slack/messages", params={"team": "T0ACME", "channel": "U0BOB"}).json()[-1]["text"]
         == "hi Bob"
