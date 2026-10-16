@@ -69,7 +69,7 @@ async def test_summarize_todays_discussion_with_sources(agent: Agent) -> None:
     await ui_post("U0ALICE", "C0BUGS", f"Rolling back the cart service {t}")
     ref = await ask(agent, "summarize today's discussion in #bugs")
     u, f, c = await run_read(agent, ref)
-    assert (u.playbook_key, u.playbook_version, u.question) == ("slack_qa", 1, None)
+    assert (u.playbook_key, u.playbook_version, u.question) == ("slack_qa", 2, None)
     assert u.brief is not None
     assert u.brief["entities"]["channels"] == ["bugs"]
     assert u.brief["entities"]["time_window"]["label"] == "today"
@@ -93,7 +93,7 @@ async def test_summarize_todays_discussion_with_sources(agent: Agent) -> None:
         "select p.key, p.version from app.tasks t join app.playbooks p on p.id = t.playbook_id where t.id = %s",
         (ref.task_id,),
     )
-    assert pinned == [("slack_qa", 1)]
+    assert pinned == [("slack_qa", 2)]
     steps = agent.sql(
         "select kind, status from app.task_steps where task_id = %s order by seq", (ref.task_id,)
     )
@@ -119,7 +119,7 @@ async def test_role_tailoring_reaches_the_model_as_a_bounded_section(agent: Agen
     await agent.runner.understand(ref, "ask")
     system = (await model_requests())[-1]["system"]
     assert system[0]["cache_control"] == {"type": "ephemeral"}  # the stable prefix is cached
-    assert '<playbook key="slack_qa" version="1">' in system[0]["text"]
+    assert '<playbook key="slack_qa" version="2">' in system[0]["text"]
     roles = system[1]["text"]
     assert roles.startswith("<requester_roles>")
     assert "Primary role: Manager" in roles

@@ -258,7 +258,7 @@ def tool_calls(tools: set[str], the_brief: dict[str, Any]) -> list[dict[str, Any
     for key in entities.get("ids") or []:
         if "jira_get_issue" in tools:
             calls.append(use("jira_get_issue", {"key": key}))
-    words = re.findall(r"(?<![\w-])(jira|tickets?|issues?|bugs?)(?![\w-])", lowered)
+    words = re.findall(r"(?<![\w#-])(jira|tickets?|issues?|bugs?)(?![\w-])", lowered)  # not #bugs
     if not entities.get("ids") and words and "jira_search_issues" in tools:
         projects = [p for p in PROJECT.findall(goal) if p not in ("I", "OK", "UTC")]
         calls.append(use("jira_search_issues", {"project": projects[0]} if projects else {"jql": ""}))

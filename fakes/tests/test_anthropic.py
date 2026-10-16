@@ -235,3 +235,12 @@ def test_brief_and_gather_reach_jira_github_and_mcp_tools(client: TestClient) ->
     sheet = {"goal": "read the bug-metrics sheet", "entities": {}}
     response = call(client, messages=[{"role": "user", "content": f"<brief>{json.dumps(sheet)}</brief>"}], tools=tools)
     assert tool_input(response) == {"spreadsheet_id": "bug-metrics"}
+
+
+def test_channel_names_do_not_trigger_tool_calls() -> None:
+    from fakes.anthropic import tool_calls
+
+    tools = {"jira_search_issues", "jira_get_issue", "github_list_repos"}
+    brief = {"goal": "summarize today's discussion in #bugs", "entities": {"channels": ["bugs"], "ids": []}}
+    assert tool_calls(tools, brief) == []
+    assert tool_calls(tools, {"goal": "list open bugs in PAY", "entities": {}})[0]["name"] == "jira_search_issues"

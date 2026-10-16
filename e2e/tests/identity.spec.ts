@@ -169,7 +169,7 @@ test('audit log shows console changes', async ({ page }) => {
   const email = `audited-${uid()}@acme.test`
   await page.getByLabel('Email').fill(email)
   await page.getByRole('button', { name: 'Send invitation' }).click()
-  await expect(page.getByRole('status')).toBeVisible()
+  await expect(page.getByText(`Invitation sent to ${email}.`)).toBeVisible()
   await page.getByRole('link', { name: 'Audit log' }).click()
   await page.getByLabel('Filter by action').fill('member.')
   const row = page.getByTestId('audit-row').filter({ hasText: email })

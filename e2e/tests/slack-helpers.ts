@@ -19,13 +19,28 @@ export async function openChannel(page: Page, name: string) {
   await expect(page.locator('#title')).toContainText(name)
 }
 
-/** Post a message and return its timestamp (data-ts of the new message). */
+/** Post a message and return its timestamp (data-ts of the new message). Other specs may post in
+ * the same channel at the same time, so it looks for a new message with this text, not a count. */
 export async function post(page: Page, text: string): Promise<string> {
-  const before = await page.getByTestId('message').count()
+  const messages = page.getByTestId('message')
+  const tsOf = (needle?: string) =>
+    messages.evaluateAll(
+      (els, n) =>
+        els
+          .filter((e) => n === undefined || (e.textContent ?? '').includes(n))
+          .map((e) => e.getAttribute('data-ts') ?? ''),
+      needle,
+    )
+  const before = new Set(await tsOf())
   await page.locator('#composer').fill(text)
   await page.locator('#send').click()
-  await expect(page.getByTestId('message')).toHaveCount(before + 1)
-  return (await page.getByTestId('message').last().getAttribute('data-ts'))!
+  const needle = text.replace(/@agent\s*/i, '') // a mention renders as the bot's name
+  let ts = ''
+  await expect(async () => {
+    ts = (await tsOf(needle)).find((t) => t && !before.has(t)) ?? ''
+    expect(ts).not.toBe('')
+  }).toPass({ timeout: 10_000 })
+  return ts
 }
 
 export async function openThread(page: Page, ts: string) {
