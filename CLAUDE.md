@@ -16,11 +16,13 @@ A multi tenant AI agent that works as a teammate inside Slack. Each customer is 
 |---|---|
 | Console API, Slack ingress, health | `backend/app/api/` (FastAPI) |
 | Slack client, rate limiter, Block Kit adapter, install/channel services | `backend/app/slack/` |
-| Agent: playbooks, prompts, the loop's steps (runner), checks on proposed tickets (`tickets.py`), outbox | `backend/app/agent/` |
+| Agent: playbooks, prompts, the loop's steps (runner), checks on proposed tickets (`tickets.py`), investigations (`investigation.py`), outbox | `backend/app/agent/` |
 | LLM gateway (tiers, budgets, rate limits, retries, metering) | `backend/app/llm/` |
 | Policy module and redaction | `backend/app/policy/` |
 | Tool adapter interface, executor and adapters (Slack, Jira, GitHub, MCP, the service catalog) | `backend/app/tools/` |
 | Service catalog proposals (GitHub CODEOWNERS, Jira components) and their workflow | `backend/app/catalog/`, `backend/app/workflows/catalog.py` |
+| Observability interface (log backends: Google Cloud Logging) | `backend/app/observability/` |
+| Sandboxes (provider interface, per task lifecycle) | `backend/app/sandbox/` |
 | Integration catalog, OAuth providers, signed state | `backend/app/integrations/` |
 | Token vault service (secrets, OAuth exchange and refresh, task scoped credentials) | `backend/app/vault_service/` (`app vault`) |
 | Task workflow and activities | `backend/app/workflows/task*.py` |
@@ -74,7 +76,7 @@ A change never weakens one of these to make something work. If an invariant bloc
 Backend only: `cd backend && uv run pytest -k name`, `uv run python -m app api`.
 Web only: `pnpm --dir web dev`.
 
-Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173 (seeded accounts: alice@acme.test, bob@acme.test, frank@both.test, dave@globex.test; password `password123`), fakes http://localhost:4100 (Clerk stand-in at `/clerk`, Slack stand-in at `/slack` with a Slack-like UI at http://localhost:4100/slack/ui, Anthropic stand-in at `/anthropic`, Atlassian at `/atlassian`, GitHub at `/github`, Google at `/google`, MCP servers at `/google/mcp` and `/mcp/status`, test admin at `/_admin`); the vault service listens on `vault:8100` inside Compose only, Temporal UI http://localhost:8233,
+Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173 (seeded accounts: alice@acme.test, bob@acme.test, frank@both.test, dave@globex.test; password `password123`), fakes http://localhost:4100 (Clerk stand-in at `/clerk`, Slack stand-in at `/slack` with a Slack-like UI at http://localhost:4100/slack/ui, Anthropic stand-in at `/anthropic`, Atlassian at `/atlassian`, GitHub at `/github`, Google at `/google`, MCP servers at `/google/mcp` and `/mcp/status`, Google Cloud at `/gcp`, a sandbox provider at `/sandbox/v1`, test admin at `/_admin`); the vault service listens on `vault:8100` inside Compose only, Temporal UI http://localhost:8233,
 Jaeger http://localhost:16686, Postgres `localhost:55432` (postgres/postgres, db `agent`), PgBouncer `localhost:56432`,
 Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 
@@ -111,6 +113,9 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - **Adding a playbook**: add `app/agent/playbooks/<key>.v<N>.md` (front matter: key, version, title, description, `read:`/`write:` operation lists). Never edit a released version: add `v<N+1>` (sync refuses changed content). `app migrate` syncs built ins; tasks pin the version they started with.
 - **External writes from the agent** go through `post_once` (`app/agent/outbox.py`) or `AgentRunner.execute`: an `external_actions` key checked first, the key also in Slack message metadata. A write to another system also carries the key (a Jira label `marker(key)`, a comment marker) and looks it up before acting, so a crash between the provider's answer and our bookkeeping never writes twice.
 - **Jira tickets**: the model proposes, `app/agent/tickets.py` decides (duplicates of open issues, assignee evidence from `catalog_find_owners` or the request, project and component from the matched service, Slack links, private sources always ask); the policy then applies tiers and modes. Keep new checks there, in code, with a reason for the thread. Only confirmed catalog services suggest owners.
+- **Logs**: the agent reads a service's logs only through the observability interface and the service's catalog log source (`services.log_source`); a new backend implements `LogBackend` and a tool adapter with `family = "observability"`. Never build a query from model text except as a quoted literal (`app.observability.gcp.quoted`).
+- **Code in sandboxes**: read repository code through the GitHub code operations (`app/tools/github_code.py`), which build the task's sandbox (`app.sandbox.workspaces.Workspaces`) at a pinned commit. Tokens never go into a sandbox: the platform fetches the archive and uploads it. Secret files are never read, searched, listed or shown (`secret_path`).
+- **Investigations**: the case file is found in code (`Investigation.orient`); investigators get only their tools (`investigation.TOOLS`); new rules for plans go in `check_plan`, in code, with a reason in `not_verified`.
 - **Text into Slack mrkdwn**: anything the model or a person wrote goes through `app.slack.adapter.escape` where it is put into Slack text (not into `plain_text` fields, and not when stored): it cannot become a mention, broadcast or link. Links and mentions our code builds stay as they are.
 - **Changing the order of workflow commands** (activities, timers, waits) in a workflow that runs long (tasks, reports): branch on `workflow.patched("<name>")` and keep the old path, so histories of running workflows still replay (see `TaskWorkflow._act_all`).
 - **Every policy decision is audited** by the policy module (`actor_type` agent, `actor_id` the requester). Do not add tool calls or outputs that bypass `Policy.check_tool` / `Policy.check_output`.
@@ -168,6 +173,8 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - Test tokens with a short TTL must be minted when used, not at import: a long earlier module lets module level tokens expire (`token_expired`).
 - The Jira stand-in keeps issues between runs: tests delete what they create (`delete_jira_issues`), and modules that count or list issues call `reset_jira_issues()` first (`tests/connect.py`). Stand-in providers whose saved state predates their seed start afresh: bump the seed's `version` when the shape of existing records changes.
 - Agent tests on a real Temporal worker use the `live` fixture (`tests/agent/conftest.py`, harness in `tests/agent/live.py`). An answer that cites Jira results goes privately unless everyone in the channel may browse the project: ask in a channel whose members can (a fresh one per test: `_admin/slack/channels` plus `app.channels` and `channel_members` rows).
+- Temporal history events are protobuf messages: a sub-message is always truthy; compare `event.event_type` (see the parallel investigators test).
+- The investigation answer cites a private repository and the org's logs: in a channel where someone cannot see them it goes privately; tests use a channel of people who can (`ticketsChannel(browser, [...])` in e2e).
 - Tests must never start workflows on the dev stack's task queue (`agent-tasks` on localhost:7233): use a unique `TEMPORAL_TASK_QUEUE`, and stub the Temporal backed maintenance jobs when running `app maintenance` from a test. Workflow ids are global per namespace, whatever the queue.
 - `app migrate` must not rewrite an unchanged login password: a new SCRAM verifier breaks PgBouncer's pass-through for services that authenticated before it (they lose the database until restarted). `ensure_login_user` logs in first and only alters on failure.
 - After changing `fakes/`, rebuild the running stand-ins (`docker compose up -d --build --wait fakes`); the backend tests and e2e use the running container.

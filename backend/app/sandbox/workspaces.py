@@ -181,4 +181,12 @@ class Workspaces:
                     "update app.sandboxes set status = 'destroyed', destroyed_at = now() where id = %s",
                     (sandbox_row,),
                 )
+                # Metered: how long the task held the sandbox (usage, like tokens).
+                await conn.execute(
+                    "insert into app.usage_events (org_id, membership_id, task_id, kind, sandbox_seconds) "
+                    "select s.org_id, t.requested_by, s.task_id, 'sandbox', "
+                    "extract(epoch from s.destroyed_at - s.created_at) "
+                    "from app.sandboxes s join app.tasks t on t.id = s.task_id where s.id = %s",
+                    (sandbox_row,),
+                )
         return len(rows)

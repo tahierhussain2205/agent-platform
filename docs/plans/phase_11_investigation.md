@@ -82,3 +82,11 @@ Cases from resolved bugs (spec 15): the Slack thread, the log window, the Jira i
 - Playbook: investigators in parallel through the workflow, plan checks (unsourced claims dropped, no evidence means investigate first, a failing test first, confidence capped), the plan artifact, a follow-up revising the plan with what changed, failure behavior (logs aged out, access denied).
 - Eval: the three replay cases and the new metrics.
 - Console API and web tests; Playwright: an admin connects Cloud Logging and sets a log source; an engineer asks to investigate a ticket in Slack and gets a sourced plan, then refines it in the thread.
+
+## Changes during implementation
+
+- **Past incidents are read in the code of their time** (D-165): the PAY-105 replay showed that at HEAD the code investigator read the fix. When the window ended over an hour ago, the sandbox is built at the last commit before it.
+- **Follow-ups keep the current plan's issue** when they name none (D-164).
+- **The answer goes privately** when the plan cites sources someone in the channel cannot see (a private repository, the org's logs for a guest): the audience rule of D-116 and D-158.
+- **The gather loop is shared** by the investigators (`AgentRunner._subagent`).
+- **Provider reads retry once** after a transport failure (D-154, found in a full CI run).
