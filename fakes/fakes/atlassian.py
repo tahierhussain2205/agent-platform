@@ -62,7 +62,7 @@ def seed() -> dict[str, Any]:
             "site": "cloud-globex",
         },
     }
-    projects = {
+    projects: dict[str, dict[str, Any]] = {
         "PAY": {
             "key": "PAY",
             "name": "Payments",
@@ -73,6 +73,19 @@ def seed() -> dict[str, Any]:
         "SEC": {"key": "SEC", "name": "Security", "site": "cloud-acme", "browse": ["acc-alice"]},
         "OPS": {"key": "OPS", "name": "Operations", "site": "cloud-globex", "browse": ["acc-dave"]},
     }
+    # Company-managed projects share the site's types; a team-managed one (SEC, like a new Jira site's
+    # first project) has its own, without Bug, and no components.
+    classic = [
+        {"id": "10004", "name": "Bug"},
+        {"id": "10002", "name": "Task"},
+        {"id": "10001", "name": "Story"},
+        {"id": "10000", "name": "Epic"},
+        {"id": "10003", "name": "Sub-task", "subtask": True},
+    ]
+    team = [{"id": "10005", "name": "Epic"}, {"id": "10006", "name": "Subtask", "subtask": True},
+            {"id": "10007", "name": "Task"}, {"id": "10008", "name": "Story"}]  # fmt: skip
+    for key, project in projects.items():
+        project["issue_types"] = team if key == "SEC" else classic
     components = {
         "PAY": [
             {"name": "Checkout", "lead": "acc-bob", "description": "Cart and checkout (cart-service)"},
@@ -112,7 +125,7 @@ def seed() -> dict[str, Any]:
     # logs and GitHub fixtures (a deploy 6.5 and 29 hours ago); PAY-105, two days ago.
     created = {"PAY-101": 0.25, "WEB-7": 1.15, "PAY-104": 0.4, "PAY-105": 2.0, "PAY-106": 0.6}
     return {
-        "version": 3,  # phase 11: creation times follow the incidents in the logs fixture
+        "version": 4,  # projects have their own issue types (SEC is team-managed)
         "sites": {
             "cloud-acme": {"id": "cloud-acme", "url": "https://acme.atlassian.net", "name": "acme"},
             "cloud-globex": {"id": "cloud-globex", "url": "https://globex.atlassian.net", "name": "globex"},
@@ -293,7 +306,7 @@ class Atlassian:
             "assignee": self.person(issue["assignee"]),
             "priority": {"name": issue["priority"]},
             "project": {"key": project["key"], "name": project["name"]},
-            "issuetype": {"name": "Bug"},
+            "issuetype": {"name": issue.get("issuetype") or "Bug"},
             "updated": issue["updated"],
             "created": issue["created"],
             "resolutiondate": issue.get("resolved"),
@@ -502,10 +515,15 @@ def build_router(jira: Atlassian) -> APIRouter:
                 {"errorMessages": [], "errors": {"summary": "You must specify a summary of the issue."}},
                 status_code=400,
             )
-        issue_type = str((f.get("issuetype") or {}).get("name") or "")
-        if issue_type not in ("Bug", "Task", "Story"):
+        wanted = f.get("issuetype") or {}
+        issue_type = next(
+            (t["name"] for t in project["issue_types"] if not t.get("subtask")
+             and (str(wanted.get("id")) == t["id"] or str(wanted.get("name")) == t["name"])),
+            None,
+        )  # fmt: skip
+        if issue_type is None:  # Jira's answer for a type the project does not have
             return JSONResponse(
-                {"errorMessages": [], "errors": {"issuetype": "valid issue type is required"}}, status_code=400
+                {"errorMessages": [], "errors": {"issuetype": "Specify a valid issue type"}}, status_code=400
             )
         assignee = (f.get("assignee") or {}).get("accountId") if f.get("assignee") else None
         if refusal := assignable(cloudid, project_key, assignee):
@@ -596,6 +614,18 @@ def build_router(jira: Atlassian) -> APIRouter:
         items = [{"id": c["id"], "author": jira.person(c["author"]), "body": adf(c["text"]), "created": c["created"]}
                  for c in found["comments"]]  # fmt: skip
         return JSONResponse({"comments": items, "startAt": 0, "maxResults": len(items), "total": len(items)})
+
+    @router.get(base + "/issue/createmeta/{key}/issuetypes")
+    async def create_issue_types(request: Request, cloudid: str, key: str) -> JSONResponse:
+        account, err = context(request, cloudid)
+        if err:
+            return err
+        assert account is not None
+        project = jira.s["projects"].get(key)
+        if not project or project["site"] != cloudid or not jira.can_browse(account["accountId"], key):
+            return error(404, f"No project could be found with key '{key}'.")
+        types = [{"id": t["id"], "name": t["name"], "subtask": bool(t.get("subtask"))} for t in project["issue_types"]]
+        return JSONResponse({"startAt": 0, "maxResults": 50, "total": len(types), "issueTypes": types})
 
     @router.get(base + "/project/{key}/components")
     async def project_components(request: Request, cloudid: str, key: str) -> JSONResponse:

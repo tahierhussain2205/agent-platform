@@ -7,7 +7,8 @@ The model proposes tickets; code decides what is sent:
 - an assignee needs evidence: a candidate of the service catalog for the ticket's text or component,
   or a person the requester named. Otherwise the catalog's clear best match, or nobody (and the
   ticket says so). The reasons travel with the action, so approvers see why;
-- a missing project or component comes from the matched service;
+- a missing project or component comes from the matched service, and a component the project does
+  not have is left out (team-managed projects have none), so Jira does not refuse the ticket;
 - the description links back to the Slack messages of the finding the ticket comes from;
 - a ticket built from a private conversation always needs approval, with a warning.
 """
@@ -252,6 +253,10 @@ async def _ticket(
         )
     planned.append((project, summary))
     evidence: list[str] = []
+    if component:
+        component, missing = await _component_of(executor, project, component)
+        if missing:
+            evidence.append(missing)
     ask = action.ask
     if failed:
         evidence.append(f"⚠️ I couldn't check {project} for duplicates ({failed[:120]})")
@@ -292,6 +297,18 @@ async def _ticket(
         evidence=evidence,
         ask=ask,
     )
+
+
+async def _component_of(executor: ToolExecutor, project: str, component: str) -> tuple[str, str]:
+    """The project's own name for ``component``, or nothing and why. A list that cannot be read keeps
+    the component: Jira then says what is wrong."""
+    listed = await executor.run(tool_name("jira", "list_components"), {"project": project})
+    if listed.is_error:
+        return component, ""
+    names = {str(c.get("name")).lower(): str(c.get("name")) for c in listed.data.get("components") or []}
+    if component.lower() in names:
+        return names[component.lower()], ""
+    return "", f"{project} has no component {component}, so the ticket has none"
 
 
 def preview(action: PlannedAction, args: dict[str, Any]) -> str:

@@ -381,6 +381,32 @@ async def test_an_assignee_needs_evidence(tickets: Agent) -> None:
     )
 
 
+async def test_a_component_the_project_does_not_have_is_left_out(tickets: Agent) -> None:
+    """Staging: the model named the service as the component of a team-managed project (which has
+    none) and Jira refused the ticket. The project's own components decide, and the approver is told."""
+    from tests.agent.conftest import script_model
+
+    agent = tickets
+    name, external = await channel(agent)
+    await ui_post("U0QUINN", external, "Gift card balances are wrong at checkout")
+    ref = await ask(agent, f"create Jira tickets for the problems reported today in #{name}")
+    u = await agent.runner.understand(ref, "ask")
+    f = await agent.runner.gather(ref, u, "standard")
+    unknown = {"project": "PAY", "summary": "Gift card balances are wrong", "component": "cart-service",
+               "finding": 1}  # fmt: skip
+    lower = {"project": "PAY", "summary": "Saved carts lose their coupons", "component": "checkout"}
+    await script_model(
+        [{"type": "tool_use", "name": "submit_plan", "input": {"actions": [
+            {"tool": "jira", "operation": "create_issue", "args": unknown, "summary": "Ticket"},
+            {"tool": "jira", "operation": "create_issue", "args": lower, "summary": "Ticket"},
+        ]}}]
+    )  # fmt: skip
+    actions = await agent.runner.plan(ref, u, f, "standard")
+    assert [(a.skip, a.args["component"]) for a in actions] == [(None, ""), (None, "Checkout")]
+    assert "PAY has no component cart-service, so the ticket has none" in actions[0].evidence
+    assert not any("has no component" in e for e in actions[1].evidence)
+
+
 async def test_plans_naming_actions_by_their_combined_name_still_count(tickets: Agent) -> None:
     """Real models write the combined name (jira_create_issue) in either field; an action that is
     not available is said in the thread, never dropped silently (staging: the answer then claimed a

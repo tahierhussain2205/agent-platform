@@ -488,6 +488,28 @@ def test_jira_create_assign_comment_and_components(client: TestClient) -> None:
     assert jira(client, bob, "issue", "POST", json={"fields": sec}).status_code == 403
 
 
+def test_jira_projects_have_their_own_issue_types(client: TestClient) -> None:
+    """SEC is team-managed, like a new site's first project: Epic, Subtask, Task and Story, no Bug."""
+    alice = jira_tokens(client, "acc-alice")["access_token"]
+    bob = jira_tokens(client, "acc-bob")["access_token"]
+    meta = jira(client, alice, "issue/createmeta/SEC/issuetypes").json()
+    assert [(t["name"], t["subtask"]) for t in meta["issueTypes"]] == [
+        ("Epic", False), ("Subtask", True), ("Task", False), ("Story", False),
+    ]  # fmt: skip
+    assert jira(client, bob, "issue/createmeta/SEC/issuetypes").status_code == 404  # Bob cannot browse SEC
+    assert "Bug" in [t["name"] for t in jira(client, bob, "issue/createmeta/PAY/issuetypes").json()["issueTypes"]]
+    fields = {"project": {"key": "SEC"}, "summary": "Rotate the webhook key", "issuetype": {"name": "Bug"}}
+    refused = jira(client, alice, "issue", "POST", json={"fields": fields})
+    assert refused.status_code == 400
+    assert refused.json()["errors"] == {"issuetype": "Specify a valid issue type"}
+    subtask = {**fields, "issuetype": {"id": "10006"}}  # needs a parent
+    assert jira(client, alice, "issue", "POST", json={"fields": subtask}).status_code == 400
+    created = jira(client, alice, "issue", "POST", json={"fields": {**fields, "issuetype": {"id": "10007"}}})
+    assert created.status_code == 201, created.text
+    issue = jira(client, alice, f"issue/{created.json()['key']}").json()["fields"]
+    assert issue["issuetype"] == {"name": "Task"}
+
+
 def test_state_saved_by_an_older_stand_in_is_started_afresh(tmp_path: Path) -> None:
     config = Config(state_dir=tmp_path, seed_fixture=tmp_path / "none.json", github_app_public_key=PUBLIC)
     saved = tmp_path / "state.json"
@@ -500,7 +522,7 @@ def test_state_saved_by_an_older_stand_in_is_started_afresh(tmp_path: Path) -> N
     with TestClient(create_app(config)):
         pass
     after = json.loads(saved.read_text())
-    assert after["atlassian"]["version"] == 3
+    assert after["atlassian"]["version"] == 4
     assert after["atlassian"]["components"]["PAY"]
     assert "marker" in after["github"]["installations"]  # an up to date provider keeps its state
 
