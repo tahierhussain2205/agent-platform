@@ -23,6 +23,7 @@ declare -a MUTATIONS=(
   "drop trigger schedules_track on app.schedules"
   "grant execute on function app.maintenance_schedule_orgs() to app_user"
   "drop index app.services_live_name"
+  "alter table app.sandboxes drop constraint sandboxes_task_id_repository_key"
 )
 
 failed=0

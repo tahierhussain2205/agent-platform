@@ -12,7 +12,9 @@
 """
 
 import base64
+import io
 import secrets
+import tarfile
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -23,6 +25,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 from fakes import oauthkit
 from fakes.config import Config
+from fakes.github_fixture import repositories
 from fakes.store import Store, outdated
 
 PERMISSION_RANK = {"none": 0, "read": 1, "triage": 2, "write": 3, "maintain": 4, "admin": 5}
@@ -35,32 +38,9 @@ def seed() -> dict[str, Any]:
         "quinn-gh": {"login": "quinn-gh", "id": 1003, "email": "quinn@acme.test", "orgs": ["acme"]},
         "dave-gh": {"login": "dave-gh", "id": 1004, "email": "dave@globex.test", "orgs": ["globex"]},
     }
-    repos = {
-        "acme/cart-service": {
-            "private": True, "access": {"alice-gh": "admin", "bob-gh": "write", "quinn-gh": "read"},
-            "files": {
-                "README.md": "# cart-service\n\nPrices carts and applies discounts.\n",
-                "CODEOWNERS": "* @acme/platform\n/src/pricing/ @bob-gh\n/docs/ @quinn-gh\n",
-                "src/pricing/cart.py": "def total(items):\n    # BUG: assumes at most 19 items\n    return sum(i.price for i in items[:19])\n",
-            },
-        },
-        "acme/web-app": {
-            "private": False, "access": {"alice-gh": "admin", "quinn-gh": "write"},
-            "files": {
-                "README.md": "# web-app\n\nThe customer facing website.\n",
-                ".github/CODEOWNERS": "* @quinn-gh\n/search/ @alice-gh\n",
-            },
-        },
-        "acme/infra": {
-            "private": True, "access": {"alice-gh": "admin"},
-            "files": {"README.md": "# infra\n\nTerraform for production.\n", "terraform/main.tf": 'resource "aws_db_instance" "main" {}\n'},
-        },
-        "globex/payments": {
-            "private": True, "access": {"dave-gh": "admin"},
-            "files": {"README.md": "# payments\n\nGlobex payment webhooks.\n", "CODEOWNERS": "* @dave-gh\n"},
-        },
-    }  # fmt: skip
+    repos = repositories()
     return {
+        "version": 2,  # phase 11: histories, deployments, archives
         "users": users,
         "repos": repos,
         "installations": {},
@@ -97,6 +77,17 @@ class GitHub:
         if not r["private"] and owner in self.s["users"].get(login, {}).get("orgs", []):
             return "read"
         return "none"
+
+    def commit_at(self, name: str, ref: str | None) -> dict[str, Any] | None:
+        """A commit by sha (or a prefix of at least 7), or the head for none, "main" and "HEAD"."""
+        history = self.s["repos"][name].get("history") or []
+        if not history:
+            return None
+        if not ref or ref in ("main", "HEAD", "heads/main"):
+            return history[-1]  # type: ignore[no-any-return]
+        if len(ref) < 7:
+            return None
+        return next((c for c in history if c["sha"].startswith(ref)), None)
 
     def repo_json(self, name: str) -> dict[str, Any]:
         r = self.s["repos"][name]
@@ -320,9 +311,14 @@ def build_router(gh: GitHub) -> APIRouter:
             return gh_error(401, "Bad credentials")
         if not allowed or r is None:
             return gh_error(404, "Not Found")
-        if path not in r["files"]:
+        ref = request.query_params.get("ref")
+        at = gh.commit_at(name, ref) if ref else None
+        if ref and at is None:
+            return gh_error(404, "No commit found for the ref " + ref)
+        files = at["tree"] if at else r["files"]
+        if path not in files:
             return gh_error(404, "Not Found")
-        content = r["files"][path].encode()
+        content = files[path].encode()
         return JSONResponse(
             {"type": "file", "encoding": "base64", "size": len(content), "name": path.rsplit("/", 1)[-1], "path": path,
              "content": base64.encodebytes(content).decode(), "sha": secrets.token_hex(20),
@@ -341,6 +337,92 @@ def build_router(gh: GitHub) -> APIRouter:
         return JSONResponse(
             {"permission": "read" if level == "triage" else level, "role_name": level, "user": {"login": username}}
         )
+
+    def readable(request: Request, owner: str, repo: str) -> tuple[str, JSONResponse | None]:
+        """The repository's name, and the error to answer when the caller may not read it."""
+        login, inst = caller(request)
+        name = f"{owner}/{repo}"
+        if login is None and inst is None:
+            return name, gh_error(401, "Bad credentials")
+        ok = name in gh.s["repos"] and (
+            (inst is not None and inst["account"] == owner)
+            or (login is not None and gh.permission(login, name) != "none")
+        )
+        return name, None if ok else gh_error(404, "Not Found")
+
+    def commit_json(name: str, c: dict[str, Any], files: bool = False) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "sha": c["sha"], "html_url": f"https://github.com/{name}/commit/{c['sha']}",
+            "commit": {"message": c["message"], "author": {
+                "name": c["author"], "email": f"{c['author']}@users.noreply.github.com", "date": c["date"]}},
+            "author": {"login": c["author"]}, "parents": [{"sha": p} for p in c["parents"]],
+        }  # fmt: skip
+        if files:
+            body["files"] = c["files"]
+            body["stats"] = {k: sum(f[k] for f in c["files"]) for k in ("additions", "deletions")}
+        return body
+
+    @router.get("/github/api/repos/{owner}/{repo}/commits")
+    async def commits(request: Request, owner: str, repo: str) -> JSONResponse:
+        name, denied = readable(request, owner, repo)
+        if denied:
+            return denied
+        q = request.query_params
+        start = gh.commit_at(name, q.get("sha"))
+        if start is None:
+            return JSONResponse([])
+        history = gh.s["repos"][name]["history"]
+        found = [c for c in history[: history.index(start) + 1] if
+                 (not q.get("path") or any(f["filename"].startswith(q["path"]) for f in c["files"]))
+                 and (not q.get("since") or c["date"] >= q["since"][:19] + "Z")
+                 and (not q.get("until") or c["date"] <= q["until"][:19] + "Z")]  # fmt: skip
+        per_page = min(int(q.get("per_page") or 30), 100)
+        return JSONResponse([commit_json(name, c) for c in reversed(found)][:per_page])
+
+    @router.get("/github/api/repos/{owner}/{repo}/commits/{ref}")
+    async def commit(request: Request, owner: str, repo: str, ref: str) -> JSONResponse:
+        name, denied = readable(request, owner, repo)
+        if denied:
+            return denied
+        c = gh.commit_at(name, ref)
+        if c is None:
+            return gh_error(422, f"No commit found for SHA: {ref}")
+        return JSONResponse(commit_json(name, c, files=True))
+
+    @router.get("/github/api/repos/{owner}/{repo}/tarball")
+    @router.get("/github/api/repos/{owner}/{repo}/tarball/{ref}")
+    async def tarball(request: Request, owner: str, repo: str, ref: str = "") -> Response:
+        """The repository at a commit as a gzipped tar with one top directory, as GitHub serves it."""
+        name, denied = readable(request, owner, repo)
+        if denied:
+            return denied
+        c = gh.commit_at(name, ref or None)
+        if c is None:
+            return gh_error(404, "Not Found")
+        top = f"{owner}-{repo}-{c['sha'][:7]}"
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+            for path, content in sorted(c["tree"].items()):
+                data = content.encode()
+                info = tarfile.TarInfo(f"{top}/{path}")
+                info.size, info.mtime = len(data), 0
+                tar.addfile(info, io.BytesIO(data))
+        return Response(buffer.getvalue(), media_type="application/x-gzip",
+                        headers={"content-disposition": f"attachment; filename={top}.tar.gz"})  # fmt: skip
+
+    @router.get("/github/api/repos/{owner}/{repo}/deployments")
+    async def deployments(request: Request, owner: str, repo: str) -> JSONResponse:
+        name, denied = readable(request, owner, repo)
+        if denied:
+            return denied
+        q = request.query_params
+        found = [
+            {"id": d["id"], "sha": d["sha"], "ref": "main", "environment": d["environment"],
+             "created_at": d["created_at"], "creator": {"login": d["creator"]}, "description": None}
+            for d in gh.s["repos"][name].get("deployments") or []
+            if (not q.get("environment") or d["environment"] == q["environment"]) and (not q.get("sha") or d["sha"] == q["sha"])
+        ]  # fmt: skip
+        return JSONResponse(sorted(found, key=lambda d: d["created_at"], reverse=True))
 
     @router.post("/_admin/github/expire-tokens")
     def expire() -> dict[str, int]:

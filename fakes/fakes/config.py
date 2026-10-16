@@ -48,6 +48,11 @@ class Config:
     atlassian_token_ttl: int = field(default_factory=lambda: int(os.environ.get("ATLASSIAN_TOKEN_TTL", "3600")))
     github_app_id: str = field(default_factory=lambda: os.environ.get("GITHUB_APP_ID", "424242"))
     github_app_slug: str = field(default_factory=lambda: os.environ.get("GITHUB_APP_SLUG", "agent-platform-local"))
+    sandbox_api_key: str = field(default_factory=lambda: os.environ.get("SANDBOX_API_KEY", "sbx-local-key"))
+    gcp_sa_email: str = field(
+        default_factory=lambda: os.environ.get("GCP_SA_EMAIL", "agent-reader@acme-prod.iam.gserviceaccount.com")
+    )
+    gcp_sa_public_key: str = field(default_factory=lambda: os.environ.get("GCP_SA_PUBLIC_KEY", "").replace("\\n", "\n"))
     github_app_public_key: str = field(
         default_factory=lambda: os.environ.get("GITHUB_APP_PUBLIC_KEY", "").replace("\\n", "\n")
     )

@@ -30,7 +30,7 @@ TENANT_TABLES = [
     "connections", "connection_secrets", "operation_policies", "repositories", "services",
     "service_owners", "service_channels", "autonomy_policies", "user_preferences", "playbooks",
     "sessions", "schedules", "tasks", "task_steps", "approvals", "external_actions", "artifacts",
-    "task_links", "usage_events", "usage_daily", "audit_log",
+    "task_links", "usage_events", "usage_daily", "audit_log", "sandboxes",
 ]  # fmt: skip
 
 
@@ -184,6 +184,10 @@ def _populate(conn: psycopg.Connection[Any], o: Org) -> None:
     q(
         "insert into app.task_links (org_id, task_id, kind, external_id) values (%s, %s, 'pull_request', %s)",
         (o.id, o.ids["tasks"], f"{o.key}/api#1"),
+    )
+    q(
+        "insert into app.sandboxes (org_id, task_id, repository, expires_at) values (%s, %s, %s, now() + interval '1 hour')",
+        (o.id, o.ids["tasks"], f"{o.key}/api"),
     )
     q(
         "insert into app.usage_events (org_id, membership_id, task_id, kind, model, input_tokens, output_tokens) "

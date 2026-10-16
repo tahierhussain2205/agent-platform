@@ -170,6 +170,7 @@ CROSS_ORG_LINKS: list[tuple[str, str]] = [
     ("connections", "insert into app.connections (org_id, integration_key, scope, membership_id) values (%(a)s, 'github', 'user', %(b_user)s)"),
     ("external_actions", "insert into app.external_actions (org_id, task_id, integration_key, operation, idempotency_key) values (%(a)s, %(b_task)s, 'jira', 'op', 'cross-org-key')"),
     ("artifacts", "insert into app.artifacts (org_id, task_id, kind, content) values (%(a)s, %(b_task)s, 'brief', '{}')"),
+    ("sandboxes", "insert into app.sandboxes (org_id, task_id, repository, expires_at) values (%(a)s, %(b_task)s, 'acme/api', now())"),
     ("autonomy_policies", "insert into app.autonomy_policies (org_id, scope_type, repository_id, max_mode) values (%(a)s, 'repo', %(b_repo)s, 'auto')"),
 ]  # fmt: skip
 

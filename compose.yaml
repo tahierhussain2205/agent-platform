@@ -179,6 +179,17 @@ services:
         l27G9UQZ4y0TYvPcsWxcaCWVUZ5fimMSMOlo/ylfyr0sj9pWqONtnDLH7/TtLmZD
         0wIDAQAB
         -----END PUBLIC KEY-----
+      GCP_SA_PUBLIC_KEY: |
+        -----BEGIN PUBLIC KEY-----
+        MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAlIS98nR2E9WMkqOfdvTv
+        8icoWQwjRIX/mwK47brG02/OYyomrvyyVyt5spg6GVLB3HuupYHDATdu1DyYRewu
+        oON4/Arveny3xVXifIwamReUmzl+yspKLY+pfpzDK2DKGKLyUShcKpzDrwVuQqto
+        NCW69nqd6fPEtEiVrzoNKh/6FicFUwmP3si/rJu/SfmSNgTaQVtqoCN3soggDFY6
+        yqc5GSWtkF07Owz+Ep7CrK9mKlMpsozhud0UDboMLrN1LBml8giC2tft1eJBrAPC
+        TEzpuRppW/OcP/anED97MrfWIEuoKvXTwBMg7iLjGCB2ipyC5sre7BQSSX/3rOd/
+        pwIDAQAB
+        -----END PUBLIC KEY-----
+      SANDBOX_API_KEY: sbx-local-key
     ports: ["4100:4100"]
     volumes:
       - fakesdata:/data

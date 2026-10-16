@@ -15,10 +15,15 @@ from fakes.atlassian import Atlassian
 from fakes.atlassian import build_router as build_atlassian_router
 from fakes.clerk import Clerk, build_router, clerk_error_handler
 from fakes.config import Config
+from fakes.gcp import Gcp
+from fakes.gcp import build_router as build_gcp_router
 from fakes.github import GitHub
 from fakes.github import build_router as build_github_router
 from fakes.google import Google
 from fakes.google import build_router as build_google_router
+from fakes.sandbox import Sandboxes
+from fakes.sandbox import build_admin_router as build_sandbox_admin_router
+from fakes.sandbox import build_router as build_sandbox_router
 from fakes.slack import Slack, SlackDeliverer
 from fakes.slack import build_admin_router as build_slack_admin_router
 from fakes.slack import build_router as build_slack_router
@@ -39,6 +44,8 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     atlassian = Atlassian(config, store)
     github = GitHub(config, store)
     google = Google(config, store)
+    gcp = Gcp(config, store)
+    sandboxes = Sandboxes(config, store)
 
     def fixture() -> dict[str, Any] | None:
         return json.loads(config.seed_fixture.read_text()) if config.seed_fixture.exists() else None
@@ -53,16 +60,21 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
         atlassian.reset()
         github.reset()
         google.reset()
+        gcp.reset()
+        sandboxes.reset()
         store.save()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if not store.load() or any(k not in store.data for k in ("clerk", "slack", "atlassian", "github", "google")):
+        if not store.load() or any(
+            k not in store.data for k in ("clerk", "slack", "atlassian", "github", "google", "gcp")
+        ):
             reset()
         for is_outdated, start_afresh in (
             (atlassian.outdated, atlassian.reset),
             (github.outdated, github.reset),
             (google.outdated, google.reset),
+            (gcp.outdated, gcp.reset),
         ):
             if is_outdated():  # saved by an older stand-in
                 start_afresh()
@@ -89,6 +101,9 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     app.include_router(build_atlassian_router(atlassian))
     app.include_router(build_github_router(github))
     app.include_router(build_google_router(google))
+    app.include_router(build_gcp_router(gcp))
+    app.include_router(build_sandbox_router(sandboxes))
+    app.include_router(build_sandbox_admin_router(sandboxes))
     app.state.clerk = clerk
     app.state.deliverer = deliverer
     app.state.slack = slack
