@@ -100,6 +100,25 @@ def test_password_rotation(world: World, login_users: dict[str, LoginUser]) -> N
         assert conn.execute("select 1").fetchone() == (1,)
 
 
+def test_unchanged_password_keeps_the_verifier(world: World, login_users: dict[str, LoginUser]) -> None:
+    """A new salt on every migration would break PgBouncer's SCRAM pass-through for services that
+    authenticated before it (they cannot open new server connections until they reconnect)."""
+
+    def verifier(conn: psycopg.Connection) -> str:
+        row = conn.execute(
+            "select rolpassword from pg_authid where rolname = %s", (login_users["api"].username,)
+        ).fetchone()
+        assert row is not None
+        return str(row[0])
+
+    with psycopg.connect(world.url, autocommit=True) as conn:
+        before = verifier(conn)
+        assert ensure_login_user(conn, login_users["api"], PASSWORD) is False
+        assert verifier(conn) == before
+        ensure_login_user(conn, login_users["api"], "rotated-password-0000000003")
+        assert verifier(conn) != before
+
+
 def test_extra_privileges_fail_closed(world: World, login_users: dict[str, LoginUser]) -> None:
     api = login_users["api"]
     with psycopg.connect(world.url, autocommit=True) as conn:

@@ -14,6 +14,7 @@ from typing import Literal
 
 import psycopg
 from psycopg import sql
+from psycopg.conninfo import make_conninfo
 
 Component = Literal["api", "worker", "vault", "identity", "maintenance"]
 
@@ -63,7 +64,9 @@ def ensure_login_user(conn: psycopg.Connection, user: LoginUser, password: str) 
     verifier = sql.Literal(scram_sha256_verifier(password))
     name = sql.Identifier(user.username)
     exists = conn.execute("select 1 from pg_roles where rolname = %s", (user.username,)).fetchone()
-    if exists:
+    if exists and _password_works(conn, user.username, password):
+        pass  # unchanged: keep the stored verifier (see _password_works)
+    elif exists:
         # Only login and password: a CREATEROLE non superuser may not even mention SUPERUSER or
         # BYPASSRLS in ALTER ROLE. The attributes are verified below instead.
         conn.execute(sql.SQL("alter role {} with login password {}").format(name, verifier))
@@ -76,6 +79,19 @@ def ensure_login_user(conn: psycopg.Connection, user: LoginUser, password: str) 
     conn.execute(sql.SQL("grant {} to {}").format(sql.Identifier(user.member_of), name))
     _verify(conn, user)
     return exists is None
+
+
+def _password_works(conn: psycopg.Connection, username: str, password: str) -> bool:
+    """Whether the user logs in with this password already. Then its verifier is left alone: a new
+    one (new salt) breaks PgBouncer's SCRAM pass-through for every client that authenticated
+    against the old one, until it reconnects, and migrations run on every deploy."""
+    try:
+        with psycopg.connect(
+            make_conninfo(conn.info.dsn, user=username, password=password), connect_timeout=5
+        ):
+            return True
+    except psycopg.OperationalError:
+        return False
 
 
 def _verify(conn: psycopg.Connection, user: LoginUser) -> None:
