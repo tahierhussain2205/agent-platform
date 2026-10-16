@@ -286,6 +286,8 @@ async def set_override(
     _known(key, row)
     if operation not in {op.name for op in operations(key, (row or {}).get("config") or {})}:
         raise ApiError(404, "unknown_operation", "There is no such operation.")
+    if body.credential_mode == "user_required" and not (key in CATALOG and CATALOG[key].user_links):
+        raise ApiError(409, "no_links", "Nobody links their own account for this integration.")
     kind = CATALOG[key].kind if key in CATALOG else "custom_mcp"
     await uow.connection.execute(
         "insert into app.org_integrations (org_id, integration_key, kind) values (%s, %s, %s) "

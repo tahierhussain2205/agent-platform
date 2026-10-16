@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ConsoleGate } from '../components/Layout'
 import { mockFetch, renderRoutes } from '../test/render'
 import { MembersPage } from './Members'
@@ -32,15 +32,6 @@ const roles = ['QA', 'Engineer', 'Manager'].map((title) => ({
   created_at: '',
 }))
 
-beforeAll(() => {
-  // jsdom has no <dialog> support.
-  HTMLDialogElement.prototype.showModal = function () {
-    this.setAttribute('open', '')
-  }
-  HTMLDialogElement.prototype.close = function () {
-    this.removeAttribute('open')
-  }
-})
 afterEach(() => vi.unstubAllGlobals())
 
 describe('Members page', () => {

@@ -125,6 +125,43 @@ export interface AccessRequest {
   resolved_at: string | null
 }
 
+export type CredentialMode = 'org' | 'org_with_check' | 'user_required'
+
+export interface IntegrationOperation {
+  name: string
+  description: string
+  tier: 'read' | 'reversible_write' | 'irreversible'
+  default_mode: CredentialMode
+  mode: CredentialMode
+  enabled: boolean
+  overridden: boolean
+}
+
+export interface IntegrationConnection {
+  id: string
+  status: 'active' | 'expired'
+  external_account_id: string | null
+  created_at: string
+  expires_at: string | null
+  last_refreshed_at: string | null
+}
+
+export interface Integration {
+  key: string
+  title: string
+  kind: 'native' | 'vendor_mcp' | 'custom_mcp'
+  auth: 'slack' | 'oauth2' | 'github_app' | 'api_key' | 'none'
+  description: string
+  user_links: boolean
+  enabled: boolean
+  health: 'unknown' | 'ok' | 'degraded' | 'broken'
+  approved: boolean
+  configured: boolean
+  connection: IntegrationConnection | null
+  link: IntegrationConnection | null
+  operations: IntegrationOperation[]
+}
+
 /** fetch bound to the current session token. */
 export function useApi() {
   const { getToken } = useAuth()
@@ -206,6 +243,15 @@ export function useSlack() {
   const api = useApi()
   const org = useOrgKey()
   return useQuery({ queryKey: [org, 'slack'], queryFn: () => api<SlackStatus>('/api/slack') })
+}
+
+export function useIntegrations() {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'integrations'],
+    queryFn: () => api<{ integrations: Integration[] }>('/api/integrations'),
+  })
 }
 
 export function useAccessRequests(enabled: boolean) {

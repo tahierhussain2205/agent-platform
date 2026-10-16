@@ -210,6 +210,12 @@ async def test_overrides_and_disconnect(console: httpx.AsyncClient, stack: Stack
             "/api/integrations/jira/operations/nope", json={"credential_mode": "org"}, headers=ALICE
         )
     ).status_code == 404
+    no_links = await console.put(  # nobody can link a Slack account: it would only break the agent
+        "/api/integrations/slack/operations/read_channel",
+        json={"credential_mode": "user_required"},
+        headers=ALICE,
+    )
+    assert (no_links.status_code, no_links.json()["error"]["code"]) == (409, "no_links")
     set_ = await console.put(
         "/api/integrations/jira/operations/get_issue",
         json={"credential_mode": "user_required", "enabled": True},

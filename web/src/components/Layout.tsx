@@ -133,6 +133,7 @@ function Shell() {
     { to: '/members', label: 'Members' },
     { to: '/roles', label: 'Roles' },
     { to: '/slack', label: 'Slack' },
+    { to: '/integrations', label: 'Integrations' },
     ...(isAdmin
       ? [
           { to: '/settings', label: 'Settings' },
