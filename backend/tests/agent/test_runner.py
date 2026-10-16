@@ -283,6 +283,26 @@ async def test_private_content_is_not_shared_in_a_public_channel(agent: Agent) -
     assert "#leads-private" in outcome.message
 
 
+async def test_shadow_mode_answers_but_only_says_what_it_would_do(agent: Agent) -> None:
+    ref = await ask(agent, "summarize #bugs and share it in #general")
+    u = await agent.runner.understand(ref, "auto")
+    action = PlannedAction("slack", "post_message", {"channel": "general", "text": "{answer}"}, "Post it")
+    agent.sql("update app.org_settings set shadow_mode = true where org_id = %s", (ref.org_id,))
+    try:
+        outcome = await agent.runner.act(ref, u, action, 1, "an answer", [])
+    finally:
+        agent.sql("update app.org_settings set shadow_mode = false where org_id = %s", (ref.org_id,))
+    assert outcome.status == "denied"
+    assert outcome.approval_id is None
+    assert outcome.message.startswith("Not done (shadow mode): Post it.")
+    assert agent.sql("select count(*) from app.approvals where task_id = %s", (ref.task_id,))[0][0] == 0
+    denied = agent.sql(
+        "select count(*) from app.audit_log where action = 'policy.tool' and decision = 'denied' "
+        "and metadata->>'code' = 'shadow_mode' and occurred_at > now() - interval '1 minute'"
+    )
+    assert denied[0][0] >= 1
+
+
 async def test_expired_approvals_do_nothing(agent: Agent) -> None:
     ref = await ask(agent, "summarize #bugs and share it in #general")
     u = await agent.runner.understand(ref, "ask")

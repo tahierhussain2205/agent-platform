@@ -31,6 +31,10 @@ AUDIT_DECISION = {"allowed": "allowed", "denied": "denied", "needs_approval": "i
 
 # Built in tools over our own data and infrastructure: the service catalog, the task's working copies.
 ALWAYS_ON = {"catalog", "sandbox"}
+SHADOW_REASON = (
+    "Shadow mode: I read, plan and answer, but make no changes until an admin turns shadow mode off "
+    "in the console."
+)
 
 
 @dataclass(frozen=True)
@@ -144,6 +148,7 @@ class Policy:
                     "denied", "operation_disabled", f"An admin turned off {adapter_key} {operation}."
                 )
             mode: CredentialMode = override[0] if override else op.credential_mode
+            shadow = await (await conn.execute("select shadow_mode from app.org_settings")).fetchone()
             needs_channel = "channel" in op.input_schema.get("required", [])
             if needs_channel:
                 if target is None:
@@ -167,6 +172,8 @@ class Policy:
         tier = op.tier
         if tier == "read":
             return Decision("allowed", "ok", "Read access.", tier, mode)
+        if shadow is not None and shadow[0]:  # spec 15: plans and answers, never acts, until trusted
+            return Decision("denied", "shadow_mode", SHADOW_REASON, tier, mode)
         if tier == "reversible_write" and self.scope.mode == "auto":
             return Decision(
                 "allowed", "ok", "Auto mode allows reversible writes.", tier, mode, op.approver_rule
