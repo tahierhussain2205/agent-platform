@@ -115,6 +115,8 @@ def run_check(args: argparse.Namespace) -> int:
     try:
         if args.target == "temporal":
             print(asyncio.run(diagnostics.check_temporal(get_settings())))
+        elif args.target == "vault":
+            print(asyncio.run(diagnostics.check_vault(get_settings())))
     except Exception as exc:
         print(f"check {args.target} failed: {exc}", file=sys.stderr)
         return 1
@@ -150,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name, help=help_text)
         cmd.set_defaults(handler=handler)
         if name == "check":
-            cmd.add_argument("target", choices=["temporal"])
+            cmd.add_argument("target", choices=["temporal", "vault"])
         if name == "eval":
             cmd.add_argument("--cases", help="directory of case files (default: the built in cases)")
             cmd.add_argument("--report", help="write a JSON report to this file")

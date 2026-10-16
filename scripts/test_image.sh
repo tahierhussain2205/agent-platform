@@ -26,6 +26,9 @@ docker run --rm --entrypoint sh "$IMAGE" -c 'test ! -e /app/tests && test ! -e /
 set +e; out=$(docker run --rm "$IMAGE" app maintenance 2>&1); rc=$?; set -e
 [[ $rc != 0 ]] && grep -q "DATABASE_URL is not set" <<<"$out" \
   && pass "unconfigured command fails loudly (exit $rc)" || fail "unconfigured maintenance: exit $rc"
+set +e; out=$(docker run --rm "$IMAGE" app vault 2>&1); rc=$?; set -e
+[[ $rc == 2 ]] && grep -q "VAULT_SERVICE_TOKEN is required" <<<"$out" \
+  && pass "vault refuses to start without its service token" || fail "vault without token: exit $rc"
 
 # A stopped container's last log lines can reach `docker logs` a moment after `docker stop` returns
 # (seen once under load): look for a line for up to 2 seconds.

@@ -72,8 +72,16 @@ def test_only_the_vault_reads_secrets_and_only_for_the_current_org(world: World)
     with tx(world.url, "app_vault", world.acme.id) as conn:
         rows = conn.execute("select org_id, ciphertext from app.connection_secrets").fetchall()
         assert rows == [(world.acme.id, b"secret-of-acme")]
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute("select count(*) from app.tasks")
+        # Only what scoping a credential to a running task needs (migration 006), nothing else.
+        conn.execute("select id, org_id, status, requested_by from app.tasks")
+        for column in ("error", "workflow_id", "session_id"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+                conn.execute(sql.SQL("select {} from app.tasks").format(sql.Identifier(column)))
+        for table in ("artifacts", "channels", "task_steps"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+                conn.execute(sql.SQL("select count(*) from app.{}").format(sql.Identifier(table)))
+        with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+            conn.execute("update app.tasks set status = 'cancelled'")
     with tx(world.url, "app_vault") as conn:
         assert scalar(conn, "select count(*) from app.connection_secrets") == 0
     for role in ("app_user", "app_identity_sync"):

@@ -56,6 +56,11 @@ projects:
             envVars:
               - key: DB_MAINTENANCE_PASSWORD
                 generateValue: true
+          # The bearer token the API and worker present to the token vault service.
+          - name: vault-token-staging
+            envVars:
+              - key: VAULT_SERVICE_TOKEN
+                generateValue: true
 
         databases:
           - name: db-staging
@@ -117,10 +122,13 @@ projects:
                 sync: false
               - key: TEMPORAL_API_KEY
                 sync: false
-              # Envelope encryption master keys ("v1:<base64 32 bytes>"); generate with
-              # `python -c "import base64,os;print('v1:'+base64.b64encode(os.urandom(32)).decode())"`.
-              - key: ENCRYPTION_KEYS
-                sync: false
+              # Secrets live in the token vault service, on the private network.
+              - fromGroup: vault-token-staging
+              - key: VAULT_URL
+                fromService:
+                  type: pserv
+                  name: vault-staging
+                  property: hostport
               - key: S3_ENDPOINT_URL
                 sync: false
               - key: S3_ACCESS_KEY_ID
@@ -154,6 +162,22 @@ projects:
                 sync: false
               - key: SLACK_STATE_SECRET
                 generateValue: true
+              # Integrations (B-007): public client ids build the authorize URLs; the secrets and
+              # the GitHub App key are set on vault-staging only. Callback URLs are
+              # API_PUBLIC_URL/oauth/<key>/callback; the GitHub App setup URL is
+              # API_PUBLIC_URL/oauth/github/install.
+              - key: OAUTH_STATE_SECRET
+                generateValue: true
+              - key: ATLASSIAN_CLIENT_ID
+                sync: false
+              - key: GITHUB_APP_SLUG
+                sync: false
+              - key: GITHUB_CLIENT_ID
+                sync: false
+              - key: GOOGLE_CLIENT_ID
+                sync: false
+              - key: GOOGLE_MCP_URL
+                sync: false
 
           # Temporal workers: agent tasks, schedules, approvals.
           - type: worker
@@ -177,7 +201,15 @@ projects:
             envVars:
               - fromGroup: backend-staging
               - fromGroup: db-worker-staging
-              - fromGroup: db-vault-staging
+              - fromGroup: vault-token-staging
+              - key: VAULT_URL
+                fromService:
+                  type: pserv
+                  name: vault-staging
+                  property: hostport
+              # Google's MCP server, called with each person's own token (B-007).
+              - key: GOOGLE_MCP_URL
+                sync: false
               - key: DATABASE_URL
                 fromDatabase:
                   name: db-staging
@@ -200,10 +232,6 @@ projects:
                 sync: false
               - key: TEMPORAL_API_KEY
                 sync: false
-              # Envelope encryption master keys ("v1:<base64 32 bytes>"); generate with
-              # `python -c "import base64,os;print('v1:'+base64.b64encode(os.urandom(32)).decode())"`.
-              - key: ENCRYPTION_KEYS
-                sync: false
               - key: S3_ENDPOINT_URL
                 sync: false
               - key: S3_ACCESS_KEY_ID
@@ -211,6 +239,61 @@ projects:
               - key: S3_SECRET_ACCESS_KEY
                 sync: false
               # OTLP/HTTP collector; empty until the tracing backend is chosen (phase 7).
+              - key: OTEL_EXPORTER_OTLP_ENDPOINT
+                sync: false
+
+          # Token vault: the only holder of the envelope master keys, the vault database user, the
+          # providers' client secrets and the GitHub App key. Private network only; the API and
+          # worker call it with VAULT_SERVICE_TOKEN.
+          - type: pserv
+            name: vault-staging
+            runtime: docker
+            region: oregon
+            plan: starter
+            branch: main
+            autoDeployTrigger: checksPass
+            dockerContext: ./backend
+            dockerfilePath: ./backend/Dockerfile
+            dockerCommand: app vault
+            maxShutdownDelaySeconds: 30
+            numInstances: 1
+            buildFilter:
+              paths: ["backend/**", "render.yaml"]
+            previews:
+              plan: starter
+              numInstances: 1
+            envVars:
+              - fromGroup: backend-staging
+              - fromGroup: db-vault-staging
+              - fromGroup: vault-token-staging
+              # A fixed port, so VAULT_URL (its hostport) is known to the API and worker.
+              - key: PORT
+                value: 10000
+              - key: DATABASE_URL
+                fromDatabase:
+                  name: db-staging
+                  property: connectionPoolString
+              # Envelope encryption master keys ("v1:<base64 32 bytes>"); generate with
+              # `python -c "import base64,os;print('v1:'+base64.b64encode(os.urandom(32)).decode())"`.
+              - key: ENCRYPTION_KEYS
+                sync: false
+              # Integration providers (B-007): token exchange and refresh happen here only.
+              - key: ATLASSIAN_CLIENT_ID
+                sync: false
+              - key: ATLASSIAN_CLIENT_SECRET
+                sync: false
+              - key: GITHUB_APP_ID
+                sync: false
+              - key: GITHUB_APP_PRIVATE_KEY
+                sync: false
+              - key: GITHUB_CLIENT_ID
+                sync: false
+              - key: GITHUB_CLIENT_SECRET
+                sync: false
+              - key: GOOGLE_CLIENT_ID
+                sync: false
+              - key: GOOGLE_CLIENT_SECRET
+                sync: false
               - key: OTEL_EXPORTER_OTLP_ENDPOINT
                 sync: false
 

@@ -176,6 +176,15 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("vault_url")
+    @classmethod
+    def _vault_url_scheme(cls, value: str | None) -> str | None:
+        # Render gives a private service's address as host:port (no way to prefix it in a
+        # Blueprint); traffic stays on the private network.
+        if value and "://" not in value:
+            return f"http://{value}"
+        return value
+
     @property
     def github_private_key_pem(self) -> str | None:
         """The PEM, accepting a value with literal "\\n" escapes (one line environment variables)."""

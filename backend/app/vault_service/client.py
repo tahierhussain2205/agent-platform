@@ -32,6 +32,9 @@ class RemoteVault:
             raise VaultError(str(data.get("error", "provider")), str(data.get("message", data.get("error"))))
         return data
 
+    async def ready(self) -> str:
+        return str((await self._post("/v1/ready"))["status"])
+
     async def store(self, org_id: UUID | str, connection_id: UUID | str, secret: str) -> None:
         await self._post("/v1/secrets", org_id=org_id, connection_id=connection_id, secret=secret)
 

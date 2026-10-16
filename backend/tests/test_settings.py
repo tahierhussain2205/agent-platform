@@ -52,3 +52,19 @@ def test_every_setting_is_documented_in_env_example() -> None:
     documented = set(re.findall(r"^#? ?([A-Z][A-Z0-9_]+)=", example, re.MULTILINE))
     missing = {name.upper() for name in Settings.model_fields} - documented
     assert not missing, f"add to .env.example: {sorted(missing)}"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("vault-staging-abcd:10000", "http://vault-staging-abcd:10000"),  # Render's hostport
+        ("http://vault:8100", "http://vault:8100"),
+        ("https://vault.internal", "https://vault.internal"),
+        ("", None),
+    ],
+)
+def test_vault_url_accepts_a_host_and_port(
+    monkeypatch: pytest.MonkeyPatch, value: str, expected: str
+) -> None:
+    monkeypatch.setenv("VAULT_URL", value)
+    assert Settings().vault_url == expected

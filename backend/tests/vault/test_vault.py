@@ -293,6 +293,7 @@ async def test_vault_service_requires_its_token_and_maps_errors(stack: Stack, en
     remote = RemoteVault(
         "http://vault", "service-token-for-tests", http=httpx.AsyncClient(transport=transport)
     )
+    assert await remote.ready() == "ready"
     conn = connection(env, acme, "jira")
     await remote.store(acme.id, conn, "static-api-key")
     assert await remote.read(acme.id, conn) == "static-api-key"
@@ -307,5 +308,7 @@ async def test_vault_service_requires_its_token_and_maps_errors(stack: Stack, en
     wrong = RemoteVault("http://vault", "wrong", http=httpx.AsyncClient(transport=transport))
     with pytest.raises(VaultError):
         await wrong.read(acme.id, conn)
+    with pytest.raises(VaultError):
+        await wrong.ready()
     await remote.aclose()
     await wrong.aclose()

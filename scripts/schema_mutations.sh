@@ -18,6 +18,8 @@ declare -a MUTATIONS=(
   "drop policy users_in_current_org on app.users; create policy users_in_current_org on app.users for select using (true)"
   "grant execute on function app.maintenance_active_workspaces() to app_user"
   "grant execute on function app.maintenance_fail_task(uuid, text) to app_user"
+  "grant select on app.tasks to app_vault"
+  "grant select on app.task_steps to app_vault"
 )
 
 failed=0

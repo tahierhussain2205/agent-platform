@@ -113,6 +113,13 @@ def create_vault_app(settings: Settings, vault: LocalVault | None = None) -> Fas
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.post("/v1/ready")
+    async def ready() -> dict[str, str]:
+        """Authenticated, and connects as the vault database user: what callers depend on."""
+        async with v().pool.connection() as conn:
+            await conn.execute("select 1")
+        return {"status": "ready"}
+
     @app.post("/v1/secrets")
     async def store(body: StoreBody) -> Response:
         await v().store(body.org_id, body.connection_id, body.secret)

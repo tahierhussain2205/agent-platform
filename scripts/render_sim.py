@@ -4,7 +4,8 @@ Run with `make render-sim`. It reads the staging environment from render.yaml an
   1. builds the backend image from dockerContext / dockerfilePath,
   2. starts throwaway stand-ins for the Blueprint's Postgres, Key Value and Temporal Cloud,
   3. runs preDeployCommand with the env vars the Blueprint wires,
-  4. starts each web and worker service with Render's default PORT (10000), probes healthCheckPath,
+  4. starts the private vault service, then each web and worker service with Render's default PORT
+     (10000), probes healthCheckPath, and checks the API and worker reach the vault,
   5. runs the cron command once,
   6. stops services with SIGTERM and checks they exit within maxShutdownDelaySeconds,
   7. builds the static site with its buildCommand from a clean copy of the repository and serves
@@ -70,6 +71,17 @@ DASHBOARD_SECRETS = {
     "SLACK_CLIENT_ID": "",
     "SLACK_CLIENT_SECRET": "",
     "SLACK_SIGNING_SECRET": "",
+    # No integration provider apps in the simulation (B-007): the integrations show as not configured.
+    "ATLASSIAN_CLIENT_ID": "",
+    "ATLASSIAN_CLIENT_SECRET": "",
+    "GITHUB_APP_ID": "",
+    "GITHUB_APP_SLUG": "",
+    "GITHUB_APP_PRIVATE_KEY": "",
+    "GITHUB_CLIENT_ID": "",
+    "GITHUB_CLIENT_SECRET": "",
+    "GOOGLE_CLIENT_ID": "",
+    "GOOGLE_CLIENT_SECRET": "",
+    "GOOGLE_MCP_URL": "",
 }
 
 # Render's stand-in default database user: owns the database, can create roles, not a superuser.
@@ -128,6 +140,11 @@ def resolve_env(service: dict[str, Any], env: dict[str, Any]) -> dict[str, str]:
             ref = var["fromService"]
             if ref["type"] == "keyvalue" and ref.get("property") == "connectionString":
                 out[key] = f"redis://{PREFIX}-kv:6379"
+            elif ref["type"] == "pserv" and ref.get("property") == "hostport":
+                # A private service's internal address: its name on the private network and its port.
+                target = next(s for s in env["services"] if s["name"] == ref["name"])
+                port = next(v["value"] for v in target.get("envVars", []) if v.get("key") == "PORT")
+                out[key] = f"{PREFIX}-{ref['name'].removesuffix('-staging')}:{port}"
             else:
                 raise SystemExit(f"render_sim: unsupported reference {ref}")
         elif var.get("sync") is False:
@@ -264,6 +281,8 @@ def simulate_backend(env: dict[str, Any]) -> None:
 
     api = services["api-staging"]
     api_env = resolve_env(api, env)
+    vault = services["vault-staging"]
+    vault_env = resolve_env(vault, env)
 
     result = run_command(api, "preDeployCommand", api_env)
     if result.returncode == 0:
@@ -284,6 +303,23 @@ def simulate_backend(env: dict[str, Any]) -> None:
     else:
         bad(f"second preDeployCommand: {again.stdout} {again.stderr[-300:]}")
 
+    # The private service first: the API and worker reach it by name, never from outside.
+    docker(
+        "run", "-d", "--name", f"{PREFIX}-vault", "--network", NETWORK, *env_flags(vault_env),
+        IMAGE, *shlex.split(vault["dockerCommand"]),
+    )  # fmt: skip
+    vault_health = f"http://127.0.0.1:{vault_env['PORT']}/healthz"
+    probe = f"import urllib.request; urllib.request.urlopen('{vault_health}', timeout=2)"
+
+    def vault_up() -> bool:
+        return docker("exec", f"{PREFIX}-vault", "python", "-c", probe, check=False).returncode == 0
+
+    if wait_for(vault_up, 60):
+        ok(f"vault-staging (private service) listening on PORT={vault_env['PORT']}")
+    else:
+        logs = docker("logs", f"{PREFIX}-vault", check=False)
+        bad(f"vault-staging did not start: {(logs.stdout + logs.stderr)[-500:]}")
+
     docker(
         "run", "-d", "--name", f"{PREFIX}-api", "--network", NETWORK, "-p", f"{RENDER_PORT}:{RENDER_PORT}",
         *env_flags(api_env), IMAGE, *shlex.split(api["dockerCommand"]),
@@ -298,6 +334,11 @@ def simulate_backend(env: dict[str, Any]) -> None:
     else:
         api_logs = docker("logs", f"{PREFIX}-api", check=False)
         bad(f"api-staging health check failed: {(api_logs.stdout + api_logs.stderr)[-500:]}")
+    check = docker("exec", f"{PREFIX}-api", "app", "check", "vault", check=False)
+    if "vault: ready" in check.stdout.splitlines():  # logs share stdout
+        ok("api-staging reaches vault-staging at VAULT_URL with the generated service token")
+    else:
+        bad(f"api-staging -> vault: {check.stdout.strip()} {check.stderr.strip()[-300:]}")
 
     worker = services["worker-staging"]
     worker_env = resolve_env(worker, env)
@@ -317,6 +358,11 @@ def simulate_backend(env: dict[str, Any]) -> None:
     else:
         logs = worker_logs()[-300:]
         bad(f"worker-staging: {pong.stderr[-300:]} {logs}")
+    check = docker("exec", f"{PREFIX}-worker", "app", "check", "vault", check=False)
+    if "vault: ready" in check.stdout.splitlines():  # logs share stdout
+        ok("worker-staging reaches vault-staging (it holds no vault database password or master keys)")
+    else:
+        bad(f"worker-staging -> vault: {check.stdout.strip()} {check.stderr.strip()[-300:]}")
 
     cron = services["maintenance-staging"]
     result = run_command(cron, "dockerCommand", resolve_env(cron, env))
@@ -331,7 +377,11 @@ def simulate_backend(env: dict[str, Any]) -> None:
     else:
         bad(f"maintenance-staging exited {result.returncode}: {result.stdout[-300:]} {result.stderr[-300:]}")
 
-    for name, container in (("api-staging", f"{PREFIX}-api"), ("worker-staging", f"{PREFIX}-worker")):
+    for name, container in (
+        ("api-staging", f"{PREFIX}-api"),
+        ("worker-staging", f"{PREFIX}-worker"),
+        ("vault-staging", f"{PREFIX}-vault"),
+    ):
         delay = services[name].get("maxShutdownDelaySeconds", 30)
         started = time.monotonic()
         docker("stop", "-t", str(delay), container, timeout=delay + 30)

@@ -83,10 +83,12 @@ def test_every_plan_resource_exists() -> None:
         "api-staging",
         "worker-staging",
         "maintenance-staging",
+        "vault-staging",
         "web-staging",
         "kv-staging",
     }
     assert set(DATABASES) == {"db-staging"}
+    assert SERVICES["vault-staging"]["type"] == "pserv"  # private network only
     assert SERVICES["api-staging"]["type"] == "web"
     assert SERVICES["worker-staging"]["type"] == "worker"
     assert SERVICES["maintenance-staging"]["type"] == "cron"
@@ -140,6 +142,7 @@ def _subcommand(command: str) -> str:
         ("api-staging", "preDeployCommand", "migrate"),
         ("worker-staging", "dockerCommand", "worker"),
         ("maintenance-staging", "dockerCommand", "maintenance"),
+        ("vault-staging", "dockerCommand", "vault"),
     ],
 )
 def test_commands_exist_in_cli(service: str, field: str, expected: str) -> None:
@@ -219,7 +222,7 @@ def test_only_the_service_running_migrations_holds_the_admin_url() -> None:
     assert holders == {"api-staging"}
 
 
-@pytest.mark.parametrize("name", ["api-staging", "worker-staging", "maintenance-staging"])
+@pytest.mark.parametrize("name", ["api-staging", "worker-staging", "maintenance-staging", "vault-staging"])
 def test_application_traffic_uses_the_pool(name: str) -> None:
     assert _env_keys(SERVICES[name])["DATABASE_URL"]["fromDatabase"]["property"] == "connectionPoolString"
 
@@ -228,8 +231,9 @@ def test_application_traffic_uses_the_pool(name: str) -> None:
     ("name", "passwords"),
     [
         ("api-staging", {"API", "WORKER", "VAULT", "IDENTITY", "MAINTENANCE"}),  # runs `app migrate`
-        ("worker-staging", {"WORKER", "VAULT"}),
+        ("worker-staging", {"WORKER"}),
         ("maintenance-staging", {"MAINTENANCE"}),
+        ("vault-staging", {"VAULT"}),
     ],
 )
 def test_each_service_gets_only_the_db_passwords_it_needs(name: str, passwords: set[str]) -> None:
@@ -268,9 +272,53 @@ def test_static_site() -> None:
 
 
 @pytest.mark.parametrize("name", ["api-staging", "worker-staging"])
-def test_encryption_and_storage_are_configured(name: str) -> None:
+def test_storage_is_configured(name: str) -> None:
     env = _env_keys(SERVICES[name])
-    for key in ("ENCRYPTION_KEYS", "S3_ENDPOINT_URL", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"):
+    for key in ("S3_ENDPOINT_URL", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"):
         assert env[key].get("sync") is False, key
-    assert env["ENCRYPTION_ACTIVE_KEY"]["value"] == "v1"
     assert env["S3_BUCKET"]["value"].endswith("-staging")
+
+
+# ------------------------------------------------------------------ token vault
+
+
+def _holders(key: str) -> set[str]:
+    return {name for name, svc in SERVICES.items() if key in _env_keys(svc)}
+
+
+def test_only_the_vault_holds_master_keys_and_provider_secrets() -> None:
+    vault = _env_keys(SERVICES["vault-staging"])
+    assert vault["ENCRYPTION_KEYS"].get("sync") is False
+    assert vault["ENCRYPTION_ACTIVE_KEY"]["value"] == "v1"
+    assert _holders("ENCRYPTION_KEYS") == {"vault-staging"}
+    for key in (
+        "ATLASSIAN_CLIENT_SECRET",
+        "GITHUB_CLIENT_SECRET",
+        "GITHUB_APP_PRIVATE_KEY",
+        "GOOGLE_CLIENT_SECRET",
+    ):
+        assert vault[key].get("sync") is False, key
+        assert _holders(key) == {"vault-staging"}, key
+
+
+def test_api_and_worker_reach_the_vault_privately_with_a_shared_token() -> None:
+    assert _holders("VAULT_SERVICE_TOKEN") == {"api-staging", "worker-staging", "vault-staging"}
+    assert GROUPS["vault-token-staging"]["envVars"] == [{"key": "VAULT_SERVICE_TOKEN", "generateValue": True}]
+    for name in ("api-staging", "worker-staging"):
+        ref = _env_keys(SERVICES[name])["VAULT_URL"]["fromService"]
+        assert ref == {"type": "pserv", "name": "vault-staging", "property": "hostport"}
+        assert Settings(vault_url="vault-staging-x:10000").vault_url == "http://vault-staging-x:10000"
+    assert _env_keys(SERVICES["vault-staging"])["PORT"]["value"] == 10000
+
+
+def test_oauth_is_configured_on_the_api() -> None:
+    api = _env_keys(SERVICES["api-staging"])
+    assert api["OAUTH_STATE_SECRET"].get("generateValue") is True
+    for key in (
+        "ATLASSIAN_CLIENT_ID",
+        "GITHUB_APP_SLUG",
+        "GITHUB_CLIENT_ID",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_MCP_URL",
+    ):
+        assert api[key].get("sync") is False, key

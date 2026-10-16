@@ -37,3 +37,17 @@ def test_check_reports_failure(monkeypatch: pytest.MonkeyPatch, capsys: pytest.C
     monkeypatch.setenv("TEMPORAL_ADDRESS", "127.0.0.1:1")
     assert cli.main(["check", "temporal"]) == 1
     assert "check temporal failed" in capsys.readouterr().err
+
+
+def test_check_vault_needs_the_vault_service(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from app.settings import get_settings
+
+    monkeypatch.delenv("VAULT_URL", raising=False)
+    get_settings.cache_clear()
+    try:
+        assert cli.main(["check", "vault"]) == 1
+    finally:
+        get_settings.cache_clear()
+    assert "VAULT_URL and VAULT_SERVICE_TOKEN are not set" in capsys.readouterr().err

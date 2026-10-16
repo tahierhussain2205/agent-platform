@@ -41,6 +41,13 @@ done
 out=$(docker compose exec -T worker python -m app check temporal 2>&1 | tail -1) && [[ $out == "pong: smoke" ]] \
   && pass "worker connected to Temporal (PingWorkflow -> $out)" || fail "PingWorkflow: $out"
 
+for svc in api worker; do
+  out=$(docker compose exec -T "$svc" python -m app check vault 2>&1 | tail -1) && [[ $out == "vault: ready" ]] \
+    && pass "$svc reaches the token vault with the service token" || fail "$svc -> vault: $out"
+done
+# The vault is on the private network only: nothing is published on the host.
+[[ -z $(docker compose port vault 8100 2>/dev/null) ]] && pass "vault not published on the host" || fail "vault port published"
+
 curl -fsS "$WEB_URL/" | grep -q '<div id="root">' && pass "web console served" || fail "web console"
 
 curl -fsS -o /dev/null http://localhost:8233/ && pass "Temporal UI" || fail "Temporal UI"

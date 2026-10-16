@@ -19,3 +19,16 @@ async def check_temporal(settings: Settings, timeout_seconds: float = 20.0) -> s
         execution_timeout=timedelta(seconds=timeout_seconds),
     )
     return result
+
+
+async def check_vault(settings: Settings) -> str:
+    """Call the vault service with the service token; it answers once it reaches its database."""
+    from app.vault_service.client import RemoteVault
+
+    if not (settings.vault_url and settings.vault_service_token):
+        raise RuntimeError("VAULT_URL and VAULT_SERVICE_TOKEN are not set (the vault runs in process)")
+    vault = RemoteVault(settings.vault_url, settings.vault_service_token.get_secret_value())
+    try:
+        return f"vault: {await vault.ready()}"
+    finally:
+        await vault.aclose()
