@@ -1,0 +1,29 @@
+{
+  "id": "tickets_from_a_thread",
+  "description": "Example 1: tickets for the problems reported in a thread, assigned to catalog owners; a problem that already has an open issue is not filed again.",
+  "requester": "U0BOB",
+  "channel": "C0BUGS",
+  "requires": ["jira"],
+  "catalog": [
+    {"name": "cart-service", "jira_project": "PAY", "jira_component": "Checkout", "owner": "bob@acme.test", "reason": "owns checkout"},
+    {"name": "Refunds", "jira_project": "PAY", "jira_component": "Refunds", "owner": "alice@acme.test", "reason": "owns refunds"}
+  ],
+  "setup": [
+    {"user": "U0QUINN", "channel": "C0BUGS", "text": "QA notes for {tag}"},
+    {"user": "U0QUINN", "channel": "C0BUGS", "text": "Shipping fees are wrong at checkout", "reply_to": 0},
+    {"user": "U0QUINN", "channel": "C0BUGS", "text": "Checkout fails with a 500 for carts over 20 items again", "reply_to": 0},
+    {"user": "U0ALICE", "channel": "C0BUGS", "text": "Refund confirmation page crashes", "reply_to": 0}
+  ],
+  "in_thread_of": 0,
+  "request": "create Jira tickets for the problems in this thread",
+  "expect": {
+    "playbook": "jira_tickets",
+    "tickets": [
+      {"summary_includes": "Shipping fees", "assignee": "bob@acme.test"},
+      {"summary_includes": "Refund confirmation", "assignee": "alice@acme.test"}
+    ],
+    "skips_include": ["PAY-101"],
+    "refused": false
+  },
+  "max_tokens": 120000
+}

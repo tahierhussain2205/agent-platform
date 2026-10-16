@@ -8,6 +8,7 @@ import pytest
 from app import cli
 from app.eval import CaseResult, EvalRun, load_cases, score, summarize
 from tests.agent.conftest import Agent
+from tests.connect import connect_jira, enable, reset_jira_issues, sql
 from tests.stack import FAKES
 
 
@@ -55,6 +56,27 @@ def test_scoring() -> None:
     assert checks["token_budget"] == 0.0
 
 
+def test_ticket_plans_are_scored_after_the_checks_in_code() -> None:
+    case = {
+        "expect": {
+            "tickets": [{"summary_includes": "shipping", "assignee": "bob@acme.test"},
+                        {"summary_includes": "Refund", "assignee": "alice@acme.test"}],
+            "skips_include": ["PAY-101", "PAY-102"],
+        }
+    }  # fmt: skip
+    ticket = {"operation": "create_issue", "summary": "", "skip": None}
+    observed = {
+        "actions": [
+            {**ticket, "args": {"summary": "Shipping fees are wrong", "assignee_email": "bob@acme.test"}},
+            {**ticket, "args": {"summary": "Refund page crashes", "assignee_email": "quinn@acme.test"}},
+            {**ticket, "args": {"summary": "Refund page crashes again"}, "skip": "looks like PAY-101"},
+        ]
+    }
+    checks = score(case, observed)
+    assert checks["tickets"] == 0.5  # the refund ticket went to someone else
+    assert checks["skips"] == 0.5
+
+
 def test_summary_table() -> None:
     table, mean = summarize(
         [CaseResult("a", 1.0, {"x": 1.0}, 10, 1.0), CaseResult("b", 0.5, {"x": 0.5}, 20, 2.0, notes=["x"]),
@@ -72,6 +94,10 @@ def test_the_eval_command_is_registered() -> None:
 
 
 async def test_every_built_in_case_passes_against_the_stand_ins(agent: Agent) -> None:
+    acme = agent.world.acme
+    enable(agent.stack, acme, "jira")  # the ticket case needs Jira (an admin connects it)
+    await connect_jira(agent.stack, acme, "acc-alice")
+    reset_jira_issues()
     run = EvalRun(agent.runner, agent.slack_activities, agent.stack.pool, f"{FAKES}/slack")
     results = [await run.run_case(case) for case in load_cases()]
     failing = {r.id: r.checks for r in results if r.score < 1 or r.skipped}
@@ -89,3 +115,11 @@ async def test_cases_that_need_seeding_are_skipped_against_real_slack(agent: Age
     case = next(c for c in load_cases() if c.get("setup"))
     result = await run.run_case(case)
     assert result.skipped == "needs the Slack stand-in to seed messages"
+
+
+async def test_cases_that_need_an_integration_are_skipped_without_it(agent: Agent) -> None:
+    sql(agent.stack, "update app.org_integrations set enabled = false where integration_key = 'jira'")
+    run = EvalRun(agent.runner, agent.slack_activities, agent.stack.pool, f"{FAKES}/slack")
+    case = next(c for c in load_cases() if c.get("requires"))
+    result = await run.run_case(case)
+    assert result.skipped == "needs jira connected for the org"

@@ -6,8 +6,10 @@ nothing is posted, against the configured database, Slack and model. Locally tha
 fixture, the Slack stand-in and the Anthropic stand-in; on staging it is the real model.
 
 A case may seed messages first (only possible against the Slack stand-in; such cases are skipped
-against real Slack). Scores per check are 0 to 1; a case scores their mean. The command prints a
-table, writes a JSON report and exits non zero when the mean is under ``--min-score``.
+against real Slack), set up confirmed catalog services, and require integrations (skipped when the
+org has not connected them). Ticket cases score the plan after the checks in code. Scores per
+check are 0 to 1; a case scores their mean. The command prints a table, writes a JSON report and
+exits non zero when the mean is under ``--min-score``.
 """
 
 import asyncio
@@ -23,6 +25,7 @@ import httpx
 
 from app.agent.outbox import CaptureSink, Sink
 from app.agent.runner import AgentDeps, AgentRunner, render_answer
+from app.db.tenant import tenant_tx
 from app.settings import Settings
 from app.workflows.slack_activities import SlackActivities
 from app.workflows.slack_types import SlackRequest
@@ -82,6 +85,22 @@ def score(case: dict[str, Any], observed: dict[str, Any]) -> dict[str, float]:
         checks["refusal"] = float(bool(observed.get("refused")) == bool(expect["refused"]))
     if "delivered" in expect:
         checks["delivery"] = float(observed.get("delivered") == expect["delivered"])
+    if expect.get("tickets"):  # proposed tickets kept by the checks in code
+        kept = [
+            a for a in observed.get("actions") or [] if a["operation"] == "create_issue" and not a["skip"]
+        ]
+
+        def found(want: dict[str, Any]) -> bool:
+            return any(
+                want["summary_includes"].lower() in str(a["args"].get("summary", "")).lower()
+                and ("assignee" not in want or a["args"].get("assignee_email") == want["assignee"])
+                for a in kept
+            )
+
+        checks["tickets"] = sum(found(w) for w in expect["tickets"]) / len(expect["tickets"])
+    if expect.get("skips_include"):  # what the checks in code dropped, and why
+        skips = " ".join(str(a["skip"]) for a in observed.get("actions") or [] if a["skip"])
+        checks["skips"] = sum(s in skips for s in expect["skips_include"]) / len(expect["skips_include"])
     if "max_tokens" in case:
         checks["token_budget"] = float(observed.get("tokens", 0) <= case["max_tokens"])
     return checks
@@ -120,6 +139,40 @@ class EvalRun:
             row = await cur.fetchone()
         return (str(row[0]), str(row[1])) if row else None
 
+    async def missing(self, org_id: str, integrations: list[str]) -> list[str]:
+        """Integrations a case needs that the org has not enabled and connected (the harness cannot
+        connect them: an admin does, as in the end to end tests)."""
+        if not integrations:
+            return []
+        async with tenant_tx(self.pool, org_id) as conn:
+            rows = await (
+                await conn.execute(
+                    "select i.integration_key from app.org_integrations i join app.connections c "
+                    "on c.integration_key = i.integration_key and c.scope = 'org' and c.status = 'active' "
+                    "where i.enabled and i.integration_key = any(%s)",
+                    (integrations,),
+                )
+            ).fetchall()
+        have = {r[0] for r in rows}
+        return [k for k in integrations if k not in have]
+
+    async def catalog(self, org_id: str, services: list[dict[str, Any]]) -> None:
+        """Confirmed services a case relies on (kept when they exist already)."""
+        async with tenant_tx(self.pool, org_id) as conn:
+            for s in services:
+                await conn.execute(
+                    "insert into app.services (org_id, name, jira_project, jira_component) "
+                    "values (%s, %s, %s, %s) on conflict do nothing",
+                    (org_id, s["name"], s.get("jira_project"), s.get("jira_component")),
+                )
+                await conn.execute(
+                    "insert into app.service_owners (org_id, service_id, membership_id, source, reason) "
+                    "select %s, s.id, m.id, 'manual', %s from app.services s, app.org_memberships m "
+                    "join app.users u on u.id = m.user_id where lower(btrim(s.name)) = lower(btrim(%s)) "
+                    "and s.status = 'active' and u.email = %s on conflict do nothing",
+                    (org_id, s.get("reason"), s["name"], s["owner"]),
+                )
+
     async def run_case(self, case: dict[str, Any]) -> CaseResult:
         started = time.monotonic()
         team = case.get("team", "T0ACME")
@@ -129,6 +182,10 @@ class EvalRun:
         found = await self.workspace(team)
         if found is None:
             return skip(case, f"workspace {team} is not connected")
+        missing = await self.missing(found[0], case.get("requires") or [])
+        if missing:
+            return skip(case, f"needs {', '.join(missing)} connected for the org")
+        await self.catalog(found[0], case.get("catalog") or [])
         setup_ts: list[str] = []
         for message in case.get("setup") or []:
             parent = setup_ts[message["reply_to"]] if "reply_to" in message else None
@@ -169,7 +226,11 @@ class EvalRun:
             if u.playbook_key and not u.stopped:
                 f = await self.runner.gather(ref, u, start.model_tier)
                 observed["refused"] = any("not a member" in g or "not enabled" in g for g in f.gaps)
-                await self.runner.plan(ref, u, f, start.model_tier)
+                actions = await self.runner.plan(ref, u, f, start.model_tier)
+                observed["actions"] = [
+                    {"operation": a.operation, "summary": a.summary, "args": a.args, "skip": a.skip}
+                    for a in actions
+                ]
                 c = await self.runner.compose(ref, u, f, start.model_tier)
                 observed["answer"] = render_answer(c, [])
                 observed["cited_ts"] = [s["ts"] for s in c.sources]

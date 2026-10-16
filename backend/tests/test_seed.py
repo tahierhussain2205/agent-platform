@@ -223,6 +223,9 @@ def test_reseed_puts_fixture_orgs_back(seeded_db: str) -> None:
             "values (%s, 'llm', 'claude-sonnet-5', 1000, 100)",
             (acme,),
         )
+        conn.execute(
+            "insert into app.services (org_id, name, status) values (%s, 'cart-service', 'proposed')", (acme,)
+        )
         conn.commit()
     seed(seeded_db)
     with psycopg.connect(seeded_db) as conn:
@@ -238,10 +241,11 @@ def test_reseed_puts_fixture_orgs_back(seeded_db: str) -> None:
             "select (select count(*) from app.org_integrations where org_id = %s and integration_key <> 'slack'), "
             "(select count(*) from app.connections where org_id = %s and integration_key <> 'slack'), "
             "(select count(*) from app.usage_daily where org_id = %s), "
-            "(select count(*) from app.schedules where org_id = %s and status <> 'deleted')",
-            (acme, acme, acme, acme),
+            "(select count(*) from app.schedules where org_id = %s and status <> 'deleted'), "
+            "(select count(*) from app.services where org_id = %s)",
+            (acme, acme, acme, acme, acme),
         ).fetchone()
-    assert left == (0, 0, 0, 0)  # integrations unconnected, budgets unspent, schedules retired
+    assert left == (0, 0, 0, 0, 0)  # integrations unconnected, budgets unspent, schedules retired, no catalog
     assert statuses.pop("extra@acme.test") == "removed"
     assert statuses == {m["email"]: m["status"] for m in FIXTURE["orgs"][0]["members"]}
     assert pending == (0,)
