@@ -27,7 +27,7 @@ from app.api.console import schedules as console_schedules
 from app.api.console import slack as console_slack
 from app.api.console import usage as console_usage
 from app.api.errors import ApiError
-from app.api.middleware import RequestContextMiddleware
+from app.api.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from app.api.oauth import router as oauth_router
 from app.api.slack import router as slack_router
 from app.api.webhooks import router as webhooks_router
@@ -132,9 +132,10 @@ def create_app(settings: Settings | None = None, resources: Resources | None = N
     )
     app.state.resources = res
 
-    # Middleware order (outermost first): tracing, request context, unit of work.
+    # Middleware order (outermost first): tracing, CORS, security headers, request context, unit of work.
     app.add_middleware(UnitOfWorkMiddleware, pool_getter=lambda: res.db_pool)
     app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware, hsts=settings.env in ("staging", "production"))
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.console_origin_list,
