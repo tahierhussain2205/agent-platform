@@ -244,7 +244,10 @@ async def test_invented_numbers_are_dropped_from_the_narrative(agent: Agent, rep
         "select content from app.artifacts where task_id = %s and kind = 'report'", (start.ref.task_id,)
     )[0][0]
     assert artifact["dropped"] == 2
-    assert "17" not in str(artifact)
+    # The invented numbers are gone from what was kept (not "17" anywhere: the window has times of day).
+    kept = str([artifact["summary"], artifact["highlights"]])
+    assert "17" not in kept
+    assert "40%" not in kept
 
 
 # ------------------------------------------------------------------ delivery
