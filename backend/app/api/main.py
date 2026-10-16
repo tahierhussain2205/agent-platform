@@ -25,6 +25,7 @@ from app.api.console import repositories as console_repositories
 from app.api.console import roles as console_roles
 from app.api.console import schedules as console_schedules
 from app.api.console import slack as console_slack
+from app.api.console import usage as console_usage
 from app.api.errors import ApiError
 from app.api.middleware import RequestContextMiddleware
 from app.api.oauth import router as oauth_router
@@ -245,6 +246,7 @@ def create_app(settings: Settings | None = None, resources: Resources | None = N
     app.include_router(console_schedules.router)
     app.include_router(console_catalog.router)
     app.include_router(console_repositories.router)
+    app.include_router(console_usage.router)
     app.include_router(slack_router)
     app.include_router(oauth_router)
     return app
