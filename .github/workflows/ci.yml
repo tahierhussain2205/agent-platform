@@ -151,6 +151,10 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
           pnpm test
+      # Replays the eval cases against the stand-ins; not a release gate yet (spec 15).
+      - name: Eval suite (non blocking)
+        continue-on-error: true
+        run: docker compose exec -T worker app eval --report /tmp/eval.json
       - uses: astral-sh/setup-uv@v5
       - name: Render simulation
         run: |

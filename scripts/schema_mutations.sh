@@ -16,6 +16,8 @@ declare -a MUTATIONS=(
   "drop trigger channels_access_change on app.channels"
   "grant select on app.audit_log_default to app_user"
   "drop policy users_in_current_org on app.users; create policy users_in_current_org on app.users for select using (true)"
+  "grant execute on function app.maintenance_active_workspaces() to app_user"
+  "grant execute on function app.maintenance_fail_task(uuid, text) to app_user"
 )
 
 failed=0

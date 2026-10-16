@@ -62,6 +62,16 @@ def test_a_failing_job_does_not_stop_the_others(world: World, maintenance_user: 
     assert [(r.name, r.ok) for r in results] == [("boom", False), ("partitions", True)]
 
 
+@pytest.fixture(autouse=True)
+def _no_temporal_jobs_from_the_cli(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    """`app maintenance` also runs the Temporal backed reconciliations; from the CLI tests they would
+    start workflows on the dev stack's task queue (and reuse the hourly workflow ids the reconcile
+    tests check). Those jobs have their own tests, so the CLI tests stub them."""
+    if request.node.name.startswith("test_cli"):
+        for name in ("slack_reconcile_job", "task_reconcile_job"):
+            monkeypatch.setattr(maintenance, name, lambda settings, name=name: (name, lambda conn: "stubbed"))
+
+
 def test_cli_runs_jobs_as_the_maintenance_user(
     world: World,
     maintenance_user: LoginUser,
@@ -237,7 +247,7 @@ def test_task_reconcile_job_fails_only_tasks_whose_workflow_is_gone(
     (result,) = maintenance.run_all(_dsn(world, maintenance_user), [maintenance.task_reconcile_job(settings)])
     assert result.ok, result.detail
     with psycopg.connect(world.url) as conn:
-        states = dict(
+        states: dict[uuid.UUID, str] = dict(
             conn.execute("select id, status from app.tasks where id in (%s, %s)", (gone, alive)).fetchall()
         )
     assert states == {gone: "failed", alive: "awaiting_approval"}

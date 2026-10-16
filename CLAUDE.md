@@ -16,11 +16,17 @@ A multi tenant AI agent that works as a teammate inside Slack. Each customer is 
 |---|---|
 | Console API, Slack ingress, health | `backend/app/api/` (FastAPI) |
 | Slack client, rate limiter, Block Kit adapter, install/channel services | `backend/app/slack/` |
+| Agent: playbooks, prompts, the loop's steps (runner), outbox | `backend/app/agent/` |
+| LLM gateway (tiers, budgets, rate limits, retries, metering) | `backend/app/llm/` |
+| Policy module and redaction | `backend/app/policy/` |
+| Tool adapter interface and adapters (Slack) | `backend/app/tools/` |
+| Task workflow and activities | `backend/app/workflows/task*.py` |
+| Eval harness and cases | `backend/app/eval/` (`app eval`) |
 | Temporal workers (agent tasks, schedules, approvals) | `backend/app/` `worker` command |
 | Maintenance jobs (partitions, retention, reconciliation) | `backend/app/` `maintenance` command |
 | SQL migrations | `backend/migrations/NNN_*.sql` |
 | Admin console | `web/` (React, TypeScript, Vite, React Router, TanStack Query, Tailwind) |
-| Local SaaS stand-ins (Clerk, Slack, later Jira, ...) | `fakes/` (own image, Compose only, never deployed) |
+| Local SaaS stand-ins (Clerk, Slack, Anthropic, later Jira, ...) | `fakes/` (own image, Compose only, never deployed) |
 
 **One image, many commands.** `backend/Dockerfile` builds one image; `app <api|worker|maintenance|migrate|seed|check>` (console script, same as `python -m app`) selects the process. The image has no `ENTRYPOINT`; `CMD` is `app api` and every caller passes a full command. On Render ([render.yaml](render.yaml), runbook [docs/runbooks/deploy.md](docs/runbooks/deploy.md)): `api-staging` web service (migrations in `preDeployCommand`), `worker-staging` background worker, `maintenance-staging` cron job, `web-staging` static site, `db-staging` Render Postgres (PgBouncer pool), `kv-staging` Render Key Value. Production is an empty project until phase 13.
 
@@ -59,11 +65,12 @@ A change never weakens one of these to make something work. If an invariant bloc
 | `make maintenance` | Run the maintenance jobs once (partitions; later reconciliation, retention) |
 | `make test-fakes` | Tests of the SaaS stand-ins |
 | `make test-mutations` | Weaken each DB guarantee in turn; the schema suite must catch every one |
+| `make eval` | Replay the agent eval cases against the running stack (`app eval --report FILE --min-score X`) |
 
 Backend only: `cd backend && uv run pytest -k name`, `uv run python -m app api`.
 Web only: `pnpm --dir web dev`.
 
-Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173 (seeded accounts: alice@acme.test, bob@acme.test, frank@both.test, dave@globex.test; password `password123`), fakes http://localhost:4100 (Clerk stand-in at `/clerk`, Slack stand-in at `/slack` with a Slack-like UI at http://localhost:4100/slack/ui, test admin at `/_admin`), Temporal UI http://localhost:8233,
+Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173 (seeded accounts: alice@acme.test, bob@acme.test, frank@both.test, dave@globex.test; password `password123`), fakes http://localhost:4100 (Clerk stand-in at `/clerk`, Slack stand-in at `/slack` with a Slack-like UI at http://localhost:4100/slack/ui, Anthropic stand-in at `/anthropic`, test admin at `/_admin`), Temporal UI http://localhost:8233,
 Jaeger http://localhost:16686, Postgres `localhost:55432` (postgres/postgres, db `agent`), PgBouncer `localhost:56432`,
 Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 
@@ -75,7 +82,7 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - **Typing**: full annotations; no `Any` in public signatures unless wrapping untyped JSON.
 - **Errors**: raise domain exceptions in services; the API layer maps them to HTTP responses. Never put secrets or tokens in exception messages.
 - **Logging**: structured JSON logs (phase 4). Never log tokens, secrets or raw Slack message text.
-- **Migrations**: add `backend/migrations/NNN_description.sql`; never edit an applied migration (the runner checks checksums). Files must not contain top level `begin`/`commit`: the runner wraps each file and its bookkeeping row in one transaction. Start with `set local role app_owner;` so objects are owned by `app_owner`. Migrations run as a non superuser (Render-like `agent_admin` locally): never rely on BYPASSRLS; cross tenant work goes through `security definer` functions owned by `app_owner` with `execute` granted only to the role that needs it.
+- **Migrations**: add `backend/migrations/NNN_description.sql`; never edit an applied migration (the runner checks checksums). Files must not contain top level `begin`/`commit`: the runner wraps each file and its bookkeeping row in one transaction. Start with `set local role app_owner;` so objects are owned by `app_owner`. Migrations run as a non superuser (Render-like `agent_admin` locally): never rely on BYPASSRLS; cross tenant work goes through `security definer` functions owned by `app_owner` with `execute` granted only to the role that needs it. In SQL functions, never select-then-insert on a unique key (two transactions both miss and one fails): use `insert ... on conflict`.
 - **Database access by component**: each component connects as its own login user via `Settings.component_dsn("api" | "worker" | "vault" | "identity" | "maintenance")`; never use `MIGRATION_DATABASE_URL` outside `app migrate` / `app seed`.
 - **Tenant data in request handlers**: take `uow: UnitOfWork = Depends(get_uow)` and `conn = await uow.bind(org_id)`. Never take a pool connection directly in a request path (only `/readyz` does). The middleware commits before the response starts; raise to roll back. Do not use the unit of work from background tasks or streaming bodies.
 - **Errors**: let database errors propagate; `app/db/errors.py` maps them (403/409/422) with generic messages. Unhandled exceptions become a JSON 500 with the request id.
@@ -91,8 +98,12 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - **Slack ingress** (`app/api/slack.py`): verify the signature on the raw body first, claim the event id in Key Value (release it and return 500 if starting the workflow fails), answer within 3 seconds, and start workflows with an id derived from the event id. Workflow inputs carry references only (team, channel, ts, user, event id), never message text (invariant 7).
 - **Talking to Slack** from activities: `ChannelAdapter.send(team, token, intent)` with an intent from `app/slack/adapter.py` (Block Kit rendering and limits, rate limiting and coalescing are handled there); raw `SlackClient.call` only for reads. Get the token with `service.bot_token(pool, vault, org_id)`. Turn permanent Slack errors into non retryable `ApplicationError`s (`slack_activities.permanent`). Mark sends idempotent (the activity can run twice).
 - **Activities** open their own tenant transactions with `tenant_tx(pool, org_id)` (sets `app.org_id` first); never share a connection across awaits on Slack.
-- **Adding a tool adapter**: arrives in phase 8.
-- **Adding a playbook**: arrives in phase 7.
+- **Model calls** only through `LLMGateway.complete(CallContext(...), tier, ...)`: it resolves the tier against what the org allows, refuses when a budget is spent (`BudgetExceededError`), rate limits per org, retries and falls back, meters usage and traces without content. Structured output: a forced `submit_*` tool (`app/agent/prompts.py`), validated in code before use.
+- **No raw Slack text in Temporal history** (invariant 7): read Slack and call the model inside the same activity; return only derived content and source references (`app/agent/types.py`).
+- **Adding a tool adapter**: implement `ToolAdapter` (`app/tools/base.py`) with `Operation` metadata (kind, reversible, outward facing, credential mode, approver rule) and `resolve_target`; register it in `AgentRunner._registry`. The policy module (enablement, overrides, channel rule, tiers, credential modes) and the audit log then apply automatically. Tool output is capped and redacted; cite with `ctx.refs.add(Source(...))`.
+- **Adding a playbook**: add `app/agent/playbooks/<key>.v<N>.md` (front matter: key, version, title, description, `read:`/`write:` operation lists). Never edit a released version: add `v<N+1>` (sync refuses changed content). `app migrate` syncs built ins; tasks pin the version they started with.
+- **External writes from the agent** go through `post_once` (`app/agent/outbox.py`) or `AgentRunner.execute`: an `external_actions` key checked first, the key also in Slack message metadata.
+- **Every policy decision is audited** by the policy module (`actor_type` agent, `actor_id` the requester). Do not add tool calls or outputs that bypass `Policy.check_tool` / `Policy.check_output`.
 - **Web**: TypeScript strict, ESLint + Prettier, components in `PascalCase.tsx`, tests next to code as `*.test.tsx`.
 
 ## Testing rules
@@ -141,3 +152,8 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - Store the bot token only after the install transaction commits: the vault's connection must see the new `connections` row (foreign key).
 - A controlled checkbox that waits for a mutation flips back for one render (TanStack Query reports `isPending` a tick late); keep the requested value in local state set in `onChange`.
 - In the Slack stand-in's UI, typing `@agent` posts a real mention (`<@BOT>`).
+- The Anthropic stand-in is a heuristic "model": it recognises steps by the forced tool name and reads our `[S1]` line format. Changing prompt tags (`<brief>`, `<findings>`, `<thread>`, `<request_ref>`) or tool names means updating `fakes/fakes/anthropic.py`. Script it (`/_admin/anthropic/script`) to play a persuaded model; read `/_admin/anthropic/requests` to assert what reached the model.
+- Agent tests leave tasks `running` unless they close them; enough of them hit the org's concurrency limit (`wait_org`). The agent test modules close open tasks after each test.
+- Temporal's workflow sandbox re-imports workflow modules: monkeypatching a workflow module constant only works with `UnsandboxedWorkflowRunner` (see the lost signal test). Keep at least one test on the sandboxed `build_worker`.
+- Test tokens with a short TTL must be minted when used, not at import: a long earlier module lets module level tokens expire (`token_expired`).
+- Tests must never start workflows on the dev stack's task queue (`agent-tasks` on localhost:7233): use a unique `TEMPORAL_TASK_QUEUE`, and stub the Temporal backed maintenance jobs when running `app maintenance` from a test. Workflow ids are global per namespace, whatever the queue.

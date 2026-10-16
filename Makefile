@@ -131,6 +131,10 @@ smoke: ## Check the running stack end to end
 test-image: ## Check the backend image (non root, $$PORT, SIGTERM); needs `make dev`
 	./scripts/test_image.sh
 
+.PHONY: eval
+eval: ## Replay the agent eval cases against the running stack (stand-ins locally)
+	$(COMPOSE) exec -T worker app eval
+
 .PHONY: e2e
 e2e: ## Run Playwright browser tests against the running stack
 	$(E2E) test

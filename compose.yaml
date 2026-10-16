@@ -48,6 +48,9 @@ x-backend: &backend
     SLACK_CLIENT_SECRET: local-slack-client-secret
     SLACK_SIGNING_SECRET: local-slack-signing-secret
     SLACK_STATE_SECRET: local-slack-state-secret
+    # Anthropic stand-in (fakes service). Real: https://api.anthropic.com and a real key (B-005).
+    ANTHROPIC_API_URL: http://fakes:4100/anthropic
+    ANTHROPIC_API_KEY: sk-ant-local-key
   restart: "no"
 
 services:

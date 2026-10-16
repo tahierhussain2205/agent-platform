@@ -186,6 +186,9 @@ projects:
                 value: 100
               - key: CONSOLE_URL
                 sync: false
+              # Model provider (Anthropic API key, B-005). Without it the agent only acknowledges.
+              - key: ANTHROPIC_API_KEY
+                sync: false
               - key: REDIS_URL
                 fromService:
                   type: keyvalue

@@ -502,6 +502,17 @@ class Slack:
             raise SlackApiError("channel_not_found")
         return {"channel": self.channel_obj(team, c)}
 
+    def thread_of(self, team: dict[str, Any], channel_id: str | None, ts: str | None) -> dict[str, Any]:
+        """``thread_ts`` of a message, as Slack puts it in an interaction's container."""
+        if not channel_id or not ts:
+            return {}
+        try:
+            channel = self.channel(team, channel_id)
+        except SlackApiError:
+            return {}
+        message = next((m for m in channel["messages"] if m["ts"] == ts), None)
+        return {"thread_ts": message["thread_ts"]} if message and message.get("thread_ts") else {}
+
     def m_conversations_members(
         self, team: dict[str, Any], bot: str, p: dict[str, Any], token: str | None
     ) -> dict[str, Any]:
@@ -845,6 +856,7 @@ def build_router(slack: Slack) -> APIRouter:
                     "message_ts": p.get("ts"),
                     "channel_id": p.get("channel"),
                     "is_ephemeral": False,
+                    **slack.thread_of(team, p.get("channel"), p.get("ts")),
                 }
             )
             payload = {

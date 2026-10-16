@@ -404,3 +404,25 @@ async def test_a_lost_approval_signal_is_recovered(
 def _ephemeral(user: str, text: str) -> Any:
     response = httpx.get(f"{FAKES}/_admin/slack/ephemeral", params={"team": "T0ACME", "user": user})
     return [e for e in response.json() if text in e.get("text", "")]
+
+
+async def test_an_expired_approval_cannot_be_decided(live: Live) -> None:
+    from app.agent.types import PlannedAction
+
+    agent = live.agent
+    message = await ui_post("U0BOB", "C0GENERAL", "share a summary of #bugs in #general")
+    ref = await agent.task("U0BOB", "C0GENERAL", ts=message["ts"])
+    assert (await agent.runner.start(ref)).status == "started"
+    u = await agent.runner.understand(ref, "ask")
+    action = PlannedAction("slack", "post_message", {"channel": "general", "text": "x"}, "Post it")
+    outcome = await agent.runner.act(ref, u, action, 1, "an answer", [])
+    agent.sql(
+        "update app.approvals set created_at = now() - interval '2 hours', expires_at = now() - interval '1 hour' "
+        "where id = %s",
+        (outcome.approval_id,),
+    )
+    await live.click("U0BOB", "approval_approve", str(outcome.approval_id))
+    assert await wait_for(lambda: _ephemeral("U0BOB", "This request was already expired"))
+    assert agent.sql(
+        "select status, decided_by from app.approvals where id = %s", (outcome.approval_id,)
+    ) == [("pending", None)]  # the task itself marks it expired when it next looks

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useAudit } from '../api/hooks'
+import { useAudit, type AuditEntry } from '../api/hooks'
 import {
   Badge,
   Button,
@@ -89,9 +89,12 @@ export function AuditPage() {
                     <td className="whitespace-nowrap py-2 pr-3 text-slate-600">
                       {new Date(entry.occurred_at).toLocaleString()}
                     </td>
-                    <td className="py-2 pr-3">{entry.actor_email ?? entry.actor_type}</td>
+                    <td className="py-2 pr-3">{actorLabel(entry)}</td>
                     <td className="py-2 pr-3 font-mono text-xs">{entry.action}</td>
-                    <td className="py-2 pr-3 text-slate-700">{entry.target ?? ''}</td>
+                    <td className="py-2 pr-3 text-slate-700">
+                      {entry.target ?? ''}
+                      {entry.reason && <div className="text-xs text-slate-500">{entry.reason}</div>}
+                    </td>
                     <td className="py-2">
                       <Badge tone={DECISION_TONE[entry.decision]}>{entry.decision}</Badge>
                     </td>
@@ -122,4 +125,12 @@ export function AuditPage() {
       </Card>
     </>
   )
+}
+
+/** Agent actions are recorded on behalf of the person who asked. */
+function actorLabel(entry: AuditEntry): string {
+  if (entry.actor_type === 'agent') {
+    return entry.actor_email ? `Agent for ${entry.actor_email}` : 'Agent'
+  }
+  return entry.actor_email ?? entry.actor_type
 }

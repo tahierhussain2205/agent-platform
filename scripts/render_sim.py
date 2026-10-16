@@ -64,6 +64,8 @@ DASHBOARD_SECRETS = {
     "CLERK_WEBHOOK_SECRET": "",
     "VITE_CLERK_PUBLISHABLE_KEY": "",
     "API_PUBLIC_URL": f"http://localhost:{RENDER_PORT}",
+    # No model provider in the simulation: the worker runs without the agent loop, as without a key.
+    "ANTHROPIC_API_KEY": "",
     "CONSOLE_URL": "http://localhost:5173",
     "SLACK_CLIENT_ID": "",
     "SLACK_CLIENT_SECRET": "",

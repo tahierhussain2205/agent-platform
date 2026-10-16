@@ -42,9 +42,10 @@ test('a member mentions the agent in an allowlisted channel and gets a reply in 
   await openChannel(page, 'bugs')
   const ts = await post(page, `@agent what broke today? ${uid()}`)
   const message = page.locator(`[data-testid="message"][data-ts="${ts}"]`)
-  await expect(message.getByRole('button', { name: '1 reply' })).toBeVisible({ timeout: 20_000 })
+  // The agent keeps one status message and posts its answer: two replies.
+  await expect(message.getByRole('button', { name: '2 replies' })).toBeVisible({ timeout: 45_000 })
   await openThread(page, ts)
-  await expect(page.getByTestId('thread')).toContainText('Received, @Bob Builder')
+  await expect(page.getByTestId('thread')).toContainText('✅ Done')
 })
 
 test('a channel that is not allowed gets a private explanation', async ({ page, browser }) => {
@@ -79,8 +80,8 @@ test('a channel that is not allowed gets a private explanation', async ({ page, 
   await expect(
     page
       .locator(`[data-testid="message"][data-ts="${ts}"]`)
-      .getByRole('button', { name: '1 reply' }),
-  ).toBeVisible({ timeout: 20_000 })
+      .getByRole('button', { name: '2 replies' }),
+  ).toBeVisible({ timeout: 45_000 })
   await console_.getByLabel('Allow the agent in random').uncheck()
   await console_.context().close()
 })
@@ -122,8 +123,8 @@ test('an uninvited person gets the access request flow and an admin invites them
   await expect(
     page
       .locator(`[data-testid="message"][data-ts="${ts}"]`)
-      .getByRole('button', { name: '1 reply' }),
-  ).toBeVisible({ timeout: 20_000 })
+      .getByRole('button', { name: '2 replies' }),
+  ).toBeVisible({ timeout: 45_000 })
 })
 
 test('App Home shows the org and the Ask/Auto choice, and changes stick', async ({ page }) => {

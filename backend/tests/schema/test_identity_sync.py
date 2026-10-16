@@ -1,5 +1,6 @@
 """Migration 002: identity sync functions (Clerk mirror) and console resolvers."""
 
+import uuid
 from typing import Any
 
 import psycopg
@@ -361,3 +362,72 @@ def test_the_staleness_helper_is_internal(world: World) -> None:
         pytest.raises(psycopg.errors.InsufficientPrivilege),
     ):
         conn.execute("select app.identity_is_stale(gen_random_uuid(), gen_random_uuid(), now())")
+
+
+# ------------------------------------------------------------------ concurrent creation (migration 005)
+
+
+def _one_value(world: World, query: str, params: tuple[Any, ...]) -> Any:
+    with psycopg.connect(world.url) as conn:
+        row = conn.execute(query, params).fetchone()
+    assert row is not None
+    return row[0] if len(row) == 1 else tuple(row)
+
+
+def _race(
+    world: World, first: str, first_args: tuple[Any, ...], second: str, second_args: tuple[Any, ...]
+) -> Any:
+    """Run ``first`` in an open transaction, start ``second`` in another one, check it waits for
+    the first, commit the first, and return the second's result."""
+    import threading
+    import time
+
+    result: dict[str, Any] = {}
+    holder = psycopg.connect(world.url)
+    holder.execute(f"set role {SYNC}")
+    holder.execute(first, first_args)
+
+    def other() -> None:
+        with psycopg.connect(world.url) as conn:
+            conn.execute(f"set role {SYNC}")
+            try:
+                result["row"] = conn.execute(second, second_args).fetchone()
+                conn.commit()
+            except psycopg.Error as exc:
+                result["error"] = exc
+
+    thread = threading.Thread(target=other)
+    thread.start()
+    time.sleep(0.5)
+    waited = thread.is_alive()  # blocked on the first transaction's row
+    holder.commit()
+    holder.close()
+    thread.join(10)
+    assert waited
+    assert "error" not in result, result.get("error")
+    return result["row"]
+
+
+def test_concurrent_invites_of_the_same_person_both_succeed(world: World) -> None:
+    email = f"race-{uuid.uuid4().hex[:8]}@acme.test"
+    invite = "select app.identity_invite('org_acme', %s, 'org:member', null)"
+    membership = _race(world, invite, (email,), invite, (email,))
+    assert membership[0] is not None
+    assert _one_value(world, "select count(*) from app.users where lower(email) = %s", (email,)) == 1
+    assert _one_value(world, "select count(*) from app.org_memberships m join app.users u on u.id = m.user_id "
+                  "where lower(u.email) = %s", (email,)) == 1  # fmt: skip
+
+
+def test_a_signup_racing_its_invitation_links_the_same_person(world: World) -> None:
+    email = f"race-{uuid.uuid4().hex[:8]}@acme.test"
+    clerk_id = f"user_race_{uuid.uuid4().hex[:8]}"
+    user_id = _race(
+        world,
+        "select app.identity_invite('org_acme', %s, 'org:member', null)",
+        (email,),
+        "select app.identity_upsert_user(%s, %s, 'Racer')",
+        (clerk_id, email),
+    )[0]
+    row = _one_value(world, "select clerk_user_id, name from app.users where id = %s", (user_id,))
+    assert tuple(row) == (clerk_id, "Racer")
+    assert _one_value(world, "select count(*) from app.users where lower(email) = %s", (email,)) == 1

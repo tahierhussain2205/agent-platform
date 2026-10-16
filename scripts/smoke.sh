@@ -11,8 +11,14 @@ echo "Smoke checking the local stack"
 
 body=$(curl -fsS "$API_URL/healthz") && [[ $body == '{"status":"ok"}' ]] && pass "api /healthz" || fail "api /healthz ($body)"
 
-body=$(curl -fsS "$API_URL/readyz") \
-  && echo "$body" | jq -e '. == {"status":"ready","checks":{"database":"ok","key_value":"ok"}}' >/dev/null \
+# Readiness may lag a fresh start (pools warming up while the host is busy building): wait up to 30 s.
+ready='{"status":"ready","checks":{"database":"ok","key_value":"ok"}}'
+for _ in $(seq 1 30); do
+  body=$(curl -sS -m 5 "$API_URL/readyz" || true)
+  echo "$body" | jq -e --argjson want "$ready" '. == $want' >/dev/null 2>&1 && break
+  sleep 1
+done
+echo "$body" | jq -e --argjson want "$ready" '. == $want' >/dev/null 2>&1 \
   && pass "api /readyz (Postgres through PgBouncer as api_service, Key Value)" || fail "api /readyz ($body)"
 
 rid="smoke-$(date +%s%N)"

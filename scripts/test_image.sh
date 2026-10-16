@@ -27,13 +27,20 @@ set +e; out=$(docker run --rm "$IMAGE" app maintenance 2>&1); rc=$?; set -e
 [[ $rc != 0 ]] && grep -q "DATABASE_URL is not set" <<<"$out" \
   && pass "unconfigured command fails loudly (exit $rc)" || fail "unconfigured maintenance: exit $rc"
 
+# A stopped container's last log lines can reach `docker logs` a moment after `docker stop` returns
+# (seen once under load): look for a line for up to 2 seconds.
+logged() {
+  for _ in $(seq 1 10); do docker logs "$1" 2>&1 | grep -q "$2" && return 0; sleep 0.2; done
+  return 1
+}
+
 # API: custom PORT, health, graceful stop well within the grace period.
 docker run -d --name img-test-api -e PORT=9123 -p 9123:9123 "$IMAGE" app api >/dev/null
 for _ in $(seq 1 50); do curl -fsS localhost:9123/healthz >/dev/null 2>&1 && break; sleep 0.2; done
 curl -fsS localhost:9123/healthz | grep -q ok && pass "api listens on \$PORT=9123" || fail "api not on 9123"
 start=$(date +%s); docker stop -t 30 img-test-api >/dev/null; took=$(( $(date +%s) - start ))
 code=$(docker inspect -f '{{.State.ExitCode}}' img-test-api)
-docker logs img-test-api 2>&1 | grep -q "Application shutdown complete" && (( took < 10 )) \
+logged img-test-api "Application shutdown complete" && (( took < 10 )) \
   && pass "api drains and exits on SIGTERM in ${took}s (exit $code)" || fail "api shutdown (took ${took}s, exit $code)"
 
 # Worker: connects to Temporal, stops polling and exits 0 on SIGTERM.
@@ -43,7 +50,7 @@ for _ in $(seq 1 60); do docker logs img-test-worker 2>&1 | grep -q "worker poll
 docker logs img-test-worker 2>&1 | grep -q "worker polling" && pass "worker connects to Temporal" || fail "worker did not connect"
 start=$(date +%s); docker stop -t 30 img-test-worker >/dev/null; took=$(( $(date +%s) - start ))
 code=$(docker inspect -f '{{.State.ExitCode}}' img-test-worker)
-[[ $code == 0 ]] && docker logs img-test-worker 2>&1 | grep -q "worker stopped" && (( took < 15 )) \
+[[ $code == 0 ]] && logged img-test-worker "worker stopped" && (( took < 15 )) \
   && pass "worker exits 0 on SIGTERM in ${took}s" || fail "worker shutdown (exit $code, took ${took}s)"
 
 echo "Image checks passed"
