@@ -21,6 +21,7 @@ import httpx
 from app.policy import Member
 from app.policy.redaction import redact
 from app.tools.base import Operation, Source, Target, ToolContext, ToolResult, cap
+from app.tools.http import request
 from app.vault_service import Credential
 
 log = logging.getLogger(__name__)
@@ -187,8 +188,8 @@ class JiraAdapter:
         return f"{self.api_url}/ex/jira/{cloud}/rest/api/3"
 
     async def _call(self, ctx: ToolContext, credential: Credential, method: str, path: str, **kw: Any) -> Any:
-        http: httpx.AsyncClient = ctx.http
-        response = await http.request(
+        response = await request(
+            ctx.http,
             method,
             f"{self._base(credential)}/{path}",
             headers={"authorization": f"Bearer {credential.token}", "accept": "application/json"},

@@ -332,8 +332,10 @@ async def test_proposals_stay_within_the_admins_access(setup: Setup) -> None:
     try:
         acts = activities(setup)
         executor = await acts._executor(str(acme.id), str(acme.admin))
-        proposals, _ = await build(executor, stack.pool, acme.id)
-        cart = next(p for p in proposals if p.name == "cart-service")
+        proposals, notes = await build(executor, stack.pool, acme.id)
+        found = [p for p in proposals if p.name == "cart-service"]
+        assert found, (notes, [p.name for p in proposals])
+        cart = found[0]
         # without her GitHub link no CODEOWNERS is read for her; Jira still says who leads Checkout
         assert [o.source for o in cart.owners] == ["component_lead"]
         assert any("Link your GitHub account" in e for e in cart.evidence)

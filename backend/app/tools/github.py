@@ -16,6 +16,7 @@ from app.db.tenant import tenant_tx
 from app.policy import Member
 from app.policy.redaction import redact
 from app.tools.base import Operation, Source, Target, ToolContext, ToolResult, cap
+from app.tools.http import request
 from app.vault_service import Credential
 
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
@@ -59,8 +60,9 @@ class GitHubAdapter:
         return None
 
     async def _get(self, ctx: ToolContext, token: str, path: str, **params: Any) -> Any:
-        http: httpx.AsyncClient = ctx.http
-        response = await http.get(
+        response = await request(
+            ctx.http,
+            "GET",
             f"{self.api_url}/{path}",
             params=params or None,
             headers={"authorization": f"Bearer {token}", "accept": "application/vnd.github+json"},
