@@ -222,6 +222,7 @@ def build_router(gcp: Gcp) -> APIRouter:
             claims = jwt.decode(
                 str(form.get("assertion") or ""), cfg.gcp_sa_public_key, algorithms=["RS256"],
                 options={"require": ["iss", "aud", "iat", "exp"], "verify_aud": False},
+                leeway=60,  # Google tolerates small clock differences
             )  # fmt: skip
         except jwt.PyJWTError as exc:
             return JSONResponse({"error": "invalid_grant", "error_description": f"Invalid JWT: {exc}"}, status_code=400)

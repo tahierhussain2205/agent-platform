@@ -112,8 +112,9 @@ async def test_every_built_in_case_passes_against_the_stand_ins(agent: Agent) ->
     reset_jira_issues()
     run = EvalRun(agent.runner, agent.slack_activities, agent.stack.pool, f"{FAKES}/slack")
     results = [await run.run_case(case) for case in load_cases()]
-    failing = {r.id: r.checks for r in results if r.score < 1 or r.skipped}
-    assert not failing, failing
+    failing = {r.id: {"checks": r.checks, "skipped": r.skipped, "notes": r.notes} for r in results
+               if r.score < 1 or r.skipped}  # fmt: skip
+    assert not failing, json.dumps(failing)
     # Eval tasks close themselves: nothing is left running to block the org.
     open_tasks = agent.sql(
         "select count(*) from app.tasks where org_id = %s and status in ('queued', 'running')",

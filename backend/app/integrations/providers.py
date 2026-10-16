@@ -362,13 +362,13 @@ class GoogleCloudProvider(OAuthProvider):
                 "private_key_id": str(data.get("private_key_id") or "")}  # fmt: skip
 
     async def service_account_token(self, key: dict[str, str]) -> tuple[str, float]:
-        now = int(time.time())
+        issued = int(time.time()) - 30  # clocks differ a little; Google accepts a backdated assertion
         claims = {
             "iss": key["client_email"],
             "scope": " ".join(GCP_SCOPES),
             "aud": self.settings.gcp_token_url,
-            "iat": now,
-            "exp": now + 3600,
+            "iat": issued,
+            "exp": issued + 3600,
         }
         headers = {"kid": key["private_key_id"]} if key.get("private_key_id") else None
         assertion = jwt.encode(claims, key["private_key"], algorithm="RS256", headers=headers)
