@@ -36,6 +36,15 @@ from tests.world import World
 PASSWORD = "slack-test-password-00001"
 SIGNING_SECRET = "local-slack-signing-secret"
 FAKES = os.environ.get("TEST_FAKES_URL", "http://localhost:4100")
+# Key Value: the Compose Valkey locally (`make infra`), the service container in CI. Each suite keeps to
+# its own database number.
+KV_BASE = os.environ.get("TEST_REDIS_URL", "redis://localhost:56379/15").rsplit("/", 1)[0]
+
+
+def kv_url(db: int) -> str:
+    return f"{KV_BASE}/{db}"
+
+
 KEY = base64.b64encode(b"slack-tests-encryption-key-00001").decode()
 ENVELOPE = Envelope(LocalKeyProvider.from_config(f"v1:{KEY}", "v1"))
 GITHUB_APP_KEY = (
@@ -169,11 +178,11 @@ async def stack(env: Env) -> AsyncIterator[Stack]:
     pool = await open_pool(env.dsn["api"], "api", min_size=0, max_size=4)
     vault_pool = await open_pool(env.dsn["vault"], "vault", min_size=0, max_size=2)
     identity_pool = await open_pool(env.dsn["identity"], "identity", min_size=0, max_size=2)
-    kv_client: Any = kv.make_client("redis://localhost:56379/13")
+    kv_client: Any = kv.make_client(kv_url(13))
     try:
         await kv_client.ping()
-    except Exception:
-        kv_client = None
+    except Exception as exc:  # without it claims, nonces and rate limits fail in confusing ways
+        pytest.fail(f"Key Value not reachable at {kv_url(13)} (TEST_REDIS_URL): {type(exc).__name__}")
     stack_vault = LocalVault(vault_pool, ENVELOPE, providers(PROVIDER_SETTINGS))
     slack = SlackClient(f"{FAKES}/slack/api", limiter=SlackRateLimiter(kv_client) if kv_client else None)
     yield Stack(
