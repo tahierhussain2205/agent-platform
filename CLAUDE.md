@@ -23,6 +23,7 @@ A multi tenant AI agent that works as a teammate inside Slack. Each customer is 
 | Integration catalog, OAuth providers, signed state | `backend/app/integrations/` |
 | Token vault service (secrets, OAuth exchange and refresh, task scoped credentials) | `backend/app/vault_service/` (`app vault`) |
 | Task workflow and activities | `backend/app/workflows/task*.py` |
+| Scheduled reports: cadences, figures, validation, Temporal mirror | `backend/app/schedules/`, `backend/app/agent/reports.py`, `backend/app/workflows/reports.py` |
 | Eval harness and cases | `backend/app/eval/` (`app eval`) |
 | Temporal workers (agent tasks, schedules, approvals) | `backend/app/` `worker` command |
 | Maintenance jobs (partitions, retention, reconciliation) | `backend/app/` `maintenance` command |
@@ -64,7 +65,7 @@ A change never weakens one of these to make something work. If an invariant bloc
 | `make smoke` / `make test-image` / `make e2e` | Stack smoke checks / image checks / Playwright |
 | `make test-stack` | `dev` + every stack level check |
 | `make render-sim` | Execute `render.yaml` locally with Docker the way Render would |
-| `make maintenance` | Run the maintenance jobs once (partitions; later reconciliation, retention) |
+| `make maintenance` | Run the maintenance jobs once (partitions, Slack and task reconciliation, schedule sync; later retention) |
 | `make test-fakes` | Tests of the SaaS stand-ins |
 | `make test-mutations` | Weaken each DB guarantee in turn; the schema suite must catch every one |
 | `make eval` | Replay the agent eval cases against the running stack (`app eval --report FILE --min-score X`) |
@@ -105,6 +106,7 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - **Model calls** only through `LLMGateway.complete(CallContext(...), tier, ...)`: it resolves the tier against what the org allows, refuses when a budget is spent (`BudgetExceededError`), rate limits per org, retries and falls back, meters usage and traces without content. Structured output: a forced `submit_*` tool (`app/agent/prompts.py`), validated in code before use.
 - **No raw Slack text in Temporal history** (invariant 7): read Slack and call the model inside the same activity; return only derived content and source references (`app/agent/types.py`).
 - **Adding a tool adapter**: implement `ToolAdapter` (`app/tools/base.py`) with `Operation` metadata (kind, reversible, outward facing, default credential mode, approver rule), `resolve_target` and `execute(ctx, operation, args, credential)`; add it to `CATALOG` (`app/integrations/catalog.py`) and `build_registry` (`app/tools/executor.py`), and to `operations()` in the console API. Call tools only through `ToolExecutor.run`: it resolves the target, asks the policy module, fetches the credential for the operation's mode (`org`, `org_with_check`, `user_required`) and audits. For `org_with_check`, filter results to what the requester may see; label sources only some people may see `visibility="restricted"` and implement `audience_ok` so channel output can be checked. Cap and redact output; cite with `ctx.refs.add(Source(...))`. Add the provider's endpoints to the stand-in. A long tail tool is an MCP server, not an adapter.
+- **Scheduled reports**: a schedule row is the truth; `app.schedules.temporal.sync_org` mirrors it into Temporal (only rows with `synced_revision` behind `revision`). After a change, start a sync with `start_sync(await temporal_client(request), ...)` (in console routes as a background task, so it runs after the commit). Save schedules through `app.schedules.service.validate` (the owner's access, not the editor's). Report figures come from internal operations (`Operation.internal`, through the `ToolExecutor`); render numbers with `figure_lines` and pass narratives through `verify_narrative`. Pausing for a reason goes through `ReportRunner.pause` (stamps the detail for admin notices).
 - **Adding a playbook**: add `app/agent/playbooks/<key>.v<N>.md` (front matter: key, version, title, description, `read:`/`write:` operation lists). Never edit a released version: add `v<N+1>` (sync refuses changed content). `app migrate` syncs built ins; tasks pin the version they started with.
 - **External writes from the agent** go through `post_once` (`app/agent/outbox.py`) or `AgentRunner.execute`: an `external_actions` key checked first, the key also in Slack message metadata.
 - **Every policy decision is audited** by the policy module (`actor_type` agent, `actor_id` the requester). Do not add tool calls or outputs that bypass `Policy.check_tool` / `Policy.check_output`.
@@ -165,3 +167,8 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - After changing `fakes/`, rebuild the running stand-ins (`docker compose up -d --build --wait fakes`); the backend tests and e2e use the running container.
 - The GitHub stand-in verifies app JWTs with `GITHUB_APP_PUBLIC_KEY` (`dev/github/app-dev-public-key.pem`, local only); a fakes container started without it refuses installation tokens. The vault signs with the matching private key (`GITHUB_APP_PRIVATE_KEY`, `\n` escapes accepted).
 - `docker compose up --wait` (2.23) fails when a one-shot container that nothing depends on exits during the wait: make a long running service depend on it (`api` depends on `seed`).
+- A run reports on the window ending at its scheduled minute: messages posted after that minute's start belong to the next run (tests that post then run use the next minute).
+- Temporal describes a cron schedule as calendar specs: compare `info.next_action_times` with `Cadence.next_runs`, not cron strings.
+- The API's Temporal client is connected lazily (`app.api.temporal_client`); `resources.temporal` may still be `None`. Tests that exercise API follow ups must point `TEMPORAL_TASK_QUEUE` at their own queue (and clear `get_settings`), or the dev stack's worker picks the workflows up.
+- Console checkboxes show the requested state while saving: e2e tests wait for them to be enabled again before relying on the save.
+- The Slack stand-in UI re-renders every second: click helpers (`openDm`, `openChannel`) retry until the view changed.

@@ -158,8 +158,6 @@ async def test_mention_in_a_channel_that_is_not_allowlisted(
 async def test_permanent_slack_errors_are_not_retried(running: tuple[Client, Settings], env: Any) -> None:
     """Allowlisted channel, the requester is a member, but the bot is not: the reply fails with
     not_in_channel. That cannot get better by retrying, so the workflow fails at once."""
-    import time
-
     from temporalio.client import WorkflowFailureError
 
     client, settings = running
@@ -169,10 +167,21 @@ async def test_permanent_slack_errors_are_not_retried(running: tuple[Client, Set
         )
         conn.commit()
     await bot_leaves("C0RANDOM")
-    started = time.monotonic()
+    workflow_id = f"test-{uuid.uuid4().hex}"
     with pytest.raises(WorkflowFailureError) as info:
-        await run(client, settings, "AgentRequestWorkflow", request(env, "U0BOB", "C0RANDOM", "1.1"))
-    assert time.monotonic() - started < 5  # retries with backoff would take far longer
+        await client.execute_workflow(
+            "AgentRequestWorkflow",
+            request(env, "U0BOB", "C0RANDOM", "1.1"),
+            id=workflow_id,
+            task_queue=settings.temporal_task_queue,
+        )
+    # One attempt only (a retried activity would show more than one start): asserted from the
+    # history, not from elapsed time, which a busy machine stretches.
+    history = await client.get_workflow_handle(workflow_id).fetch_history()
+    starts = [e for e in history.events if e.HasField("activity_task_started_event_attributes")]
+    failed = [e for e in history.events if e.HasField("activity_task_failed_event_attributes")]
+    assert [e.activity_task_started_event_attributes.attempt for e in starts][-1] == 1
+    assert len(failed) == 1
     cause = info.value.cause
     assert "SlackPermanentError" in repr(cause) or "not_in_channel" in repr(getattr(cause, "cause", ""))
     with psycopg.connect(env.world.url) as conn:

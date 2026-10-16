@@ -25,9 +25,11 @@ def test_operation_tiers_and_definitions() -> None:
         "list_channels": "read",
         "read_channel": "read",
         "read_thread": "read",
+        "channel_stats": "read",
         "post_message": "irreversible",
     }
-    tools = definitions(SlackAdapter(), ["read_channel", "read_thread"])
+    # channel_stats is internal (report figures): never offered to a model, even when asked for.
+    tools = definitions(SlackAdapter(), ["read_channel", "read_thread", "channel_stats"])
     assert [t["name"] for t in tools] == ["slack_read_channel", "slack_read_thread"]
     assert tools[0]["input_schema"]["required"] == ["channel"]
     registry = Registry()

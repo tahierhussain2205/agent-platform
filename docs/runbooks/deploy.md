@@ -10,7 +10,8 @@ Everything Render runs is defined in [`render.yaml`](../../render.yaml). The das
 |---|---|---|
 | `api-staging` | Web service (Docker) | `app api`; `preDeployCommand: app migrate`; health check `/healthz` |
 | `worker-staging` | Background worker (Docker) | `app worker`; 120 s shutdown delay, drains for 100 s |
-| `maintenance-staging` | Cron job (Docker) | `app maintenance`, daily 03:17 UTC |
+| `vault-staging` | Private service (Docker) | `app vault` on port 10000; the only holder of `ENCRYPTION_KEYS`, the vault database user, provider client secrets and the GitHub App key; the API and worker reach it at its `hostport` with `VAULT_SERVICE_TOKEN` |
+| `maintenance-staging` | Cron job (Docker) | `app maintenance` every 15 minutes (partitions, Slack and task reconciliation, schedule sync; all idempotent) |
 | `web-staging` | Static site | pnpm build, `web/dist`, SPA rewrite |
 | `db-staging` | Render Postgres 16 | PgBouncer pool enabled, no external access |
 | `kv-staging` | Render Key Value | `noeviction`, private network only |
@@ -29,6 +30,11 @@ Everything Render runs is defined in [`render.yaml`](../../render.yaml). The das
    | `api-staging`, `worker-staging` | `TEMPORAL_NAMESPACE` | `<namespace>.<account>` |
    | `api-staging`, `worker-staging` | `TEMPORAL_API_KEY` | Temporal Cloud API key |
    | `web-staging` | `VITE_API_URL` | Public URL of `api-staging` (for example `https://api-staging.onrender.com`). Known only after `api-staging` exists: enter a placeholder, then set it and redeploy `web-staging` |
+   | `vault-staging` | `ENCRYPTION_KEYS` | `v1:<base64 32 bytes>` (see the comment in `render.yaml`); keep a copy offline: losing it loses every stored token |
+   | `vault-staging` | `ATLASSIAN_CLIENT_ID`/`_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_CLIENT_ID`/`_SECRET`, `GOOGLE_CLIENT_ID`/`_SECRET` | The provider apps (B-007); the private key as one line with `\n` escapes |
+   | `api-staging` | `ATLASSIAN_CLIENT_ID`, `GITHUB_APP_SLUG`, `GITHUB_CLIENT_ID`, `GOOGLE_CLIENT_ID`, `GOOGLE_MCP_URL` | Public client ids for the authorize URLs |
+
+   Every other `sync: false` key in `render.yaml` (Clerk, Slack, Anthropic, object storage, tracing) is documented in `.env.example`.
 
 5. **Apply**. The first deploy runs `app migrate` before `api-staging` starts. If migrations fail, the deploy stops and the previous version (none, the first time) keeps running.
 6. **Database roles** (phase 3): check whether the default Render user can create roles and grant `BYPASSRLS`; see the phase 3 notes in `spec/decisions_and_blockers.md`.

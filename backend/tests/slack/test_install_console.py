@@ -284,8 +284,9 @@ async def test_allowlist_toggle(console: httpx.AsyncClient, stack: Stack, env: A
     back = await console.patch(f"/api/slack/channels/{bugs}", json={"is_allowlisted": True}, headers=ALICE)
     assert back.json()["is_allowlisted"] is True
     assert [w for w, _, _ in stack.temporal.started] == [
-        "SyncWorkspaceWorkflow"
-    ]  # members of a newly enabled channel
+        "ScheduleSyncWorkflow",  # the paused schedule stops firing and admins hear about it
+        "SyncWorkspaceWorkflow",  # members of a newly enabled channel
+    ]
     old = q(world, "select id from app.channels where external_id = 'C0OLDPROJ'")
     assert (
         await console.patch(f"/api/slack/channels/{old}", json={"is_allowlisted": True}, headers=ALICE)
