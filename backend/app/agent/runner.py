@@ -878,8 +878,11 @@ class AgentRunner:
         )
         actions = []
         unknown: list[str] = []
-        for raw in (result.tool_input("submit_plan").get("actions") or [])[:MAX_ACTIONS]:
+        listed = result.tool_input("submit_plan").get("actions") or []
+        unreadable = 0 if isinstance(listed, list) else 1  # the gateway decodes what it can
+        for raw in (listed if isinstance(listed, list) else [])[:MAX_ACTIONS]:
             if not isinstance(raw, dict):
+                unreadable += 1
                 continue
             tool, operation = str(raw.get("tool")), str(raw.get("operation"))
             # The combined name in either field is the same action (models write it both ways).
@@ -904,13 +907,17 @@ class AgentRunner:
             actions = await tickets.review(
                 executor, actions, f.points[:30], str(brief.get("goal") or ""), partial(self._permalinks, ref)
             )
-        if unknown:  # never drop a requested change silently: the answer must not read as if it happened
-            log.warning("plan named actions that are not available", extra={"actions": unknown})
+        # Never drop a requested change silently: the answer must not read as if it happened.
+        if unknown or unreadable:
+            log.warning(
+                "plan named actions that are not available",
+                extra={"actions": unknown, "unreadable": unreadable},
+            )
+            named = f" ({escape(', '.join(unknown))})" if unknown else ""
             await self.reply(
                 ref,
-                "⚠️ I could not turn part of this request into an action I can take ("
-                + escape(", ".join(unknown))
-                + "), so nothing was changed for it.",
+                f"⚠️ I could not turn part of this request into an action I can take{named}, so nothing was "
+                "changed for it.",
                 "plan-unknown",
             )
         changes = [a for a in actions if a.skip is None]

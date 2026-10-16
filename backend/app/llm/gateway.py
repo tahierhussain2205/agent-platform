@@ -25,6 +25,7 @@ from psycopg_pool import AsyncConnectionPool
 from app.db.tenant import tenant_tx
 from app.llm import models
 from app.llm.models import Tier
+from app.llm.repair import repair_content
 
 log = logging.getLogger(__name__)
 tracer = trace.get_tracer("app.llm")
@@ -253,9 +254,10 @@ class LLMGateway:
             usage.cache_creation_input_tokens,
             usage.cache_read_input_tokens,
         )
-        result = LLMResult(
-            list(payload.get("content") or []), model, resolved, str(payload.get("stop_reason")), usage, price
-        )
+        content, fixed = repair_content(list(payload.get("content") or []), tools or [])
+        if fixed:  # field names only, never their content
+            log.warning("model tool input repaired", extra={"purpose": call.purpose, "fields": fixed[:10]})
+        result = LLMResult(content, model, resolved, str(payload.get("stop_reason")), usage, price)
         await self._meter(call, result)
         if result.stop_reason == "refusal":  # metered: a declined request still costs its input
             category = (payload.get("stop_details") or {}).get("category")
