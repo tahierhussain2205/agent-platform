@@ -14,6 +14,7 @@ import { RolesPage } from './pages/Roles'
 import { SchedulesPage } from './pages/Schedules'
 import { SettingsPage } from './pages/Settings'
 import { SlackPage } from './pages/Slack'
+import { UsagePage } from './pages/Usage'
 
 const clerkPages = () => import('./auth/ClerkPages')
 const ClerkSignIn = lazy(() => clerkPages().then((m) => ({ default: m.ClerkSignIn })))
@@ -64,6 +65,14 @@ const router = createBrowserRouter([
         element: (
           <AdminOnly>
             <SettingsPage />
+          </AdminOnly>
+        ),
+      },
+      {
+        path: 'usage',
+        element: (
+          <AdminOnly>
+            <UsagePage />
           </AdminOnly>
         ),
       },

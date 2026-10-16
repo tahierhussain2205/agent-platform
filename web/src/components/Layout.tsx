@@ -139,6 +139,7 @@ function Shell() {
     { to: '/schedules', label: 'Schedules' },
     ...(isAdmin
       ? [
+          { to: '/usage', label: 'Usage' },
           { to: '/settings', label: 'Settings' },
           { to: '/audit', label: 'Audit log' },
         ]
