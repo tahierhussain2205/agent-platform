@@ -139,6 +139,10 @@ class LLMResponseError(LLMError):
     """The model answered, but not in the shape the step asked for."""
 
 
+class LLMRefusalError(LLMError):
+    """The model's safety classifiers declined the request; asking again will not help."""
+
+
 @dataclass
 class LLMGateway:
     routes: list[Route]
@@ -220,6 +224,9 @@ class LLMGateway:
                 }
             )
             payload = await self._send(body, span)
+            if payload.get("stop_reason") == "refusal":
+                category = (payload.get("stop_details") or {}).get("category")
+                span.set_attribute("app.llm.refusal", str(category))
             usage = Usage(
                 **{
                     k: int(v or 0)
@@ -247,6 +254,10 @@ class LLMGateway:
             list(payload.get("content") or []), model, resolved, str(payload.get("stop_reason")), usage, price
         )
         await self._meter(call, result)
+        if result.stop_reason == "refusal":  # metered: a declined request still costs its input
+            category = (payload.get("stop_details") or {}).get("category")
+            log.warning("model declined the request", extra={"purpose": call.purpose, "category": category})
+            raise LLMRefusalError(f"the model declined this request ({category or 'no category'})")
         log.info(
             "llm call",
             extra={
@@ -270,12 +281,24 @@ class LLMGateway:
         max_tokens: int,
         cache: bool,
     ) -> dict[str, Any]:
-        """Prompt caching: a breakpoint after the stable system prefix and after the tools."""
+        """Prompt caching: a breakpoint after the stable system prefix and after the tools. For a model
+        that refuses a forced tool choice, the choice becomes ``auto`` with an instruction (after the
+        cached prefix); for a model that thinks, a small output limit is raised to leave it room."""
         blocks: list[dict[str, Any]] = (
             [{"type": "text", "text": system}] if isinstance(system, str) else [dict(b) for b in system]
         )
         if cache and blocks and not any(b.get("cache_control") for b in blocks):
             blocks[-1]["cache_control"] = {"type": "ephemeral"}
+        if tool_choice and tool_choice.get("type") in ("tool", "any") and not models.forces_tools(model):
+            wanted = (
+                f"the {tool_choice['name']} tool" if tool_choice.get("type") == "tool" else "one of the tools"
+            )
+            blocks.append(
+                {"type": "text", "text": f"Answer by calling {wanted}. Do not answer in plain text."}
+            )
+            tool_choice = {"type": "auto"}
+        if models.thinks(model):
+            max_tokens = max(max_tokens, models.THINKING_MIN_MAX_TOKENS)
         body: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
@@ -312,8 +335,7 @@ class LLMGateway:
                     span.set_attribute("app.llm.route", route.name)
                     data: dict[str, Any] = response.json()
                     return data
-                kind = _error_type(response)
-                last_error = f"{route.name}: {response.status_code} {kind}"
+                last_error = f"{route.name}: {response.status_code} {_error_detail(response)}"
                 if response.status_code in (401, 403):
                     log.error("model provider refused our credentials", extra={"route": route.name})
                     break  # this route is misconfigured: try the next one
@@ -385,11 +407,15 @@ class LLMGateway:
         await self.http.aclose()
 
 
-def _error_type(response: httpx.Response) -> str:
+def _error_detail(response: httpx.Response) -> str:
+    """The provider's error type and message (it describes our request, never our key), capped."""
     try:
-        return str(response.json().get("error", {}).get("type", "unknown"))
+        error = response.json().get("error") or {}
     except ValueError:
         return "unparseable"
+    message = " ".join(str(error.get("message") or "").split())[:200]
+    kind = str(error.get("type", "unknown"))
+    return f"{kind}: {message}" if message else kind
 
 
 def gateway_from_settings(settings: Any, pool: AsyncConnectionPool, kv: Any) -> LLMGateway | None:

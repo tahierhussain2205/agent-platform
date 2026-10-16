@@ -27,7 +27,7 @@ from app.agent.types import (
     Understanding,
     Verification,
 )
-from app.llm.gateway import LLMRequestError, LLMResponseError
+from app.llm.gateway import LLMRefusalError, LLMRequestError, LLMResponseError
 from app.sandbox import SandboxError
 from app.slack.client import SlackError
 from app.slack.service import SlackNotConnectedError
@@ -49,6 +49,8 @@ def translated[**P, R](fn: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R
             raise ApplicationError(str(exc), type="SlackNotConnected", non_retryable=True) from exc
         except LLMRequestError as exc:
             raise ApplicationError(str(exc), type="LLMRequestError", non_retryable=True) from exc
+        except LLMRefusalError as exc:
+            raise ApplicationError(str(exc), type="LLMRefusalError", non_retryable=True) from exc
         except LLMResponseError as exc:  # retried: the model may answer properly next time
             raise ApplicationError(str(exc), type="LLMResponseError") from exc
         except SandboxError as exc:  # retried: the provider may be back (the message names no secret)

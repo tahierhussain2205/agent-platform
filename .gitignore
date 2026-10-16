@@ -29,3 +29,6 @@ e2e/playwright-report/
 .idea/
 .vscode/
 .DS_Store
+
+# Local switches between stand-ins and real services (they hold or read secrets).
+compose.override.yaml

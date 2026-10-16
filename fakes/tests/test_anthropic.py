@@ -291,3 +291,21 @@ def test_schedule_requests_are_classified_and_parsed(
     assert chosen["playbook"] == "schedule_create"
     proposal = tool_input(call(client, messages=[{"role": "user", "content": user}], **forced("submit_schedule")))
     assert {k: proposal[k] for k in expected} == expected
+
+
+def test_models_without_forced_tool_choice_refuse_it_and_follow_an_instruction(client: TestClient) -> None:
+    refused = call(client, model="claude-opus-5-5", **forced("submit_classification"))
+    assert refused.status_code == 400
+    assert refused.json()["error"]["message"] == 'tool_choice: type "tool" and "any" are not supported for this model.'
+    asked = call(
+        client,
+        model="claude-opus-5-5",
+        system=[{"type": "text", "text": "rules"},
+                {"type": "text", "text": "Answer by calling the submit_classification tool. Do not answer in plain text."}],
+        messages=[{"role": "user", "content": "<request>summarize #bugs</request>"}],
+        tools=forced("submit_classification")["tools"],
+        tool_choice={"type": "auto"},
+    )  # fmt: skip
+    assert asked.status_code == 200
+    assert tool_input(asked)["playbook"] == "slack_qa"
+    assert call(client, model="claude-sonnet-5", **forced("submit_classification")).status_code == 200

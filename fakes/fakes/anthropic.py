@@ -39,6 +39,10 @@ LINE = re.compile(r"^\s*(?:↳\s*)?\[([A-Z]\d+)\]\s+(?:\([^)]*\)\s+)?([^:]{1,80}
 TAG = "<{0}>(.*?)</{0}>"
 
 
+# Real models that refuse a forced tool choice (the gateway asks them with an instruction instead).
+NO_FORCED_TOOL_CHOICE = ("claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1")
+
+
 def tag(text: str, name: str) -> str | None:
     match = re.search(TAG.format(name), text, re.DOTALL)
     return match.group(1).strip() if match else None
@@ -105,6 +109,10 @@ class Anthropic:
             return 404, error("not_found_error", f"model: {model}"), {}
         if not isinstance(body.get("messages"), list) or not body["messages"]:
             return 400, error("invalid_request_error", "messages: field required"), {}
+        choice = (body.get("tool_choice") or {}).get("type")
+        if choice in ("tool", "any") and str(model).startswith(NO_FORCED_TOOL_CHOICE):
+            message = 'tool_choice: type "tool" and "any" are not supported for this model.'
+            return 400, error("invalid_request_error", message), {}
         if not isinstance(body.get("max_tokens"), int) or body["max_tokens"] < 1:
             return 400, error("invalid_request_error", "max_tokens: field required"), {}
         content = script["content"] if script else self.respond(body)
@@ -157,7 +165,7 @@ class Anthropic:
     # ------------------------------------------------------------------ the "model"
 
     def respond(self, body: dict[str, Any]) -> list[dict[str, Any]]:
-        forced = (body.get("tool_choice") or {}).get("name")
+        forced = (body.get("tool_choice") or {}).get("name") or asked_for(body.get("system"))
         last_user = text_of(body["messages"][-1].get("content")) if body["messages"] else ""
         first_user = text_of(body["messages"][0].get("content"))
         tool_names = {t.get("name") for t in body.get("tools") or []}
@@ -186,6 +194,13 @@ class Anthropic:
         if "submit_findings" in tool_names:
             return gather(body["messages"], first_user, {str(t) for t in tool_names})
         return [{"type": "text", "text": "OK."}]
+
+
+def asked_for(system: Any) -> str | None:
+    """The tool a system instruction asks for (how a model without forced tool choice is told)."""
+    blocks = system if isinstance(system, list) else [{"text": system or ""}]
+    m = re.search(r"Answer by calling the (\w+) tool\.", " ".join(str(b.get("text", "")) for b in blocks))
+    return m.group(1) if m else None
 
 
 def use(name: str, payload: dict[str, Any]) -> dict[str, Any]:

@@ -15,6 +15,7 @@ from app.llm.gateway import (
     BudgetExceededError,
     CallContext,
     LLMGateway,
+    LLMRefusalError,
     LLMRequestError,
     LLMResponseError,
     LLMUnavailableError,
@@ -56,12 +57,39 @@ def test_resolve_tier(requested: Any, allowed: list[str], expected: str) -> None
 
 
 def test_cost_uses_the_price_table() -> None:
-    # sonnet: 3 / 15 per MTok, cache write 1.25x, cache read 0.1x
-    assert models.cost("claude-sonnet-5", 1_000_000, 0, 0, 0) == Decimal("3.000000")
-    assert models.cost("claude-sonnet-5", 0, 1_000_000, 0, 0) == Decimal("15.000000")
-    assert models.cost("claude-sonnet-5", 0, 0, 1_000_000, 1_000_000) == Decimal("4.050000")
+    # Sonnet 5: 2 / 10 per MTok, cache write 1.25x, cache read 0.1x (the longest matching prefix wins)
+    assert models.cost("claude-sonnet-5", 1_000_000, 0, 0, 0) == Decimal("2.000000")
+    assert models.cost("claude-sonnet-5", 0, 1_000_000, 0, 0) == Decimal("10.000000")
+    assert models.cost("claude-sonnet-5", 0, 0, 1_000_000, 1_000_000) == Decimal("2.700000")
+    assert models.cost("claude-sonnet-4-6", 1_000_000, 0, 0, 0) == Decimal("3.000000")
+    # Opus 5.5: 4 / 20, cache reads at their own price
+    assert models.cost("claude-opus-5-5", 1_000_000, 1_000_000, 0, 1_000_000) == Decimal("24.200000")
+    assert models.cost("claude-opus-5", 1_000_000, 0, 0, 0) == Decimal("5.000000")
     assert models.cost("claude-haiku-4-5-20251001", 1_000_000, 0, 0, 0) == Decimal("1.000000")
     assert models.cost("something-new", 1_000_000, 0, 0, 0) == Decimal("3.000000")
+
+
+def test_models_that_refuse_forced_tools_are_asked_with_an_instruction() -> None:
+    system = [{"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}]
+    forced = {"type": "tool", "name": "submit_plan"}
+    tools = [{"name": "submit_plan", "input_schema": {"type": "object"}}]
+    body = LLMGateway._body("claude-opus-5-5", system, [], tools, forced, 300, True)
+    assert body["tool_choice"] == {"type": "auto"}
+    assert body["system"][-1] == {"type": "text", "text": "Answer by calling the submit_plan tool. "
+                                                           "Do not answer in plain text."}  # fmt: skip
+    assert body["system"][0]["cache_control"] == {
+        "type": "ephemeral"
+    }  # the instruction is after the cached prefix
+    assert LLMGateway._body("claude-opus-5-5", system, [], tools, {"type": "any"}, 300, True)["system"][-1][
+        "text"
+    ].startswith("Answer by calling one of the tools.")
+    # Models that accept forced tool choice keep it; only models that think get room for thinking.
+    haiku = LLMGateway._body("claude-haiku-4-5-20251001", system, [], tools, forced, 300, True)
+    assert (haiku["tool_choice"], haiku["max_tokens"], len(haiku["system"])) == (forced, 300, 1)
+    assert LLMGateway._body("claude-sonnet-5", system, [], tools, forced, 300, True)["tool_choice"] == forced
+    for thinking in ("claude-sonnet-5", "claude-opus-5-5", "claude-fable-5-1"):
+        assert LLMGateway._body(thinking, system, [], tools, forced, 300, True)["max_tokens"] == 8000
+    assert LLMGateway._body("claude-sonnet-5", system, [], tools, forced, 12000, True)["max_tokens"] == 12000
 
 
 # ------------------------------------------------------------------ against a scripted provider
@@ -159,7 +187,7 @@ async def test_request_shape_caching_and_metering(stack: Stack, org: Any) -> Non
     assert request.headers["x-api-key"] == "key-1"
     assert request.headers["anthropic-version"] == "2023-06-01"
     assert body["model"] == "claude-sonnet-5"
-    assert body["max_tokens"] == 300
+    assert body["max_tokens"] == 8000  # Sonnet 5 thinks by default: room for it beyond the step's 300
     assert "cache_control" not in body["system"][0]
     assert body["system"][1]["cache_control"] == {"type": "ephemeral"}
     assert body["tools"][1]["cache_control"] == {"type": "ephemeral"}
@@ -285,12 +313,31 @@ async def test_bad_credentials_skip_to_the_next_route_and_all_failing_routes_rai
 
 
 async def test_invalid_requests_are_not_retried(stack: Stack, org: Any) -> None:
-    provider = Provider((400, {"type": "error", "error": {"type": "invalid_request_error"}}, {}))
-    with pytest.raises(LLMRequestError):
+    error = {
+        "type": "invalid_request_error",
+        "message": 'tool_choice: type "tool" and "any" are not supported',
+    }
+    provider = Provider((400, {"type": "error", "error": error}, {}))
+    with pytest.raises(LLMRequestError, match='invalid_request_error: tool_choice: type "tool"'):
         await gateway(stack, provider).complete(
             ctx(org), "standard", system="s", messages=[{"role": "user", "content": "x"}]
         )
     assert len(provider.requests) == 1
+
+
+async def test_a_refusal_stops_the_step_and_is_metered(stack: Stack, org: Any) -> None:
+    refused = {
+        **OK,
+        "content": [],
+        "stop_reason": "refusal",
+        "stop_details": {"type": "refusal", "category": "cyber"},
+    }
+    task = new_task(stack, org)
+    with pytest.raises(LLMRefusalError, match=r"declined this request \(cyber\)"):
+        await gateway(stack, Provider((200, refused, {}))).complete(
+            ctx(org, task), "standard", system="s", messages=[{"role": "user", "content": "x"}]
+        )
+    assert sql(stack, "select tokens_used > 0 from app.tasks where id = %s", (task,)) == (True,)
 
 
 async def test_org_rate_limit(stack: Stack, org: Any) -> None:
