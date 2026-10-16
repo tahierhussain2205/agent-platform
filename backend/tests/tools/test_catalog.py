@@ -34,8 +34,8 @@ def member(stack: Stack, email: str) -> uuid.UUID:
 def forget_services(stack: Stack) -> None:
     sql(
         stack,
-        "delete from app.services where org_id = %s and name = any(%s)",
-        (stack.env.world.acme.id, list(OURS)),
+        "delete from app.services where org_id = %s and lower(btrim(name)) = any(%s)",
+        (stack.env.world.acme.id, [n.lower() for n in OURS]),
     )
 
 
@@ -329,3 +329,44 @@ async def test_proposals_stay_within_the_admins_access(setup: Setup) -> None:
         assert counts == {"proposed": 0, "refreshed": 0, "linked": 0, "kept": 0, "skipped": 0}
     finally:
         await link_github(stack, acme, acme.admin, "alice-gh")
+
+
+async def test_the_proposal_workflow_runs_on_a_worker(setup: Setup) -> None:
+    """The workflow (sandboxed, as deployed) and its activity end to end on Temporal; a member who is
+    not an admin is refused without retries."""
+    from temporalio.client import WorkflowFailureError
+    from temporalio.worker import Worker
+
+    from app.settings import Settings
+    from app.temporal import connect_temporal
+    from app.workflows.catalog import CatalogProposalWorkflow
+    from tests.agent.live import TEMPORAL, temporal_up
+
+    if not temporal_up():
+        pytest.skip("Temporal not reachable")
+    stack, acme = setup.stack, setup.acme
+    forget_services(stack)
+    settings = Settings(temporal_address=TEMPORAL, temporal_task_queue=f"catalog-test-{uuid.uuid4().hex[:8]}")
+    client = await connect_temporal(settings)
+    worker = Worker(
+        client,
+        task_queue=settings.temporal_task_queue,
+        workflows=[CatalogProposalWorkflow],
+        activities=activities(setup).all(),
+    )
+    async with worker:
+        result = await client.execute_workflow(
+            CatalogProposalWorkflow.run,
+            args=[str(acme.id), str(acme.admin)],
+            id=f"catalog-test-{uuid.uuid4().hex[:8]}",
+            task_queue=settings.temporal_task_queue,
+        )
+        assert result["proposed"] == 5
+        assert service(stack, "cart-service")["status"] == "proposed"
+        with pytest.raises(WorkflowFailureError):
+            await client.execute_workflow(
+                CatalogProposalWorkflow.run,
+                args=[str(acme.id), str(acme.user)],
+                id=f"catalog-test-{uuid.uuid4().hex[:8]}",
+                task_queue=settings.temporal_task_queue,
+            )

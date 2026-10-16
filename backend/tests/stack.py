@@ -9,6 +9,7 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -16,6 +17,7 @@ import psycopg
 import pytest
 import pytest_asyncio
 from psycopg import sql
+from temporalio.client import WorkflowExecutionStatus
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app import kv
@@ -77,15 +79,38 @@ def fakes_up() -> bool:
 class FakeTemporal:
     started: list[tuple[str, Any, str]] = field(default_factory=list)
     fail: bool = False
+    results: dict[str, Any] = field(default_factory=dict)  # workflow id -> result, once completed
 
     async def start_workflow(
         self, workflow: str, arg: Any = None, *, id: str, task_queue: str, args: Any = None, **_: Any
     ) -> None:
         if self.fail:
             raise RuntimeError("temporal unavailable")
+        if id in self.results:  # a closed workflow's id may be used again
+            del self.results[id]
+            self.started = [s for s in self.started if s[2] != id]
         if any(existing == id for _, _, existing in self.started):
             raise WorkflowAlreadyStartedError(id, workflow)
         self.started.append((workflow, arg if args is None else list(args), id))
+
+    def get_workflow_handle(self, id: str) -> "FakeHandle":
+        return FakeHandle(self, id)
+
+
+@dataclass
+class FakeHandle:
+    temporal: FakeTemporal
+    id: str
+
+    async def describe(self) -> Any:
+        if not any(existing == self.id for _, _, existing in self.temporal.started):
+            raise RuntimeError("workflow not found")
+        done = self.id in self.temporal.results
+        status = WorkflowExecutionStatus.COMPLETED if done else WorkflowExecutionStatus.RUNNING
+        return SimpleNamespace(status=status, close_time=None)
+
+    async def result(self) -> Any:
+        return self.temporal.results[self.id]
 
 
 @dataclass
