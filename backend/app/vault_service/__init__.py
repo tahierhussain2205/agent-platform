@@ -26,6 +26,7 @@ from uuid import UUID
 from psycopg_pool import AsyncConnectionPool
 
 from app.crypto import Envelope
+from app.crypto.envelope import DecryptionError
 from app.db.tenant import tenant_tx
 from app.integrations.providers import (
     Account,
@@ -392,7 +393,7 @@ class LocalVault:
         """Revoke at the provider where it supports it, then delete the secret."""
         try:
             data = _parse(await self.store_.read(org_id, connection_id))
-        except SecretNotFoundError:
+        except (SecretNotFoundError, DecryptionError):  # unreadable (a retired key): delete it all the same
             data = {}
         if data.get("kind") == "oauth2" and data.get("provider") in self.providers:
             tokens = TokenSet(data["access_token"], data.get("refresh_token"), data.get("expires_at"))

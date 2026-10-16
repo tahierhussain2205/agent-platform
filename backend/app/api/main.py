@@ -17,12 +17,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
 
 from app import kv
+from app.api.console import integrations as console_integrations
 from app.api.console import members as console_members
 from app.api.console import org as console_org
 from app.api.console import roles as console_roles
 from app.api.console import slack as console_slack
 from app.api.errors import ApiError
 from app.api.middleware import RequestContextMiddleware
+from app.api.oauth import router as oauth_router
 from app.api.slack import router as slack_router
 from app.api.webhooks import router as webhooks_router
 from app.auth.clerk import AuthError, ClerkVerifier
@@ -236,5 +238,7 @@ def create_app(settings: Settings | None = None, resources: Resources | None = N
     app.include_router(console_members.router)
     app.include_router(console_roles.router)
     app.include_router(console_slack.router)
+    app.include_router(console_integrations.router)
     app.include_router(slack_router)
+    app.include_router(oauth_router)
     return app
