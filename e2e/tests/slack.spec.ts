@@ -12,7 +12,10 @@ test('an admin connects a new Slack workspace from the console', async ({ browse
   await expect(admin.page.getByText('Slack is not connected yet.')).toBeVisible()
   await admin.page.getByRole('button', { name: 'Connect Slack' }).click()
   // The Slack stand-in's OAuth page: pick the workspace and allow.
-  await expect(admin.page.getByRole('heading', { name: /requesting permission/ })).toBeVisible()
+  // Console, API and stand-in redirects: slow on a loaded machine right after the stack starts.
+  await expect(admin.page.getByRole('heading', { name: /requesting permission/ })).toBeVisible({
+    timeout: 30_000,
+  })
   await admin.page.getByLabel(new RegExp(teamName)).check()
   await expect(admin.page.getByText('users:read.email')).toBeVisible()
   await admin.page.getByRole('button', { name: 'Allow' }).click()

@@ -367,8 +367,9 @@ class ReportRunner(AgentRunner):
 
     async def notify_pauses(self, org_id: str) -> int:
         """Tell every active admin (and the owner, if they opted in) about each pause nobody was told
-        about yet; admin pauses need no notice. Each DM is checked against a Key Value marker before it
-        is sent (invariant 8), then the pause is marked notified. Returns the pauses notified."""
+        about yet; admin pauses need no notice. Each DM claims a Key Value marker before it is sent
+        (invariant 8; concurrent syncs send it once), then the pause is marked notified. Returns the
+        pauses notified."""
         async with tenant_tx(self.d.pool, org_id) as conn:
             rows = await (
                 await conn.execute(
@@ -438,11 +439,18 @@ class ReportRunner(AgentRunner):
                 marker = kv.tenant_key(
                     UUID(org_id), "schedule-paused", str(sid), str(paused_at.timestamp()), user
                 )
-                if self.d.kv is not None and await self.d.kv.get(marker):
+                # Claimed before sending, so two syncs at once send one notice; a claim whose send
+                # never happened expires soon, and the next sync sends it (at least once).
+                if self.d.kv is not None and not await kv.claim(self.d.kv, marker, 120, "sending"):
                     continue
-                await sink.send(DirectMessage(user, text))
+                try:
+                    await sink.send(DirectMessage(user, text))
+                except Exception:
+                    if self.d.kv is not None:
+                        await kv.release(self.d.kv, marker)
+                    raise
                 if self.d.kv is not None:
-                    await self.d.kv.set(marker, "1", ex=30 * 24 * 3600)
+                    await self.d.kv.set(marker, "sent", ex=30 * 24 * 3600)
             async with tenant_tx(self.d.pool, org_id) as conn:
                 await conn.execute(
                     "update app.schedules set pause_notified_at = now() where id = %s and paused_at = %s",

@@ -2,6 +2,7 @@
 keeps only known numbers, every run is checked against the owner's current access, and access
 or budget problems pause the schedule and notify the admins once."""
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,7 @@ import pytest_asyncio
 from psycopg.types.json import Jsonb
 
 from app.agent.reports import ReportRunner
+from app.agent.runner import AgentDeps
 from app.agent.types import ReportStart
 from app.schedules.figures import parse_jira_time
 from app.slack.adapter import DirectMessage, Report
@@ -373,5 +375,45 @@ async def test_removing_the_owner_pauses_and_notifies_admins_once(
         mark = len(agent.sink.sent)
         assert await reports.notify_pauses(str(acme.id)) == 0  # told once
         assert agent.sink.sent[mark:] == []
+    finally:
+        agent.sql("update app.org_memberships set status = 'active' where id = %s", (quinn,))
+
+
+async def test_concurrent_syncs_send_a_pause_notice_once_and_a_failed_send_is_retried(
+    agent: Agent, reports: ReportRunner
+) -> None:
+    acme = agent.world.acme
+    quinn = membership(agent, "quinn@acme.test")
+    sid = schedule(agent, "report_jira_progress", {"project": "PAY"}, owner="quinn@acme.test")
+    name = agent.sql("select name from app.schedules where id = %s", (sid,))[0][0]
+    agent.sql("update app.org_memberships set status = 'removed' where id = %s", (quinn,))
+
+    class Down:
+        async def send(self, intent: Any, **_: Any) -> Any:
+            raise RuntimeError("Slack is down")
+
+    class Slow:  # takes a moment, like Slack, so both syncs reach the check before either sends
+        def __init__(self) -> None:
+            self.sent: list[Any] = []
+
+        async def send(self, intent: Any, **_: Any) -> Any:
+            await asyncio.sleep(0.2)
+            self.sent.append(intent)
+            return "1.0"
+
+    def runner(sink: Any) -> ReportRunner:
+        return ReportRunner(
+            AgentDeps(**{**agent.runner.d.__dict__, "sink_factory": lambda team, token: sink})
+        )
+
+    try:
+        with pytest.raises(RuntimeError):
+            await runner(Down()).notify_pauses(str(acme.id))  # the claim is released, nothing is marked
+        slow = Slow()
+        await asyncio.gather(
+            runner(slow).notify_pauses(str(acme.id)), runner(slow).notify_pauses(str(acme.id))
+        )
+        notices = [i for i in slow.sent if isinstance(i, DirectMessage) and name in i.text]
+        assert [n.user for n in notices] == ["U0ALICE"]  # one notice, though two syncs ran at once
     finally:
         agent.sql("update app.org_memberships set status = 'active' where id = %s", (quinn,))
