@@ -77,9 +77,10 @@ export interface OrgSettings {
   max_schedules: number
   retention_days: number
   display_settings: Record<string, unknown>
-  shadow_mode: boolean
+  // Absent from an API older than the console (they deploy separately): the page copes without.
+  shadow_mode?: boolean
   updated_at: string
-  plan: Plan
+  plan?: Plan
 }
 
 /** What the org's plan lets admins set (null token ceilings: the limit may be lifted). */

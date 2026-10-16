@@ -52,13 +52,13 @@ function UsageReport({ usage }: { usage: Usage }) {
       <div className="grid gap-4 sm:grid-cols-2">
         <Card title="This month">
           <Meter label="Tokens" used={month.tokens} limit={limits.org_monthly_token_limit} />
-          <p className="mt-2 text-sm text-slate-600">{dollars.format(month.cost)} so far</p>
+          <p className="mt-2 text-sm text-fg-2">{dollars.format(month.cost)} so far</p>
         </Card>
         <Card title="Today">
-          <p className="text-2xl font-semibold text-slate-900" data-testid="today-tokens">
+          <p className="text-2xl font-semibold text-fg" data-testid="today-tokens">
             {tokens.format(today.tokens)} tokens
           </p>
-          <p className="mt-2 text-sm text-slate-600">
+          <p className="mt-2 text-sm text-fg-2">
             {dollars.format(today.cost)}
             {limits.user_daily_token_limit !== null &&
               ` · each person may use ${tokens.format(limits.user_daily_token_limit)} a day`}
@@ -114,18 +114,18 @@ function UsageReport({ usage }: { usage: Usage }) {
 function Meter({ label, used, limit }: { label: string; used: number; limit: number | null }) {
   if (limit === null) {
     return (
-      <p className="text-2xl font-semibold text-slate-900">
-        {tokens.format(used)} <span className="text-sm font-normal text-slate-600">no limit</span>
+      <p className="text-2xl font-semibold text-fg">
+        {tokens.format(used)} <span className="text-sm font-normal text-fg-2">no limit</span>
       </p>
     )
   }
   const share = Math.min(used / limit, 1)
-  const tone = share >= 1 ? 'bg-red-500' : share >= 0.8 ? 'bg-amber-500' : 'bg-indigo-500'
+  const tone = share >= 1 ? 'bg-red-500' : share >= 0.8 ? 'bg-amber-500' : 'bg-fg'
   return (
     <div>
-      <p className="text-2xl font-semibold text-slate-900">
+      <p className="text-2xl font-semibold text-fg">
         {tokens.format(used)}{' '}
-        <span className="text-sm font-normal text-slate-600">of {tokens.format(limit)}</span>
+        <span className="text-sm font-normal text-fg-2">of {tokens.format(limit)}</span>
       </p>
       <div
         role="meter"
@@ -133,7 +133,7 @@ function Meter({ label, used, limit }: { label: string; used: number; limit: num
         aria-valuemin={0}
         aria-valuemax={limit}
         aria-valuenow={Math.min(used, limit)}
-        className="mt-2 h-2 rounded-full bg-slate-100"
+        className="mt-2 h-2 rounded-full bg-muted"
       >
         <div className={`h-2 rounded-full ${tone}`} style={{ width: `${share * 100}%` }} />
       </div>
@@ -141,30 +141,46 @@ function Meter({ label, used, limit }: { label: string; used: number; limit: num
   )
 }
 
+const shortDay = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  timeZone: 'UTC',
+})
+const dayLabel = (day: string) => shortDay.format(new Date(`${day}T00:00:00Z`))
+
 function Daily({ days }: { days: Usage['daily'] }) {
   const peak = Math.max(...days.map((d) => d.tokens), 1)
   if (days.every((d) => d.tokens === 0)) return <EmptyState>No usage in this window.</EmptyState>
   return (
-    <div className="flex h-32 items-end gap-px" aria-label="Tokens per day">
-      {days.map((d) => (
-        <div
-          key={d.day}
-          className="flex-1 rounded-t bg-indigo-400 hover:bg-indigo-600"
-          style={{ height: `${Math.max((d.tokens / peak) * 100, d.tokens ? 2 : 0)}%` }}
-          title={`${d.day}: ${tokens.format(d.tokens)} tokens, ${dollars.format(d.cost)}`}
-          data-testid="usage-day"
-        />
-      ))}
-    </div>
+    <figure>
+      <figcaption className="mb-2 text-xs text-fg-3">
+        Peak <span data-testid="usage-peak">{tokens.format(peak)}</span> tokens in a day
+      </figcaption>
+      <div className="flex h-32 items-end gap-px" aria-label="Tokens per day">
+        {days.map((d) => (
+          <div
+            key={d.day}
+            className="flex-1 rounded-t bg-fg-4 hover:bg-fg"
+            style={{ height: `${Math.max((d.tokens / peak) * 100, d.tokens ? 2 : 0)}%` }}
+            title={`${dayLabel(d.day)}: ${tokens.format(d.tokens)} tokens, ${dollars.format(d.cost)}`}
+            data-testid="usage-day"
+          />
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between border-t border-line pt-1 text-xs text-fg-3">
+        <span>{dayLabel(days[0]!.day)}</span>
+        <span>{dayLabel(days[days.length - 1]!.day)}</span>
+      </div>
+    </figure>
   )
 }
 
 function Table({ head, rows, empty }: { head: string[]; rows: ReactNode[][]; empty: string }) {
   if (rows.length === 0) return <EmptyState>{empty}</EmptyState>
   return (
-    <div className="overflow-x-auto">
+    <div className="relative overflow-x-auto">
       <table className="w-full text-left text-sm">
-        <thead className="text-xs uppercase text-slate-500">
+        <thead className="text-xs uppercase text-fg-3">
           <tr>
             {head.map((h, i) => (
               <th key={h} className={`pb-2 pr-3 font-medium ${i > 0 ? 'text-right' : ''}`}>
@@ -173,7 +189,7 @@ function Table({ head, rows, empty }: { head: string[]; rows: ReactNode[][]; emp
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-200">
+        <tbody className="divide-y divide-line">
           {rows.map((row, r) => (
             <tr key={r}>
               {row.map((cell, i) => (

@@ -7,6 +7,7 @@ import {
 } from '@clerk/react'
 import { useMemo, type ReactNode } from 'react'
 import { config } from '../config'
+import { useTheme } from '../theme'
 import { AuthContext } from './context'
 import type { AuthOrg, AuthState } from './types'
 
@@ -61,9 +62,43 @@ export function ClerkBridge({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
+// Clerk's widgets take concrete colors: the console's tokens (src/index.css) for each theme.
+const CLERK_COLORS = {
+  light: {
+    colorBackground: '#ffffff',
+    colorForeground: '#171717',
+    colorMuted: '#f5f5f5',
+    colorMutedForeground: '#666666',
+    colorPrimary: '#171717',
+    colorPrimaryForeground: '#ffffff',
+    colorInput: '#ffffff',
+    colorInputForeground: '#171717',
+    colorBorder: '#d4d4d4',
+    colorRing: '#171717',
+    colorNeutral: '#171717',
+  },
+  dark: {
+    colorBackground: '#121212',
+    colorForeground: '#f5f5f5',
+    colorMuted: '#242424',
+    colorMutedForeground: '#a3a3a3',
+    colorPrimary: '#f5f5f5',
+    colorPrimaryForeground: '#0a0a0a',
+    colorInput: '#1a1a1a',
+    colorInputForeground: '#f5f5f5',
+    colorBorder: '#3d3d3d',
+    colorRing: '#f5f5f5',
+    colorNeutral: '#f5f5f5',
+  },
+} as const
+
 export default function ClerkAuthProvider({ children }: { children: ReactNode }) {
+  const { resolved } = useTheme()
   return (
-    <ClerkProvider publishableKey={config.clerkPublishableKey!}>
+    <ClerkProvider
+      publishableKey={config.clerkPublishableKey!}
+      appearance={{ variables: CLERK_COLORS[resolved], captcha: { theme: resolved } }}
+    >
       <ClerkBridge>{children}</ClerkBridge>
     </ClerkProvider>
   )

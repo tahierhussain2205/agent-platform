@@ -123,12 +123,12 @@ function Preview({ cron, timezone }: { cron: string; timezone: string }) {
   if (!state) return null
   if (state.error)
     return (
-      <p className="text-xs text-red-600" role="alert" data-testid="cadence-preview">
+      <p className="text-xs text-bad" role="alert" data-testid="cadence-preview">
         {state.error}
       </p>
     )
   return (
-    <p className="text-xs text-slate-600" data-testid="cadence-preview">
+    <p className="text-xs text-fg-2" data-testid="cadence-preview">
       {state.text}. Next:{' '}
       {state.runs
         .slice(0, 3)
@@ -187,7 +187,7 @@ function ScheduleForm({
         />
       </Field>
       <fieldset className="space-y-2">
-        <legend className="text-sm font-medium text-slate-800">Report</legend>
+        <legend className="text-sm font-medium text-fg">Report</legend>
         <label className="flex items-center gap-2 text-sm">
           <input
             type="radio"
@@ -210,11 +210,9 @@ function ScheduleForm({
       </fieldset>
       {value.kind === 'channel_summary' ? (
         <fieldset className="space-y-1">
-          <legend className="text-sm font-medium text-slate-800">Channels (up to 5)</legend>
+          <legend className="text-sm font-medium text-fg">Channels (up to 5)</legend>
           {options.channels.length === 0 && (
-            <p className="text-xs text-slate-500">
-              You can't read any channel through the agent yet.
-            </p>
+            <p className="text-xs text-fg-3">You can't read any channel through the agent yet.</p>
           )}
           <div className="grid max-h-40 grid-cols-2 gap-1 overflow-y-auto">
             {options.channels.map((c) => (
@@ -308,7 +306,7 @@ function ScheduleForm({
       </Field>
       <Preview cron={cron} timezone={value.timezone} />
       <fieldset className="space-y-2">
-        <legend className="text-sm font-medium text-slate-800">Delivery</legend>
+        <legend className="text-sm font-medium text-fg">Delivery</legend>
         <label className="flex items-center gap-2 text-sm">
           <input
             type="radio"
@@ -371,7 +369,7 @@ function Reassign({ schedule, onDone }: { schedule: Schedule; onDone: () => void
   )
   return (
     <div className="space-y-4">
-      <p className="text-sm text-slate-700">
+      <p className="text-sm text-fg-2">
         The schedule keeps its status. Resuming it checks the new owner&apos;s access.
       </p>
       <ErrorNotice error={move.error} />
@@ -422,22 +420,22 @@ function ScheduleRow({
     <li
       aria-label={schedule.name}
       data-testid={`schedule-${schedule.id}`}
-      className="space-y-2 rounded-lg bg-white p-4 shadow-sm ring-1 ring-slate-200"
+      className="space-y-2 rounded-lg bg-surface p-4 shadow-sm ring-1 ring-line"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-sm font-semibold text-slate-900">{schedule.name}</h2>
+            <h2 className="text-sm font-semibold text-fg">{schedule.name}</h2>
             {active ? (
               <Badge tone="green">Active</Badge>
             ) : (
-              <Badge tone={schedule.pause_reason === 'admin' ? 'slate' : 'amber'}>
+              <Badge tone={schedule.pause_reason === 'admin' ? 'neutral' : 'amber'}>
                 {PAUSED[schedule.pause_reason ?? 'admin']}
               </Badge>
             )}
           </div>
-          <p className="text-sm text-slate-700">{report(schedule)}</p>
-          <p className="text-xs text-slate-600">
+          <p className="text-sm text-fg-2">{report(schedule)}</p>
+          <p className="text-xs text-fg-2">
             {schedule.description} ({schedule.timezone}) ·{' '}
             {schedule.delivery.type === 'dm'
               ? 'by direct message'
@@ -445,15 +443,15 @@ function ScheduleRow({
             {isAdmin && <> · owner {schedule.owner.email}</>}
           </p>
           {active && schedule.next_runs[0] && (
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-fg-3">
               Next run: {when(schedule.next_runs[0], schedule.timezone)}
             </p>
           )}
           {!active && schedule.pause_detail && (
-            <p className="text-xs text-amber-800">{schedule.pause_detail}</p>
+            <p className="text-xs text-warn">{schedule.pause_detail}</p>
           )}
           {schedule.last_run_at && (
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-fg-3">
               Last run: {when(schedule.last_run_at, schedule.timezone)}
             </p>
           )}
@@ -506,13 +504,13 @@ function ScheduleRow({
         }}
       />
       {run.isSuccess && (
-        <p role="status" className="text-sm text-green-700">
+        <p role="status" className="text-sm text-ok">
           Running now: the report follows shortly.
         </p>
       )}
       <Dialog open={confirm} title={`Delete ${schedule.name}`} onClose={() => setConfirm(false)}>
         <div className="space-y-4">
-          <p className="text-sm text-slate-700">The schedule stops for good.</p>
+          <p className="text-sm text-fg-2">The schedule stops for good.</p>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" onClick={() => setConfirm(false)}>
               Cancel
@@ -554,12 +552,12 @@ export function SchedulesPage() {
         }
       />
       {!opts.has_slack_account && (
-        <p className="mb-4 text-sm text-amber-700">
+        <p className="mb-4 text-sm text-warn">
           Say hello to the agent in Slack first: reports run with your Slack account.
         </p>
       )}
       {isAdmin && limits && (
-        <p className="mb-4 text-xs text-slate-600" data-testid="schedule-limits">
+        <p className="mb-4 text-xs text-fg-2" data-testid="schedule-limits">
           {limits.active} of {limits.max_schedules} active schedules in the organization.
         </p>
       )}

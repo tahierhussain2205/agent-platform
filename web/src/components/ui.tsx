@@ -8,17 +8,18 @@ import {
   type TextareaHTMLAttributes,
 } from 'react'
 import { ApiRequestError } from '../api/client'
+import { useAuth } from '../auth/context'
 
 type Variant = 'primary' | 'secondary' | 'danger' | 'ghost'
 
 const variants: Record<Variant, string> = {
   primary:
-    'bg-indigo-600 text-white hover:bg-indigo-500 focus-visible:outline-indigo-600 disabled:bg-indigo-300',
+    'bg-accent text-accent-fg hover:bg-accent-hover focus-visible:outline-fg disabled:opacity-40',
   secondary:
-    'bg-white text-slate-900 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 disabled:text-slate-400',
+    'bg-surface text-fg ring-1 ring-inset ring-line-strong hover:bg-muted disabled:text-fg-4 disabled:hover:bg-surface',
   danger:
-    'bg-red-600 text-white hover:bg-red-500 focus-visible:outline-red-600 disabled:bg-red-300',
-  ghost: 'text-slate-700 hover:bg-slate-100 disabled:text-slate-400',
+    'bg-red-600 text-white hover:bg-red-500 focus-visible:outline-red-600 disabled:opacity-50',
+  ghost: 'text-fg-2 hover:bg-muted hover:text-fg disabled:text-fg-4 disabled:hover:bg-transparent',
 }
 
 export function Button({
@@ -54,15 +55,15 @@ export function Spinner({ className = 'h-5 w-5' }: { className?: string }) {
 }
 
 const tones = {
-  slate: 'bg-slate-100 text-slate-700 ring-slate-500/20',
-  green: 'bg-green-50 text-green-700 ring-green-600/20',
-  amber: 'bg-amber-50 text-amber-800 ring-amber-600/20',
-  indigo: 'bg-indigo-50 text-indigo-700 ring-indigo-600/20',
-  red: 'bg-red-50 text-red-700 ring-red-600/20',
+  neutral: 'bg-muted text-fg-2 ring-line-strong',
+  strong: 'bg-accent text-accent-fg ring-accent',
+  green: 'bg-ok-soft text-ok ring-ok-line',
+  amber: 'bg-warn-soft text-warn ring-warn-line',
+  red: 'bg-bad-soft text-bad ring-bad-line',
 }
 
 export function Badge({
-  tone = 'slate',
+  tone = 'neutral',
   children,
 }: {
   tone?: keyof typeof tones
@@ -70,7 +71,7 @@ export function Badge({
 }) {
   return (
     <span
-      className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tones[tone]}`}
+      className={`inline-flex items-center whitespace-nowrap rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${tones[tone]}`}
     >
       {children}
     </span>
@@ -92,13 +93,13 @@ export function Field({
 }) {
   return (
     <div className="space-y-1">
-      <label htmlFor={htmlFor} className="block text-sm font-medium text-slate-800">
+      <label htmlFor={htmlFor} className="block text-sm font-medium text-fg">
         {label}
       </label>
       {children}
-      {hint && !error && <p className="text-xs text-slate-500">{hint}</p>}
+      {hint && !error && <p className="text-xs text-fg-3">{hint}</p>}
       {error && (
-        <p className="text-xs text-red-600" role="alert">
+        <p className="text-xs text-bad" role="alert">
           {error}
         </p>
       )}
@@ -107,7 +108,7 @@ export function Field({
 }
 
 const inputClass =
-  'block w-full rounded-md border-0 px-2.5 py-1.5 text-sm text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600'
+  'block w-full rounded-md border-0 bg-surface px-2.5 py-1.5 text-sm text-fg shadow-sm ring-1 ring-inset ring-line-strong placeholder:text-fg-4 focus:ring-2 focus:ring-inset focus:ring-fg disabled:bg-muted disabled:text-fg-3'
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${inputClass} ${props.className ?? ''}`} />
@@ -131,10 +132,10 @@ export function Card({
   children: ReactNode
 }) {
   return (
-    <section className="rounded-lg bg-white shadow-sm ring-1 ring-slate-200">
+    <section className="rounded-lg bg-surface shadow-sm ring-1 ring-line">
       {(title || actions) && (
-        <header className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          {title && <h2 className="text-sm font-semibold text-slate-900">{title}</h2>}
+        <header className="flex items-center justify-between border-b border-line px-4 py-3">
+          {title && <h2 className="text-sm font-semibold text-fg">{title}</h2>}
           {actions}
         </header>
       )}
@@ -155,33 +156,45 @@ export function PageHeader({
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{title}</h1>
-        {description && <p className="mt-1 text-sm text-slate-600">{description}</p>}
+        <h1 className="text-2xl font-semibold tracking-tight text-fg">{title}</h1>
+        {description && <p className="mt-1 text-sm text-fg-2">{description}</p>}
       </div>
       {actions}
     </div>
   )
 }
 
-/** Shows an API (or other) error; includes the request id so support can find it in the logs. */
+/** Shows an API (or other) error; includes the request id so support can find it in the logs.
+ * When the session is over (401), it offers to sign in again instead of leaving a dead end. */
 export function ErrorNotice({ error, onDismiss }: { error: unknown; onDismiss?: () => void }) {
+  const auth = useAuth()
   if (!error) return null
   const message = error instanceof Error ? error.message : 'Something went wrong.'
   const requestId = error instanceof ApiRequestError ? error.requestId : null
+  const signedOut = error instanceof ApiRequestError && error.status === 401
   return (
     <div
       role="alert"
-      className="flex items-start justify-between gap-4 rounded-md bg-red-50 p-3 text-sm text-red-800 ring-1 ring-red-200"
+      className="flex items-start justify-between gap-4 rounded-md bg-bad-soft p-3 text-sm text-bad ring-1 ring-bad-line"
     >
       <div>
         <p className="font-medium">{message}</p>
-        {requestId && <p className="mt-0.5 text-xs text-red-700/80">Request ID: {requestId}</p>}
+        {requestId && <p className="mt-0.5 text-xs text-bad/80">Request ID: {requestId}</p>}
+        {signedOut && (
+          <button
+            type="button"
+            onClick={() => void auth.signOut()}
+            className="mt-2 font-semibold underline underline-offset-4"
+          >
+            Sign in again
+          </button>
+        )}
       </div>
       {onDismiss && (
         <button
           type="button"
           onClick={onDismiss}
-          className="text-red-700 hover:text-red-900"
+          className="text-bad hover:text-fg"
           aria-label="Dismiss"
         >
           ×
@@ -214,9 +227,9 @@ export function Dialog({
       ref={ref}
       onClose={onClose}
       aria-labelledby="dialog-title"
-      className="w-full max-w-lg rounded-lg p-0 shadow-xl backdrop:bg-slate-900/40"
+      className="m-auto w-full max-w-lg rounded-lg bg-surface p-0 text-fg shadow-xl ring-1 ring-line backdrop:bg-black/60"
     >
-      <div className="border-b border-slate-200 px-5 py-3">
+      <div className="border-b border-line px-5 py-3">
         <h2 id="dialog-title" className="text-base font-semibold">
           {title}
         </h2>
@@ -227,5 +240,5 @@ export function Dialog({
 }
 
 export function EmptyState({ children }: { children: ReactNode }) {
-  return <p className="py-6 text-center text-sm text-slate-500">{children}</p>
+  return <p className="py-6 text-center text-sm text-fg-3">{children}</p>
 }

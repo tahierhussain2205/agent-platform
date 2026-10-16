@@ -17,7 +17,10 @@ export function ClerkCreateOrg() {
     <div className="flex flex-col items-center gap-4">
       <CreateOrganization routing="hash" afterCreateOrganizationUrl="/" />
       {first && (
-        <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-500">
+        <Link
+          to="/"
+          className="text-sm font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg"
+        >
           You already belong to {others.length ? 'an organization' : first.name}: back to the
           console
         </Link>

@@ -169,7 +169,8 @@ test('a spent daily token limit stops the agent before it starts', async ({ page
     thread = await threadOf(page, second)
     await expect(thread).toContainText("I can't start: your daily token limit", AGENT)
   } finally {
-    await admin.getByLabel('Tokens per user per day').fill('')
+    // Back to the seeded limit: Globex is on the Free plan, which needs one (clearing is refused).
+    await admin.getByLabel('Tokens per user per day').fill('50000')
     await admin.getByRole('button', { name: 'Save settings' }).click()
     await expect(admin.getByText('Settings saved.')).toBeVisible()
     await admin.context().close()

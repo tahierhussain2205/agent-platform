@@ -120,6 +120,33 @@ describe('DevAuthProvider', () => {
     expect(localStorage.getItem('ap.dev.session')).toBeNull()
   })
 
+  it('goes back to signed out when the session ends while in use', async () => {
+    localStorage.setItem('ap.dev.session', 'sess_1')
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        'GET /clerk/dev/session': () => ({ body: session('org_acme') }),
+        'POST /clerk/dev/session/tokens': () => ({
+          status: 401,
+          body: { errors: [{ message: 'Sign in again' }] },
+        }),
+      }).fn,
+    )
+    render(
+      <DevAuthProvider>
+        <Probe />
+      </DevAuthProvider>,
+    )
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('signed_in'))
+    let token: string | null = 'unset'
+    await act(async () => {
+      token = await auth.getToken()
+    })
+    expect(token).toBeNull()
+    await waitFor(() => expect(screen.getByTestId('status')).toHaveTextContent('signed_out'))
+    expect(localStorage.getItem('ap.dev.session')).toBeNull()
+  })
+
   it('surfaces sign in errors from the stand-in', async () => {
     vi.stubGlobal(
       'fetch',

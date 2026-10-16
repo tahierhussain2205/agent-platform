@@ -51,9 +51,9 @@ const TIER_LABELS: Record<IntegrationOperation['tier'], string> = {
 
 const HEALTH: Record<
   Integration['health'],
-  { tone: 'slate' | 'green' | 'amber' | 'red'; label: string }
+  { tone: 'neutral' | 'green' | 'amber' | 'red'; label: string }
 > = {
-  unknown: { tone: 'slate', label: 'Health unknown' },
+  unknown: { tone: 'neutral', label: 'Health unknown' },
   ok: { tone: 'green', label: 'Healthy' },
   degraded: { tone: 'amber', label: 'Degraded' },
   broken: { tone: 'red', label: 'Broken' },
@@ -72,7 +72,7 @@ function ResultBanner({ titles }: { titles: Record<string, string> }) {
       {connected || linked ? (
         <div
           role="status"
-          className="flex justify-between rounded-md bg-green-50 p-3 text-sm text-green-800 ring-1 ring-green-200"
+          className="flex justify-between rounded-md bg-ok-soft p-3 text-sm text-ok ring-1 ring-ok-line"
         >
           <span>
             {connected
@@ -152,7 +152,7 @@ function KeyUpload({ integration }: { integration: Integration }) {
         {connection ? 'Replace key' : 'Connect'}
       </Button>
       {upload.data && (
-        <p className="w-full text-sm text-green-700">
+        <p className="w-full text-sm text-ok">
           Connected as {upload.data.account}
           {upload.data.project_id ? ` (project ${upload.data.project_id})` : ''}.
         </p>
@@ -187,16 +187,16 @@ function OrgConnection({ integration, isAdmin }: { integration: Integration; isA
           <span className="font-medium">Org connection: </span>
           {connection ? (
             connection.status === 'expired' ? (
-              <span className="text-amber-700">expired ({account(connection)}), reconnect it</span>
+              <span className="text-warn">expired ({account(connection)}), reconnect it</span>
             ) : integration.auth === 'api_key' ? (
               'API key stored'
             ) : (
               <>connected as {account(connection)}</>
             )
           ) : isAdmin ? (
-            <span className="text-slate-600">not connected</span>
+            <span className="text-fg-2">not connected</span>
           ) : (
-            <span className="text-slate-600">not connected. Ask an admin to connect it.</span>
+            <span className="text-fg-2">not connected. Ask an admin to connect it.</span>
           )}
         </p>
         {isAdmin && (
@@ -222,7 +222,7 @@ function OrgConnection({ integration, isAdmin }: { integration: Integration; isA
       {isAdmin && integration.auth === 'service_account' && <KeyUpload integration={integration} />}
       <Dialog open={confirm} title={`Disconnect ${title}`} onClose={() => setConfirm(false)}>
         <div className="space-y-4">
-          <p className="text-sm text-slate-700">
+          <p className="text-sm text-fg-2">
             The org connection is revoked at the provider and its token deleted. Operations that use
             the org account stop working until it is connected again.
           </p>
@@ -265,12 +265,12 @@ function MyLink({ integration }: { integration: Integration }) {
           <span className="font-medium">Your account: </span>
           {link ? (
             link.status === 'expired' ? (
-              <span className="text-amber-700">expired ({account(link)}), link it again</span>
+              <span className="text-warn">expired ({account(link)}), link it again</span>
             ) : (
               <>linked as {account(link)}</>
             )
           ) : (
-            <span className="text-slate-600">
+            <span className="text-fg-2">
               not linked. Some answers need your own {title} account.
             </span>
           )}
@@ -332,7 +332,7 @@ function OperationRow({
     <tr data-testid={`op-${integration.key}-${op.name}`}>
       <td className="py-2 pr-3 align-top text-sm">
         <div className="font-mono text-xs">{op.name}</div>
-        <div className="text-xs text-slate-500">{op.description}</div>
+        <div className="text-xs text-fg-3">{op.description}</div>
         {(save.error ?? reset.error) && (
           <div className="mt-1">
             <ErrorNotice
@@ -346,7 +346,7 @@ function OperationRow({
         )}
       </td>
       <td className="py-2 pr-3 align-top">
-        <Badge tone={op.tier === 'read' ? 'slate' : op.tier === 'irreversible' ? 'red' : 'amber'}>
+        <Badge tone={op.tier === 'read' ? 'neutral' : op.tier === 'irreversible' ? 'red' : 'amber'}>
           {TIER_LABELS[op.tier]}
         </Badge>
       </td>
@@ -399,7 +399,7 @@ function Operations({ integration, isAdmin }: { integration: Integration; isAdmi
   const ops = integration.operations
   if (ops.length === 0)
     return (
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-fg-3">
         {integration.kind === 'native'
           ? 'No operations.'
           : 'Operations appear after a successful health check lists the tools.'}
@@ -408,13 +408,13 @@ function Operations({ integration, isAdmin }: { integration: Integration; isAdmi
   const overridden = ops.filter((o) => o.overridden).length
   return (
     <details>
-      <summary className="cursor-pointer text-sm font-medium text-slate-800">
+      <summary className="cursor-pointer text-sm font-medium text-fg">
         Operations ({ops.length}
         {overridden > 0 ? `, ${overridden} overridden` : ''})
       </summary>
-      <div className="mt-2 overflow-x-auto">
+      <div className="relative mt-2 overflow-x-auto">
         <table className="w-full text-left">
-          <thead className="text-xs uppercase text-slate-500">
+          <thead className="text-xs uppercase text-fg-3">
             <tr>
               <th className="pb-2 pr-3 font-medium">Operation</th>
               <th className="pb-2 pr-3 font-medium">Kind</th>
@@ -423,7 +423,7 @@ function Operations({ integration, isAdmin }: { integration: Integration; isAdmi
               <th className="pb-2" />
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-200">
+          <tbody className="divide-y divide-line">
             {ops.map((op) => (
               <OperationRow key={op.name} integration={integration} op={op} isAdmin={isAdmin} />
             ))}
@@ -464,17 +464,17 @@ function IntegrationCard({ integration, isAdmin }: { integration: Integration; i
     <section
       aria-label={title}
       data-testid={`integration-${key}`}
-      className="rounded-lg bg-white shadow-sm ring-1 ring-slate-200"
+      className="rounded-lg bg-surface shadow-sm ring-1 ring-line"
     >
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+          <h2 className="text-sm font-semibold text-fg">{title}</h2>
           {integration.kind !== 'native' && (
-            <Badge tone="indigo">{custom ? 'Custom MCP' : 'MCP'}</Badge>
+            <Badge tone="strong">{custom ? 'Custom MCP' : 'MCP'}</Badge>
           )}
           {!integration.approved && <Badge tone="amber">Waiting for approval</Badge>}
           {slack ? (
-            <Badge tone={integration.connection ? 'green' : 'slate'}>
+            <Badge tone={integration.connection ? 'green' : 'neutral'}>
               {integration.connection ? 'Connected' : 'Not connected'}
             </Badge>
           ) : (
@@ -483,7 +483,10 @@ function IntegrationCard({ integration, isAdmin }: { integration: Integration; i
         </div>
         <div className="flex items-center gap-3">
           {slack ? (
-            <Link to="/slack" className="text-sm text-indigo-600 hover:text-indigo-500">
+            <Link
+              to="/slack"
+              className="text-sm font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg"
+            >
               Managed on the Slack page
             </Link>
           ) : !integration.approved ? (
@@ -510,7 +513,7 @@ function IntegrationCard({ integration, isAdmin }: { integration: Integration; i
         </div>
       </header>
       <div className="space-y-3 p-4">
-        <p className="text-sm text-slate-600">{integration.description}</p>
+        <p className="text-sm text-fg-2">{integration.description}</p>
         <ErrorNotice
           error={toggle.error ?? check.error ?? approve.error}
           onDismiss={() => {
@@ -520,7 +523,7 @@ function IntegrationCard({ integration, isAdmin }: { integration: Integration; i
           }}
         />
         {!integration.configured && (
-          <p className="text-sm text-amber-700">
+          <p className="text-sm text-warn">
             Not configured for this environment: its OAuth client is missing.
           </p>
         )}
@@ -541,7 +544,7 @@ function IntegrationCard({ integration, isAdmin }: { integration: Integration; i
                 Check now
               </Button>
               {result && (
-                <p role="status" className="text-sm text-slate-600">
+                <p role="status" className="text-sm text-fg-2">
                   {result.detail}
                 </p>
               )}
@@ -581,7 +584,7 @@ function AddCustomMcp() {
       </Button>
       <Dialog open={open} title="Add an MCP server" onClose={close}>
         <form className="space-y-4" onSubmit={submit}>
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-fg-2">
             The server is added disabled. An admin approves it before the agent may use it.
           </p>
           <ErrorNotice error={add.error} />
@@ -653,7 +656,7 @@ export function IntegrationsPage() {
       <div className="space-y-4">
         {integrations.length === 0 ? (
           <Card>
-            <p className="text-sm text-slate-600">No integrations available.</p>
+            <p className="text-sm text-fg-2">No integrations available.</p>
           </Card>
         ) : (
           integrations.map((integration) => (

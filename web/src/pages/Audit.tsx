@@ -12,7 +12,7 @@ import {
   Spinner,
 } from '../components/ui'
 
-const DECISION_TONE = { allowed: 'green', denied: 'red', info: 'slate' } as const
+const DECISION_TONE = { allowed: 'green', denied: 'red', info: 'neutral' } as const
 
 export function AuditPage() {
   const [action, setAction] = useState('')
@@ -72,9 +72,9 @@ export function AuditPage() {
         ) : audit.data.items.length === 0 ? (
           <EmptyState>No matching entries.</EmptyState>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase text-slate-500">
+              <thead className="text-xs uppercase text-fg-3">
                 <tr>
                   <th className="pb-2 pr-3 font-medium">When</th>
                   <th className="pb-2 pr-3 font-medium">Actor</th>
@@ -83,17 +83,17 @@ export function AuditPage() {
                   <th className="pb-2 font-medium">Decision</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200">
+              <tbody className="divide-y divide-line">
                 {audit.data.items.map((entry) => (
                   <tr key={entry.id} data-testid="audit-row">
-                    <td className="whitespace-nowrap py-2 pr-3 text-slate-600">
+                    <td className="whitespace-nowrap py-2 pr-3 text-fg-2">
                       {new Date(entry.occurred_at).toLocaleString()}
                     </td>
                     <td className="py-2 pr-3">{actorLabel(entry)}</td>
                     <td className="py-2 pr-3 font-mono text-xs">{entry.action}</td>
-                    <td className="py-2 pr-3 text-slate-700">
+                    <td className="py-2 pr-3 text-fg-2">
                       {entry.target ?? ''}
-                      {entry.reason && <div className="text-xs text-slate-500">{entry.reason}</div>}
+                      {entry.reason && <div className="text-xs text-fg-3">{entry.reason}</div>}
                     </td>
                     <td className="py-2">
                       <Badge tone={DECISION_TONE[entry.decision]}>{entry.decision}</Badge>

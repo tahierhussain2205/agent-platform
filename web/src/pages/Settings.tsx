@@ -38,9 +38,15 @@ interface FormState {
 
 const count = new Intl.NumberFormat('en-US')
 
-/** The field's hint: the plan's ceiling, or the schema's range when the plan sets none. */
-function within(plan: Plan, ceiling: number | null, otherwise: string): string {
-  return ceiling === null ? otherwise : `At most ${count.format(ceiling)} on the ${plan.title} plan`
+/** The field's hint: the plan's ceiling, or the schema's range when there is none (or no plan known). */
+function within(
+  plan: Plan | undefined,
+  ceiling: number | null | undefined,
+  otherwise: string,
+): string {
+  return !plan || ceiling == null
+    ? otherwise
+    : `At most ${count.format(ceiling)} on the ${plan.title} plan`
 }
 
 const toForm = (s: OrgSettings): FormState => ({
@@ -51,7 +57,7 @@ const toForm = (s: OrgSettings): FormState => ({
   max_concurrent_tasks: s.max_concurrent_tasks.toString(),
   max_schedules: s.max_schedules.toString(),
   retention_days: s.retention_days.toString(),
-  shadow_mode: s.shadow_mode,
+  shadow_mode: s.shadow_mode ?? false,
 })
 
 export function SettingsPage() {
@@ -127,12 +133,12 @@ function SettingsForm({
     <>
       <PageHeader
         title="Settings"
-        description={`Models, limits and retention for this organization, within the ${plan.title} plan.`}
+        description={`Models, limits and retention for this organization${plan ? `, within the ${plan.title} plan` : ''}.`}
       />
       <form onSubmit={submit} className="space-y-6" aria-label="Organization settings">
         <ErrorNotice error={save.error} />
         {saved && (
-          <p role="status" className="rounded-md bg-green-50 p-2 text-sm text-green-800">
+          <p role="status" className="rounded-md bg-ok-soft p-2 text-sm text-ok">
             Settings saved.
           </p>
         )}
@@ -145,8 +151,8 @@ function SettingsForm({
               onChange={(e) => setForm({ ...form, shadow_mode: e.target.checked })}
             />
             <span>
-              <span className="font-medium text-slate-800">Shadow mode</span>
-              <span className="block text-slate-600">
+              <span className="font-medium text-fg">Shadow mode</span>
+              <span className="block text-fg-2">
                 The agent reads, plans and answers, and says what it would have done, but makes no
                 changes: no tickets, messages elsewhere, pull requests or other writes. Turn it off
                 once you trust its plans.
@@ -157,10 +163,10 @@ function SettingsForm({
         <Card title="Models">
           <div className="grid gap-4 sm:grid-cols-2">
             <fieldset>
-              <legend className="text-sm font-medium text-slate-800">Allowed tiers</legend>
+              <legend className="text-sm font-medium text-fg">Allowed tiers</legend>
               <div className="mt-2 space-y-1">
                 {TIERS.map((tier) => {
-                  const offered = plan.model_tiers.includes(tier.value)
+                  const offered = !plan || plan.model_tiers.includes(tier.value)
                   return (
                     <label key={tier.value} className="flex items-center gap-2 text-sm">
                       <input
@@ -171,9 +177,7 @@ function SettingsForm({
                       />
                       {tier.label}
                       {!offered && (
-                        <span className="text-xs text-slate-500">
-                          (not on the {plan.title} plan)
-                        </span>
+                        <span className="text-xs text-fg-3">(not on the {plan?.title} plan)</span>
                       )}
                     </label>
                   )
@@ -208,7 +212,7 @@ function SettingsForm({
             <Field
               label="Tokens per user per day"
               htmlFor="user-daily"
-              hint={within(plan, plan.user_daily_token_limit, 'Empty for no limit')}
+              hint={within(plan, plan?.user_daily_token_limit, 'Empty for no limit')}
               error={fieldError('user_daily_token_limit')}
             >
               <Input
@@ -222,7 +226,7 @@ function SettingsForm({
             <Field
               label="Tokens per org per month"
               htmlFor="org-monthly"
-              hint={within(plan, plan.org_monthly_token_limit, 'Empty for no limit')}
+              hint={within(plan, plan?.org_monthly_token_limit, 'Empty for no limit')}
               error={fieldError('org_monthly_token_limit')}
             >
               <Input
@@ -236,7 +240,7 @@ function SettingsForm({
             <Field
               label="Concurrent tasks"
               htmlFor="concurrent"
-              hint={within(plan, plan.max_concurrent_tasks, '1 to 1000')}
+              hint={within(plan, plan?.max_concurrent_tasks, '1 to 1000')}
               error={fieldError('max_concurrent_tasks')}
             >
               <Input
@@ -249,7 +253,7 @@ function SettingsForm({
             <Field
               label="Active schedules"
               htmlFor="schedules"
-              hint={within(plan, plan.max_schedules, '0 to 10000')}
+              hint={within(plan, plan?.max_schedules, '0 to 10000')}
               error={fieldError('max_schedules')}
             >
               <Input
@@ -262,7 +266,7 @@ function SettingsForm({
             <Field
               label="Retention (days)"
               htmlFor="retention"
-              hint={within(plan, plan.max_retention_days, '1 to 3650')}
+              hint={within(plan, plan?.max_retention_days, '1 to 3650')}
               error={fieldError('retention_days')}
             >
               <Input

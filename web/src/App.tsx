@@ -2,6 +2,7 @@ import { lazy, Suspense, type ReactNode } from 'react'
 import { createBrowserRouter, Link, RouterProvider } from 'react-router'
 import { useAuth } from './auth/context'
 import { AdminOnly, ConsoleGate } from './components/Layout'
+import { ThemeSwitcher } from './components/ThemeSwitcher'
 import { Spinner } from './components/ui'
 import { AuditPage } from './pages/Audit'
 import { CatalogPage } from './pages/Catalog'
@@ -27,7 +28,12 @@ function ByMode({ dev, clerk }: { dev: ReactNode; clerk: ReactNode }) {
   if (mode === 'dev') return <>{dev}</>
   return (
     <Suspense fallback={<Spinner />}>
-      <div className="flex min-h-full items-center justify-center p-8">{clerk}</div>
+      <div className="relative flex min-h-full items-center justify-center p-8">
+        <div className="absolute right-4 top-4">
+          <ThemeSwitcher />
+        </div>
+        {clerk}
+      </div>
     </Suspense>
   )
 }
@@ -36,7 +42,10 @@ function NotFound() {
   return (
     <div className="flex min-h-full flex-col items-center justify-center gap-2 p-8">
       <h1 className="text-lg font-semibold">Page not found</h1>
-      <Link to="/" className="text-sm text-indigo-600 hover:text-indigo-500">
+      <Link
+        to="/"
+        className="text-sm font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg"
+      >
         Back to the console
       </Link>
     </div>

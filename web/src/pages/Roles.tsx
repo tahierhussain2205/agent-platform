@@ -86,7 +86,7 @@ export function RolesPage() {
       <ErrorNotice error={archive.error} onDismiss={() => archive.reset()} />
       <Card
         actions={
-          <label className="flex items-center gap-2 text-xs text-slate-600">
+          <label className="flex items-center gap-2 text-xs text-fg-2">
             <input
               type="checkbox"
               checked={showArchived}
@@ -104,7 +104,7 @@ export function RolesPage() {
         ) : roles.data.length === 0 ? (
           <EmptyState>No roles yet.</EmptyState>
         ) : (
-          <ul className="divide-y divide-slate-200">
+          <ul className="divide-y divide-line">
             {roles.data.map((role) => (
               <li
                 key={role.id}
@@ -115,10 +115,10 @@ export function RolesPage() {
                   <p className="text-sm font-medium">
                     {role.title} {role.status === 'archived' && <Badge>Archived</Badge>}
                   </p>
-                  <p className="mt-0.5 text-sm text-slate-600">
-                    {role.description || <span className="text-slate-400">No description</span>}
+                  <p className="mt-0.5 text-sm text-fg-2">
+                    {role.description || <span className="text-fg-4">No description</span>}
                   </p>
-                  <p className="mt-1 text-xs text-slate-500">
+                  <p className="mt-1 text-xs text-fg-3">
                     {role.members} member{role.members === 1 ? '' : 's'} · primary for{' '}
                     {role.primary_for}
                   </p>
@@ -130,7 +130,7 @@ export function RolesPage() {
                     </Button>
                     <Button
                       variant="ghost"
-                      className="text-red-600"
+                      className="text-bad"
                       busy={archive.isPending && archive.variables === role.id}
                       onClick={() => archive.mutate(role.id)}
                     >
