@@ -8,11 +8,19 @@
 - User OAuth (user-to-server): ``/github/login/oauth/authorize`` and ``/access_token`` (expiring
   user tokens with rotating refresh tokens), ``DELETE /applications/{client_id}/token``.
 - REST: ``/installation/repositories``, ``/user``, ``/user/installations``,
-  ``/repos/{o}/{r}/contents/{path}``, ``/repos/{o}/{r}/collaborators/{u}/permission``.
+  ``/repos/{o}/{r}/contents/{path}``, ``/repos/{o}/{r}/collaborators/{u}/permission``, commits,
+  tarballs and deployments. Writes (Git Data API, pulls, comments, checks, CI and webhooks) are in
+  ``fakes.github_write``.
+
+The app's installation has ``contents: write``, ``pull_requests: write``, ``checks: read`` and no
+``workflows`` permission. Each repository has its fixture history on ``main`` (protected) plus the
+commits, trees and branches pushed through the API.
 """
 
 import base64
+import hashlib
 import io
+import json
 import secrets
 import tarfile
 import time
@@ -29,6 +37,13 @@ from fakes.github_fixture import repositories
 from fakes.store import Store, outdated
 
 PERMISSION_RANK = {"none": 0, "read": 1, "triage": 2, "write": 3, "maintain": 4, "admin": 5}
+APP_PERMISSIONS = {"contents": "write", "pull_requests": "write", "checks": "read", "metadata": "read"}
+
+
+def tree_sha(tree: dict[str, str], modes: dict[str, str] | None = None) -> str:
+    """A stable id for a tree's content (the stand-in does not build git tree objects)."""
+    entries = sorted((path, (modes or {}).get(path, "100644"), content) for path, content in tree.items())
+    return hashlib.sha1(json.dumps(entries).encode()).hexdigest()
 
 
 def seed() -> dict[str, Any]:
@@ -39,8 +54,14 @@ def seed() -> dict[str, Any]:
         "dave-gh": {"login": "dave-gh", "id": 1004, "email": "dave@globex.test", "orgs": ["globex"]},
     }
     repos = repositories()
+    for r in repos.values():
+        r.update({
+            "refs": {"main": r["history"][-1]["sha"]}, "objects": {}, "trees": {}, "blobs": {}, "pushes": [],
+            "pulls": [], "reviews": [], "review_comments": [], "issue_comments": [], "checks": [],
+            "ci": {"enabled": True, "next": [], "delay": 1.0, "checks": ["test"]},
+        })  # fmt: skip
     return {
-        "version": 3,  # phase 11: histories, deployments, archives (and a committed secret file)
+        "version": 4,  # phase 12: branches, Git Data API, pulls, comments, checks and CI
         "users": users,
         "repos": repos,
         "installations": {},
@@ -48,6 +69,7 @@ def seed() -> dict[str, Any]:
         "access": {},
         "refresh": {},
         "install_tokens": {},
+        "deliveries": [],
     }
 
 
@@ -78,16 +100,84 @@ class GitHub:
             return "read"
         return "none"
 
+    def all_commits(self, name: str) -> list[dict[str, Any]]:
+        r = self.s["repos"][name]
+        return [*r["history"], *r["objects"].values()]
+
     def commit_at(self, name: str, ref: str | None) -> dict[str, Any] | None:
-        """A commit by sha (or a prefix of at least 7), or the head for none, "main" and "HEAD"."""
-        history = self.s["repos"][name].get("history") or []
-        if not history:
+        """A commit by branch, by sha (or a prefix of at least 7), or the default branch's head."""
+        r = self.s["repos"][name]
+        if not r.get("history"):
             return None
-        if not ref or ref in ("main", "HEAD", "heads/main"):
-            return history[-1]  # type: ignore[no-any-return]
-        if len(ref) < 7:
+        branch = (ref or "HEAD").removeprefix("refs/").removeprefix("heads/")
+        branch = "main" if branch == "HEAD" else branch
+        if branch in r["refs"]:
+            return self.commit_by_sha(name, r["refs"][branch])
+        if len(branch) < 7 or any(ch not in "0123456789abcdef" for ch in branch):
             return None
-        return next((c for c in history if c["sha"].startswith(ref)), None)
+        return next((c for c in self.all_commits(name) if c["sha"].startswith(branch)), None)
+
+    def commit_by_sha(self, name: str, sha: str) -> dict[str, Any] | None:
+        r = self.s["repos"][name]
+        found: dict[str, Any] | None = r["objects"].get(sha) or next((c for c in r["history"] if c["sha"] == sha), None)
+        return found
+
+    def ancestors(self, name: str, commit: dict[str, Any]) -> list[dict[str, Any]]:
+        """The commit and its first parents, newest first."""
+        chain = [commit]
+        while chain[-1]["parents"]:
+            parent = self.commit_by_sha(name, chain[-1]["parents"][0])
+            if parent is None:
+                break
+            chain.append(parent)
+        return chain
+
+    def merge_base(self, name: str, commit: dict[str, Any]) -> dict[str, Any]:
+        """The newest ancestor that is on the default branch."""
+        on_main = {c["sha"] for c in self.ancestors(name, self.commit_at(name, "main") or commit)}
+        return next((c for c in self.ancestors(name, commit) if c["sha"] in on_main), commit)
+
+    def user_of(self, request: Request) -> dict[str, Any] | None:
+        return oauthkit.bearer(self.s, request.headers.get("authorization"))
+
+    def installation_of(self, request: Request) -> dict[str, Any] | None:
+        auth = request.headers.get("authorization", "")
+        if not auth.lower().startswith(("bearer ", "token ")):
+            return None
+        record = self.s["install_tokens"].get(auth.split(" ", 1)[1].strip())
+        if record is None or record["exp"] < time.time():
+            return None
+        return self.s["installations"].get(str(record["installation"]))  # type: ignore[no-any-return]
+
+    def caller(self, request: Request) -> tuple[str | None, dict[str, Any] | None]:
+        """(user login, installation) for whichever kind of token was sent."""
+        record = self.user_of(request)
+        return (record["login"], None) if record else (None, self.installation_of(request))
+
+    def readable(self, request: Request, owner: str, repo: str) -> tuple[str, JSONResponse | None]:
+        """The repository's name, and the error to answer when the caller may not read it."""
+        login, inst = self.caller(request)
+        name = f"{owner}/{repo}"
+        if login is None and inst is None:
+            return name, gh_error(401, "Bad credentials")
+        ok = name in self.s["repos"] and (
+            (inst is not None and inst["account"] == owner)
+            or (login is not None and self.permission(login, name) != "none")
+        )
+        return name, None if ok else gh_error(404, "Not Found")
+
+    def writable(self, request: Request, owner: str, repo: str) -> tuple[str, str, JSONResponse | None]:
+        """The repository's name, who writes (the app's bot or a user), and the error for a caller
+        who may not write: the app through its installation, a user with write access."""
+        name, denied = self.readable(request, owner, repo)
+        if denied:
+            return name, "", denied
+        login, _ = self.caller(request)
+        if login is None:
+            return name, f"{self.config.github_app_slug}[bot]", None
+        if PERMISSION_RANK[self.permission(login, name)] < PERMISSION_RANK["write"]:
+            return name, login, gh_error(403, "Resource not accessible by integration")
+        return name, login, None
 
     def repo_json(self, name: str) -> dict[str, Any]:
         r = self.s["repos"][name]
@@ -114,7 +204,8 @@ def build_router(gh: GitHub) -> APIRouter:
                 options += [(f"{user['login']}|{org}", f"{user['login']} installing on {org}") for org in user["orgs"]]
             else:
                 options.append((user["login"], f"{user['login']} ({user['email']})"))
-        return oauthkit.consent_page(title, action, hidden, options, "contents: read, metadata: read")
+        scopes = ", ".join(f"{k}: {v}" for k, v in APP_PERMISSIONS.items())
+        return oauthkit.consent_page(title, action, hidden, options, scopes)
 
     @router.get("/github/apps/{slug}/installations/new")
     async def install_page(request: Request, slug: str) -> HTMLResponse:
@@ -199,17 +290,8 @@ def build_router(gh: GitHub) -> APIRouter:
             gh.store.save()
         return JSONResponse({**tokens, "refresh_token_expires_in": 15897600, "token_type": "bearer", "scope": ""})
 
-    def user_of(request: Request) -> dict[str, Any] | None:
-        return oauthkit.bearer(gh.s, request.headers.get("authorization"))
-
-    def installation_of(request: Request) -> dict[str, Any] | None:
-        auth = request.headers.get("authorization", "")
-        if not auth.lower().startswith(("bearer ", "token ")):
-            return None
-        record = gh.s["install_tokens"].get(auth.split(" ", 1)[1].strip())
-        if record is None or record["exp"] < time.time():
-            return None
-        return gh.s["installations"].get(str(record["installation"]))  # type: ignore[no-any-return]
+    user_of = gh.user_of
+    installation_of = gh.installation_of
 
     @router.delete("/github/api/applications/{client_id}/token")
     async def revoke(request: Request, client_id: str) -> Response:
@@ -248,7 +330,7 @@ def build_router(gh: GitHub) -> APIRouter:
             gh.store.save()
         return JSONResponse(
             {"token": token, "expires_at": datetime.fromtimestamp(expires, UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-             "permissions": {"contents": "read", "metadata": "read"}, "repository_selection": "all"},
+             "permissions": APP_PERMISSIONS, "repository_selection": "all"},
             status_code=201,
         )  # fmt: skip
 
@@ -281,10 +363,7 @@ def build_router(gh: GitHub) -> APIRouter:
         ]
         return JSONResponse({"total_count": len(mine), "installations": mine})
 
-    def caller(request: Request) -> tuple[str | None, dict[str, Any] | None]:
-        """(user login, installation) for whichever kind of token was sent."""
-        record = user_of(request)
-        return (record["login"], None) if record else (None, installation_of(request))
+    caller = gh.caller
 
     @router.get("/github/api/repos/{owner}/{repo}")
     async def repository(request: Request, owner: str, repo: str) -> JSONResponse:
@@ -338,17 +417,7 @@ def build_router(gh: GitHub) -> APIRouter:
             {"permission": "read" if level == "triage" else level, "role_name": level, "user": {"login": username}}
         )
 
-    def readable(request: Request, owner: str, repo: str) -> tuple[str, JSONResponse | None]:
-        """The repository's name, and the error to answer when the caller may not read it."""
-        login, inst = caller(request)
-        name = f"{owner}/{repo}"
-        if login is None and inst is None:
-            return name, gh_error(401, "Bad credentials")
-        ok = name in gh.s["repos"] and (
-            (inst is not None and inst["account"] == owner)
-            or (login is not None and gh.permission(login, name) != "none")
-        )
-        return name, None if ok else gh_error(404, "Not Found")
+    readable = gh.readable
 
     def commit_json(name: str, c: dict[str, Any], files: bool = False) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -371,15 +440,14 @@ def build_router(gh: GitHub) -> APIRouter:
         start = gh.commit_at(name, q.get("sha"))
         if start is None:
             return JSONResponse([])
-        history = gh.s["repos"][name]["history"]
-        found = [c for c in history[: history.index(start) + 1] if
+        found = [c for c in reversed(gh.ancestors(name, start)) if
                  (not q.get("path") or any(f["filename"].startswith(q["path"]) for f in c["files"]))
                  and (not q.get("since") or c["date"] >= q["since"][:19] + "Z")
                  and (not q.get("until") or c["date"] <= q["until"][:19] + "Z")]  # fmt: skip
         per_page = min(int(q.get("per_page") or 30), 100)
         return JSONResponse([commit_json(name, c) for c in reversed(found)][:per_page])
 
-    @router.get("/github/api/repos/{owner}/{repo}/commits/{ref}")
+    @router.get("/github/api/repos/{owner}/{repo}/commits/{ref:path}")
     async def commit(request: Request, owner: str, repo: str, ref: str) -> JSONResponse:
         name, denied = readable(request, owner, repo)
         if denied:
@@ -390,7 +458,7 @@ def build_router(gh: GitHub) -> APIRouter:
         return JSONResponse(commit_json(name, c, files=True))
 
     @router.get("/github/api/repos/{owner}/{repo}/tarball")
-    @router.get("/github/api/repos/{owner}/{repo}/tarball/{ref}")
+    @router.get("/github/api/repos/{owner}/{repo}/tarball/{ref:path}")
     async def tarball(request: Request, owner: str, repo: str, ref: str = "") -> Response:
         """The repository at a commit as a gzipped tar with one top directory, as GitHub serves it."""
         name, denied = readable(request, owner, repo)

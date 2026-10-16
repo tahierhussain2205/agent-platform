@@ -19,6 +19,7 @@ from fakes.gcp import Gcp
 from fakes.gcp import build_router as build_gcp_router
 from fakes.github import GitHub
 from fakes.github import build_router as build_github_router
+from fakes.github_write import Webhooks, build_write_router
 from fakes.google import Google
 from fakes.google import build_router as build_google_router
 from fakes.sandbox import Sandboxes
@@ -43,6 +44,7 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     anthropic = Anthropic(config)
     atlassian = Atlassian(config, store)
     github = GitHub(config, store)
+    github_hooks = Webhooks(github)
     google = Google(config, store)
     gcp = Gcp(config, store)
     sandboxes = Sandboxes(config, store)
@@ -84,6 +86,7 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
         yield
         await deliverer.stop()
         await slack_deliverer.stop()
+        await github_hooks.stop()
 
     app = FastAPI(title="fakes", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.add_middleware(
@@ -99,6 +102,7 @@ def create_app(config: Config | None = None, persist: bool = True) -> FastAPI:
     app.include_router(build_slack_admin_router(slack))
     app.include_router(build_anthropic_router(anthropic))
     app.include_router(build_atlassian_router(atlassian))
+    app.include_router(build_write_router(github, github_hooks))  # first: /commits/{ref}/check-runs
     app.include_router(build_github_router(github))
     app.include_router(build_google_router(google))
     app.include_router(build_gcp_router(gcp))

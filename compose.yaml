@@ -176,6 +176,8 @@ services:
       SLACK_CLIENT_SECRET: local-slack-client-secret
       SLACK_SIGNING_SECRET: local-slack-signing-secret
       GITHUB_SETUP_URL: http://localhost:8000/oauth/github/install
+      GITHUB_WEBHOOK_URL: http://api:8000/webhooks/github
+      GITHUB_WEBHOOK_SECRET: local-github-webhook-secret
       GITHUB_APP_PUBLIC_KEY: |
         -----BEGIN PUBLIC KEY-----
         MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8fectfhINa8+mWW4IcPi

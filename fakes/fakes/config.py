@@ -66,6 +66,13 @@ class Config:
     github_setup_url: str = field(
         default_factory=lambda: os.environ.get("GITHUB_SETUP_URL", "http://localhost:8000/oauth/github/install")
     )
+    github_public_url: str = field(
+        default_factory=lambda: os.environ.get("GITHUB_PUBLIC_URL", "http://localhost:4100/github")
+    )
+    github_webhook_url: str | None = field(default_factory=lambda: os.environ.get("GITHUB_WEBHOOK_URL") or None)
+    github_webhook_secret: str = field(
+        default_factory=lambda: os.environ.get("GITHUB_WEBHOOK_SECRET", "local-github-webhook-secret")
+    )
     github_user_token_ttl: int = field(default_factory=lambda: int(os.environ.get("GITHUB_USER_TOKEN_TTL", "28800")))
     google_client_id: str = field(default_factory=lambda: os.environ.get("GOOGLE_CLIENT_ID", "local-google-client"))
     google_client_secret: str = field(
