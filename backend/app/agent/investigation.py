@@ -356,7 +356,12 @@ class Investigation:
         notes: list[str] = []
         points: list[dict[str, Any]] = []
         issue: dict[str, Any] | None = None
-        for key in [k for k in entities.get("ids") or [] if KEY_RE.match(str(k))][:3]:
+        prior = await self.r._prior_plan(ref)
+        keys = [k for k in entities.get("ids") or [] if KEY_RE.match(str(k))][:3]
+        if not keys and prior:  # a follow-up in the thread: the issue the current plan is about
+            previous = ((prior.get("case") or {}).get("issue") or {}).get("key")
+            keys = [previous] if previous else []
+        for key in keys:
             if "jira" not in registry.adapters:
                 notes.append(f"{key}: Jira is not connected")
                 break
@@ -408,7 +413,6 @@ class Investigation:
         window = window_of(entities.get("time_window"), issue, self.r.d.now())
         # An incident that ended a while ago happened in the code as it was then, not as it is now.
         past = self.r.d.now() - datetime.fromisoformat(window[1]) > timedelta(hours=1)
-        prior = await self.r._prior_plan(ref)
         await self.r.step(
             ref,
             "gather",

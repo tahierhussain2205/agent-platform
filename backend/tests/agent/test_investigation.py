@@ -237,6 +237,8 @@ async def test_a_follow_up_in_the_thread_revises_the_plan(world: Agent) -> None:
     case, _, composed = await investigate(world, follow)
     assert case.prior_plan is not None
     assert case.prior_plan["playbook"] == "investigate_issue"
+    assert case.issue is not None
+    assert case.issue["key"] == "PAY-101"  # from the current plan: the follow-up names no issue
     plan = stored_plan(world, follow)
     assert plan["revision"]["changed"] is True
     assert "_Revised: " in composed.answer

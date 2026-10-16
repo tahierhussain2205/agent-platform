@@ -186,8 +186,9 @@ class EvalRun:
         return [k for k in integrations if k not in have]
 
     async def catalog(self, org_id: str, services: list[dict[str, Any]]) -> None:
-        """Confirmed services a case relies on: created when missing, and given the case's
-        repository, Jira component and log source when it states them."""
+        """Confirmed services a case relies on: created when missing (a pending proposal of the
+        name is confirmed), and given the case's repository, Jira component and log source when it
+        states them."""
         async with tenant_tx(self.pool, org_id) as conn:
             for s in services:
                 repository = None
@@ -212,6 +213,11 @@ class EvalRun:
                     "insert into app.services (org_id, name, jira_project, jira_component) "
                     "values (%s, %s, %s, %s) on conflict do nothing",
                     (org_id, s["name"], s.get("jira_project"), s.get("jira_component")),
+                )
+                await conn.execute(  # a case relies on a confirmed service: confirm a pending proposal
+                    "update app.services set status = 'active', confirmed_at = coalesce(confirmed_at, now()) "
+                    "where lower(btrim(name)) = lower(btrim(%s)) and status = 'proposed'",
+                    (s["name"],),
                 )
                 await conn.execute(
                     "update app.services set repository_id = coalesce(%s, repository_id), "

@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { signIn, trackErrors, uid } from './helpers'
 import { FAKES, join, openChannel, openDm, openSlack, post } from './slack-helpers'
@@ -239,17 +240,21 @@ async function issues(contains: string): Promise<Issue[]> {
   return (await r.json()) as Issue[]
 }
 
-/** A new channel with Bob, Quinn, Alice and the agent, allowed by Alice in the console (its
- * members synced), so tests do not read each other's reports. */
-async function ticketsChannel(browser: Browser): Promise<string> {
-  const name = `tickets-${uid()}`
+/** A new channel with the given people (Bob, Quinn, Alice by default) and the agent, allowed by
+ * Alice in the console (its members synced), so tests do not read each other's messages. */
+async function ticketsChannel(
+  browser: Browser,
+  people: string[] = ['U0BOB', 'U0QUINN', 'U0ALICE'],
+  prefix = 'tickets',
+): Promise<string> {
+  const name = `${prefix}-${uid()}`
   const created = await fetch(`${FAKES}/_admin/slack/channels`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ team: 'T0ACME', name, members: [] }),
   })
   const { id } = (await created.json()) as { id: string }
-  for (const user of ['U0ACMEBOT', 'U0BOB', 'U0QUINN', 'U0ALICE']) await join('T0ACME', id, user)
+  for (const user of ['U0ACMEBOT', ...people]) await join('T0ACME', id, user)
   const admin = await (await browser.newContext()).newPage()
   await signIn(admin, 'alice@acme.test')
   await admin.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Slack' }).click()
@@ -259,9 +264,12 @@ async function ticketsChannel(browser: Browser): Promise<string> {
   await expect(allow).toBeEnabled()
   await expect(async () => {
     await admin.reload()
-    await expect(admin.getByTestId(`channel-${name}`).locator('td').nth(2)).toHaveText('3', {
-      timeout: 1_000,
-    })
+    await expect(admin.getByTestId(`channel-${name}`).locator('td').nth(2)).toHaveText(
+      String(people.length),
+      {
+        timeout: 1_000,
+      },
+    )
   }).toPass({ timeout: 45_000 })
   await admin.close()
   return name
@@ -389,4 +397,61 @@ test('Example 1 in Auto mode: tickets are created right away and linked in the t
   expect(partial).toMatchObject({ reporter: 'acc-alice', assignee: 'acc-alice' })
   await expect(thread.getByRole('link', { name: gift.key })).toBeVisible()
   await expect(thread.getByRole('link', { name: partial.key })).toBeVisible()
+})
+
+// ------------------------------------------------------------------ Example 2: investigate and plan
+
+test('an admin connects Cloud Logging and points a service at its logs', async ({ page }) => {
+  await integrations(page, 'alice@acme.test')
+  const logs = card(page, 'Google Cloud Logging')
+  await logs
+    .getByLabel('Service account key file')
+    .setInputFiles(
+      fileURLToPath(new URL('../../dev/gcp/service-account-dev.json', import.meta.url)),
+    )
+  await logs.getByRole('button', { name: 'Connect' }).click()
+  await expect(
+    logs.getByText(/Connected as agent-reader@acme-prod\.iam\.gserviceaccount\.com/),
+  ).toBeVisible()
+  await expect(logs.getByTestId('google_cloud_logging-connection')).toContainText(
+    'connected as agent-reader',
+  )
+  await logs.getByRole('button', { name: 'Check now' }).click()
+  await expect(logs.getByText('Logs of project acme-prod are readable.')).toBeVisible()
+
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('link', { name: 'Catalog' })
+    .click()
+  const cart = page
+    .getByRole('list', { name: 'Confirmed services' })
+    .getByRole('listitem', { name: 'cart-service' })
+  await cart.getByRole('button', { name: 'Edit' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Log project').fill('acme-prod')
+  await dialog.getByLabel('Resource type').fill('cloud_run_revision')
+  await dialog.getByRole('button', { name: 'Save' }).click()
+  await expect(cart).toContainText('Logs acme-prod')
+})
+
+test('Example 2: a ticket is investigated into a sourced plan, refined in the thread', async ({
+  browser,
+  page,
+}) => {
+  // Bob and Alice may both read the repository, the project and the logs: the plan stays here.
+  const channel = await ticketsChannel(browser, ['U0BOB', 'U0ALICE'], 'incident')
+  const ts = await say(page, 'Bob Builder', channel, '@agent investigate PAY-101 and plan a fix')
+  const thread = await threadOf(page, ts)
+  await expect(thread).toContainText('Plan: Checkout returns 500 for carts with 20 or more items')
+  await expect(thread).toContainText('confidence high')
+  await expect(thread).toContainText('IndexError: list assignment index out of range')
+  await expect(thread).toContainText('Preallocate price slots for faster totals')
+  await expect(thread).toContainText('[reproduce] Write a failing test')
+  await expect(thread).toContainText('Sources')
+  await expect(thread.getByRole('link', { name: /src\/pricing\/cart\.py/ }).first()).toBeVisible()
+
+  await page.locator('#thread-composer').fill('@agent it only happens for carts with discounts')
+  await page.locator('#thread-send').click()
+  await expect(thread.getByText(/Revised: Rechecked with the follow-up/)).toBeVisible(AGENT)
+  await expect(thread).toContainText('On your follow-up')
 })
