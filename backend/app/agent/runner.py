@@ -46,7 +46,7 @@ from app.llm.models import Tier
 from app.policy import Destination, Policy, TaskScope
 from app.policy.redaction import redact
 from app.slack import service
-from app.slack.adapter import ApprovalRequest, ChannelAdapter, DirectMessage, Progress, Reply
+from app.slack.adapter import ApprovalRequest, ChannelAdapter, DirectMessage, Progress, Reply, escape
 from app.slack.client import SlackClient, SlackError
 from app.tools.base import RefBook, Source, Target, ToolContext, definitions, tool_name
 from app.tools.executor import ToolExecutor, ToolUnavailableError, build_registry
@@ -450,8 +450,8 @@ class AgentRunner:
             key = str(raw.get("playbook") or "none")
             confidence = max(0.0, min(1.0, float(raw.get("confidence") or 0)))
             if key not in keys(BUILTIN):
-                question = str(
-                    raw.get("clarifying_question") or "Could you say a bit more about what you need?"
+                question = escape(
+                    str(raw.get("clarifying_question") or "Could you say a bit more about what you need?")
                 )
                 await self.step(ref, "gather", "completed", "Asked a clarifying question")
                 return Understanding(None, None, confidence, question[:500], mode)
@@ -683,7 +683,9 @@ class AgentRunner:
             args: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
             if raw.get("tool") == "slack" and not str(args.get("channel") or "").strip():
                 continue
-            summary = str(raw.get("summary") or f"{raw['tool']} {raw['operation']}")[:300]
+            if raw.get("tool") == "slack" and isinstance(args.get("text"), str):
+                args["text"] = escape(args["text"])  # "{answer}" is escaped when it is written
+            summary = escape(str(raw.get("summary") or f"{raw['tool']} {raw['operation']}"))[:300]
             actions.append(PlannedAction(str(raw["tool"]), str(raw["operation"]), dict(args), summary))
         if any(a.tool == "jira" for a in actions):  # checked in code before anything reaches the policy
             _, _, _, executor = await self._tools(ref, ctx, u.mode, RefBook())
@@ -750,7 +752,7 @@ class AgentRunner:
                 or "I had not found anything yet."
             )
             confidence, model_unverified = "low", []
-        answer, _ = redact(answer)
+        answer = escape(redact(answer)[0])
         # Keep only citations of known findings, renumbered in order of first use.
         order: list[int] = []
         for match in re.finditer(r"\[(\d{1,3})\]", answer):
@@ -764,7 +766,9 @@ class AgentRunner:
             answer,
         )
         verified = sum(1 for p in points if p["sources"])
-        not_verified = [p["text"][:120] for p in points if not p["sources"]] + model_unverified
+        not_verified = [
+            escape(t) for t in [p["text"][:120] for p in points if not p["sources"]] + model_unverified
+        ]
         if points and not order:
             not_verified.append("The answer does not cite its sources.")
         sources = await self._permalinks(ref, [numbered[old - 1] for old in order])
@@ -981,8 +985,8 @@ class AgentRunner:
             if same is not None:
                 return ActionOutcome(
                     "skipped",
-                    f'Not created: "{args.get("summary")}" looks like {tickets.issue_link(same)}, '
-                    "opened meanwhile.",
+                    f'Not created: "{escape(str(args.get("summary")))}" looks like '
+                    f"{tickets.issue_link(same)}, opened meanwhile.",
                 )
         async with tenant_tx(self.d.pool, ref.org_id) as conn:
             if row is None:
@@ -1027,7 +1031,7 @@ class AgentRunner:
         if result.data.get("url") and result.data.get("key"):
             issue = tickets.issue_link(result.data)
             done = (
-                f"Created {issue}: {args.get('summary')}"
+                f"Created {issue}: {escape(str(args.get('summary')))}"
                 if action.operation == "create_issue"
                 else (f"{action.summary} ({issue})")
             )

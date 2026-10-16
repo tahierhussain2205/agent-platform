@@ -14,7 +14,7 @@ from temporalio.exceptions import ApplicationError
 from app.agent.types import TaskRef
 from app.db.tenant import tenant_tx
 from app.slack import service
-from app.slack.adapter import ChannelAdapter, DirectMessage, Ephemeral, Intent, Reply
+from app.slack.adapter import ChannelAdapter, DirectMessage, Ephemeral, Intent, Reply, escape
 from app.slack.client import SlackClient, SlackError
 from app.vault_service import VaultClient
 from app.workflows.slack_types import (
@@ -462,7 +462,7 @@ def schedule_blocks(schedules: list[dict[str, Any]]) -> list[dict[str, Any]]:
         blocks += [
             {
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*{s['name']}*\n{s['when']} · {s['state']}"},
+                "text": {"type": "mrkdwn", "text": f"*{escape(s['name'])}*\n{s['when']} · {s['state']}"},
             },
             {
                 "type": "actions",
@@ -530,7 +530,8 @@ def home_view(
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*{org}*\nSigned in as {email}" + (" (invitation pending)" if invited else ""),
+                "text": f"*{escape(org)}*\nSigned in as {escape(email)}"
+                + (" (invitation pending)" if invited else ""),
             },
         },
         {"type": "context", "elements": [{"type": "mrkdwn", "text": f"Roles: {roles or 'none'}"}]},

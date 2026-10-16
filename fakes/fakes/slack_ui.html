@@ -76,12 +76,20 @@ let view = { team: '', user: '', channel: '', thread: '', home: false };
 let state = null;
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// As Slack reads mrkdwn: <...> is a control sequence (mention, broadcast, channel, link); everywhere
+// else &lt; &gt; &amp; are entities shown as < > & (so escaped text can never become a mention).
+const decode = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 function mrkdwn(text) {
-  let out = esc(text);
-  out = out.replace(/&lt;@([A-Z0-9]+)&gt;/g, (_, id) => '@' + esc((state && state.names[id]) || id));
-  out = out.replace(/&lt;(https?:[^|&]+)\|([^&]+)&gt;/g, '<a href="$1" target="_blank">$2</a>');
-  out = out.replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
-  return out;
+  return String(text ?? '').split(/(<[^<>]+>)/g).map((part) => {
+    const control = /^<([^<>]+)>$/.exec(part);
+    if (!control) return esc(decode(part)).replace(/\*([^*\n]+)\*/g, '<b>$1</b>');
+    const [target, label] = control[1].split('|');
+    if (target.startsWith('@')) return '@' + esc((state && state.names[target.slice(1)]) || target.slice(1));
+    if (target.startsWith('!')) return '<b>@' + esc(target.slice(1)) + '</b>';
+    if (target.startsWith('#')) return '#' + esc(label || target.slice(1));
+    if (/^https?:/.test(target)) return `<a href="${esc(target)}" target="_blank">${esc(decode(label || target))}</a>`;
+    return esc(part);
+  }).join('');
 }
 
 function renderBlocks(blocks, ctx) {

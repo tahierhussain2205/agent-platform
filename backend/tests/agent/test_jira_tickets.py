@@ -181,7 +181,7 @@ async def test_duplicates_assignees_and_links_are_checked_in_code(tickets: Agent
         "assignee_email": "bob@acme.test",
     }
     assert discount.evidence == [
-        "Assignee: Bob Builder <bob@acme.test>, owner of cart-service (CODEOWNERS /src/pricing/ in acme/cart-service)"
+        "Assignee: Bob Builder (bob@acme.test), owner of cart-service (CODEOWNERS /src/pricing/ in acme/cart-service)"
     ]
     description = discount.args["description"]
     assert f"/ui#T0ACME/{external}/" in description  # the Slack message it comes from
@@ -201,7 +201,7 @@ async def test_duplicates_assignees_and_links_are_checked_in_code(tickets: Agent
     assert request.summary.startswith(
         'Create PAY ticket "Discount codes fail at checkout" for Bob Builder\n'
         "Project PAY, component Checkout\n"
-        "Assignee: Bob Builder <bob@acme.test>, owner of cart-service (CODEOWNERS /src/pricing/ in acme/cart-service)\n"
+        "Assignee: Bob Builder (bob@acme.test), owner of cart-service (CODEOWNERS /src/pricing/ in acme/cart-service)\n"
         "> Reported in Slack by Quinn Tester: Discount codes fail at checkout"
     )
     assert request.tier == "reversible_write"
@@ -423,7 +423,7 @@ async def test_ask_requests_approvals_together_and_creates_what_is_approved(
     )
     discount = next(a for a in pending if "Discount codes" in a[2])
     refunds = next(a for a in pending if "Refund emails" in a[2])
-    assert "Assignee: Bob Builder <bob@acme.test>, owner of cart-service" in discount[2]
+    assert "Assignee: Bob Builder (bob@acme.test), owner of cart-service" in discount[2]
 
     async def waiting() -> bool:
         status = [m for m in thread_of(await channel_messages(external), ts) if m.get("edited")]

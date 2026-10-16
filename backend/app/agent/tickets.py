@@ -21,6 +21,7 @@ from typing import Any
 from app.agent.types import PlannedAction
 from app.db.tenant import tenant_tx
 from app.policy.redaction import redact
+from app.slack.adapter import escape
 from app.tools.base import tool_name
 from app.tools.catalog import words
 from app.tools.executor import ToolExecutor
@@ -137,7 +138,7 @@ class Choice:
     @property
     def evidence(self) -> list[str]:
         line = (
-            f"Assignee: {self.name} <{self.email}>, {self.why}" if self.email else f"Unassigned: {self.why}"
+            f"Assignee: {self.name} ({self.email}), {self.why}" if self.email else f"Unassigned: {self.why}"
         )
         return [*self.notes, line]
 
@@ -193,7 +194,8 @@ async def review(
             choice = await choose_assignee(executor, str(args.get("assignee_email") or ""), [], goal)
             if not choice.email:
                 reason = choice.evidence[0].removeprefix("Not assigned to ")
-                out.append(replace(action, skip=f"Not assigning {args.get('key')} to {reason}"))
+                key = escape(str(args.get("key")))
+                out.append(replace(action, skip=f"Not assigning {key} to {escape(reason)}"))
                 continue
             out.append(
                 replace(action, args={**args, "assignee_email": choice.email}, evidence=choice.evidence)
@@ -220,6 +222,7 @@ async def _ticket(
     project = str(args.get("project") or "").strip().upper()
     component = str(args.get("component") or "").strip()
     finding = finding_for(args.pop("finding", None), summary, points)
+    shown = escape(summary)  # for Slack
     if not summary:
         return replace(action, skip="A proposed ticket had no summary, so it was not created.")
     owners = await executor.run(
@@ -233,16 +236,18 @@ async def _ticket(
     if not component and best.get("jira_component") and best.get("jira_project") == project:
         component = str(best["jira_component"])
     if not PROJECT_RE.match(project):
-        return replace(action, skip=f'No Jira project for "{summary}": name the project and ask again.')
+        return replace(action, skip=f'No Jira project for "{shown}": name the project and ask again.')
     earlier = next((s for p, s in planned if p == project and similar(summary, s)), None)
     if earlier:
-        return replace(action, skip=f'"{summary}" is the same problem as "{earlier}": one ticket is enough.')
+        return replace(
+            action, skip=f'"{shown}" is the same problem as "{escape(earlier)}": one ticket is enough.'
+        )
     issues, failed = await open_issues(executor, project, summary)
     same = closest(summary, issues)
     if same is not None:
         return replace(
             action,
-            skip=f'Not created: "{summary}" looks like {issue_link(same)} ({same.get("status")}), '
+            skip=f'Not created: "{shown}" looks like {issue_link(same)} ({escape(str(same.get("status")))}), '
             "already open.",
         )
     planned.append((project, summary))
@@ -270,8 +275,8 @@ async def _ticket(
     if links:
         parts.append("Reported in Slack:\n" + "\n".join(f"• {link}" for link in links))
     parts.append(choice.for_ticket)
-    title = f'Create {project} ticket "{summary}"' + (
-        f" for {choice.name}" if choice.email else " (unassigned)"
+    title = f'Create {project} ticket "{shown}"' + (
+        f" for {escape(choice.name)}" if choice.email else " (unassigned)"
     )
     return replace(
         action,
@@ -297,8 +302,9 @@ def preview(action: PlannedAction, args: dict[str, Any]) -> str:
         if args.get("component"):
             details.append(f"component {args['component']}")
         lines.append(", ".join(details))
-    lines += action.evidence
+    lines += [escape(e) for e in action.evidence]
     text = str(args.get("description") or args.get("text") or "")
     if text:
-        lines += [f"> {line}" for line in text[:600].splitlines()] + (["> …"] if len(text) > 600 else [])
+        quoted = [f"> {escape(line)}" for line in text[:600].splitlines()]
+        lines += quoted + (["> …"] if len(text) > 600 else [])
     return "\n".join(lines)

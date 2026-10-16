@@ -27,7 +27,7 @@ from app.llm.gateway import BudgetExceededError, CallContext
 from app.policy import Destination
 from app.schedules.cron import Cadence
 from app.schedules.figures import channel_figures, figure_lines, jira_figures, verify_narrative
-from app.slack.adapter import ChannelAdapter, DirectMessage, Report
+from app.slack.adapter import ChannelAdapter, DirectMessage, Report, escape
 from app.tools.base import RefBook, Source, tool_name
 
 log = logging.getLogger(__name__)
@@ -308,12 +308,14 @@ class ReportRunner(AgentRunner):
         window = datetime.fromisoformat(start.window_start), datetime.fromisoformat(start.window_end)
         sections: list[tuple[str, str]] = [("", "\n".join(c.figure_lines))]
         if c.summary:
-            sections.append(("", c.summary))
+            sections.append(("", escape(c.summary)))
         if c.highlights:
             sections.append(
                 (
                     "",
-                    "\n".join(f"• {h['text']} " + "".join(f"[{n}]" for n in h["refs"]) for h in c.highlights),
+                    "\n".join(
+                        f"• {escape(h['text'])} " + "".join(f"[{n}]" for n in h["refs"]) for h in c.highlights
+                    ),
                 )
             )
         footer = (
@@ -417,14 +419,19 @@ class ReportRunner(AgentRunner):
                 else "Resume it once fixed, or delete it"
             )
             messages = [
-                (a, f"⏸ The scheduled report *{name}* owned by {email} was paused: {why}. {fix}: {link}.")
+                (
+                    a,
+                    f"⏸ The scheduled report *{escape(name)}* owned by {email} was paused: {why}. "
+                    f"{fix}: {link}.",
+                )
                 for a in admins
             ]
             if owner_status == "active" and owner_slack and opted and owner_slack not in admins:
                 messages.append(
                     (
                         owner_slack,
-                        f"⏸ Your scheduled report *{name}* was paused: {why}. Resume it once fixed: {link}.",
+                        f"⏸ Your scheduled report *{escape(name)}* was paused: {why}. "
+                        f"Resume it once fixed: {link}.",
                     )
                 )
             for user, text in messages if token else []:

@@ -23,6 +23,7 @@ from app.schedules.service import KIND_OF, Draft, validate
 from app.schedules.temporal import start_sync, sync_org, temporal_id
 from app.settings import get_settings
 from app.slack import service
+from app.slack.adapter import escape
 from app.slack.client import SlackError
 from app.workflows.slack_types import HomeRequest
 
@@ -109,7 +110,9 @@ async def _proposal(
     if await res.kv.getdel(key) is None:  # a second click got here first
         return
     if action_id == "schedule_cancel":
-        await _update_message(request, org_id, payload, f"~{stored['name']}~\nCancelled by <@{user}>.")
+        await _update_message(
+            request, org_id, payload, f"~{escape(stored['name'])}~\nCancelled by <@{user}>."
+        )
         return
     draft = Draft(
         stored["name"],
@@ -267,7 +270,7 @@ async def _home(
             return
         await sync_org(res.db_pool, client, settings, org_id)
         await client.get_schedule_handle(temporal_id(schedule_id)).trigger()
-        await tell(f"Running *{name}* now; the report follows shortly.")
+        await tell(f"Running *{escape(name)}* now; the report follows shortly.")
     else:
         await start_sync(client, settings, org_id)
     if client is not None:  # refresh the home tab of the person who clicked

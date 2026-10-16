@@ -16,6 +16,12 @@ BLOCK_LIMIT = 50
 FALLBACK_TEXT_LIMIT = 3000  # notification text; the blocks carry the full content
 
 
+def escape(text: str) -> str:
+    """Text written by the model or a person, for mrkdwn: ``&`` and ``<`` escaped, so it cannot form
+    mentions (``<!channel>``, ``<@U...>``), links or channel references. ``>`` (quotes) is kept."""
+    return text.replace("&", "&amp;").replace("<", "&lt;")
+
+
 @dataclass(frozen=True)
 class Reply:
     channel: str

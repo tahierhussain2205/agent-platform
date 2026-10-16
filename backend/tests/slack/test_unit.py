@@ -19,6 +19,7 @@ from app.slack.adapter import (
     Progress,
     Reply,
     Report,
+    escape,
     render,
     split_text,
 )
@@ -122,6 +123,36 @@ def test_other_intents() -> None:
     buttons = params["blocks"][-1]["elements"]
     assert [b["action_id"] for b in buttons] == ["approval_approve", "approval_reject"]
     assert all(b["value"] == "appr-1" for b in buttons)
+
+
+def test_escape_neutralizes_mentions_and_links_but_keeps_quotes() -> None:
+    raw = "<!channel> ping <@U0BOB> see <https://evil.example|your login> & <#C0BUGS>\n> quoted"
+    escaped = escape(raw)
+    assert "<" not in escaped
+    assert escaped == (
+        "&lt;!channel> ping &lt;@U0BOB> see &lt;https://evil.example|your login> &amp; &lt;#C0BUGS>\n> quoted"
+    )
+    assert escape("&lt;!here>") == "&amp;lt;!here>"  # an entity the model wrote stays text too
+
+
+def test_app_home_escapes_names_people_and_models_wrote() -> None:
+    from app.workflows.slack_activities import home_view
+
+    view = home_view(
+        "Acme <!channel>", "bob@acme.test", "ask", "ask", "auto", None, False, "http://console",
+        [{"id": "s1", "name": "<!here> daily", "when": "Daily", "state": "active", "status": "active"}],
+    )  # fmt: skip
+
+    def mrkdwn(node: Any) -> list[str]:  # plain_text is never parsed by Slack, so it is left as written
+        if isinstance(node, dict):
+            own = [node["text"]] if node.get("type") == "mrkdwn" else []
+            return own + [t for v in node.values() for t in mrkdwn(v)]
+        return [t for v in node for t in mrkdwn(v)] if isinstance(node, list) else []
+
+    texts = mrkdwn(view)
+    assert not [t for t in texts if "<!channel>" in t or "<!here>" in t]
+    assert any("&lt;!here> daily" in t for t in texts)
+    assert any("&lt;!channel>" in t for t in texts)
 
 
 def test_fallback_text_is_bounded() -> None:

@@ -20,7 +20,7 @@ from app.db.tenant import tenant_tx
 from app.llm.gateway import BudgetExceededError
 from app.schedules.cron import ScheduleError
 from app.schedules.service import TITLES, Draft, Valid, validate
-from app.slack.adapter import Prompt
+from app.slack.adapter import Prompt, escape
 from app.tools.base import RefBook
 
 log = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ def summary(valid: Valid, channel_names: dict[str, str], delivery_name: str | No
     runs = ", ".join(t.strftime("%a %b %d %H:%M") for t in valid.cadence.next_runs(now))
     where = f"in #{delivery_name}" if valid.delivery == "channel" else "to you by direct message"
     return (
-        f"*{valid.name}*\n"
+        f"*{escape(valid.name)}*\n"
         f"• Report: {TITLES[kind]} of {about}\n"
         f"• When: {valid.cadence.describe()} ({valid.cadence.timezone})\n"
         f"• Delivered {where}\n"
@@ -95,7 +95,7 @@ async def propose_schedule(runner: AgentRunner, ref: TaskRef, u: Understanding) 
         return "stopped"
     raw = result.tool_input("submit_schedule")
     if raw.get("question"):
-        await runner.reply(ref, str(raw["question"])[:500], "schedule-question")
+        await runner.reply(ref, escape(str(raw["question"]))[:500], "schedule-question")
         return "asked"
     wanted = [str(c).lstrip("#").lower() for c in raw.get("channels") or []]
     unknown = [c for c in wanted if c not in names]

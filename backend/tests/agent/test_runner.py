@@ -442,3 +442,29 @@ def test_render_answer(stopped: str | None) -> None:
     assert "_Not verified: one point_" in text
     assert "✅ Posted in #general." in text
     assert ("I stopped early" in text) == bool(stopped)
+
+
+async def test_model_text_cannot_ping_or_hide_links_in_slack(agent: Agent) -> None:
+    t = tag()
+    await ui_post("U0QUINN", "C0BUGS", f"Cart totals wrong {t}")
+    ref = await ask(agent, "summarize today's discussion in #bugs and share it in #general")
+    u = await agent.runner.understand(ref, "ask")
+    f = await agent.runner.gather(ref, u, "standard")
+    plan = {"tool": "slack", "operation": "post_message", "args": {"channel": "general", "text": "<!channel> {answer}"},
+            "summary": "<!here> Post it"}  # fmt: skip
+    answer = "<!channel> Cart totals are wrong [1]. Sign in again at <https://evil.example|the console>."
+    await script_model(
+        [{"type": "tool_use", "name": "submit_plan", "input": {"actions": [plan]}}],
+        [{"type": "tool_use", "name": "submit_report", "input": {"answer": answer, "confidence": "high"}}],
+    )
+    (action,) = await agent.runner.plan(ref, u, f, "standard")
+    assert action.summary == "&lt;!here> Post it"
+    assert action.args["text"] == "&lt;!channel> {answer}"
+    c = await agent.runner.compose(ref, u, f, "standard")
+    rendered = render_answer(c, [])
+    assert "<!channel>" not in rendered
+    assert "<https://evil.example" not in rendered
+    assert rendered.startswith("&lt;!channel> Cart totals are wrong [1].")
+    assert "<" in render_answer(
+        c, ["✅ Created <https://acme.atlassian.net/browse/PAY-1|PAY-1>."]
+    )  # our links stay
