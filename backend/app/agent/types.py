@@ -77,6 +77,7 @@ class CaseFile:
     prior_plan: dict[str, Any] | None = None
     points: list[dict[str, Any]] = field(default_factory=list)  # findings: the issue, the catalog entry
     notes: list[str] = field(default_factory=list)  # what could not be found
+    code_at: str | None = None  # a past incident: read the code as it was then (ISO time)
 
 
 @dataclass

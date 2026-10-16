@@ -190,6 +190,9 @@ class CodeOperations:
         branch = str(info.get("default_branch") or "main")
 
         async def head() -> str:
+            pinned = ctx.cache.get(f"github:base:{repo}")  # a past incident's commit, chosen by the task
+            if pinned:
+                return str(pinned)
             body = await self.gh._get(ctx, credential.token, f"repos/{repo}/commits/{branch}")
             if not body or not body.get("sha"):
                 raise SandboxError(f"{repo} has no commit on {branch}")

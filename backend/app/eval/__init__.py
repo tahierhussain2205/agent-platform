@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from psycopg.types.json import Jsonb
 
 from app.agent.outbox import CaptureSink, Sink
 from app.agent.runner import AgentDeps, AgentRunner, render_answer
@@ -101,9 +102,37 @@ def score(case: dict[str, Any], observed: dict[str, Any]) -> dict[str, float]:
     if expect.get("skips_include"):  # what the checks in code dropped, and why
         skips = " ".join(str(a["skip"]) for a in observed.get("actions") or [] if a["skip"])
         checks["skips"] = sum(s in skips for s in expect["skips_include"]) / len(expect["skips_include"])
+    if "service" in expect:  # the case file found the right service
+        checks["service"] = float(observed.get("service") == expect["service"])
+    if "incident" in expect:  # the window covers the incident (hours before now)
+        checks["window"] = float(_covers(observed.get("case_window"), expect["incident"]))
+    if expect.get("signature_includes"):  # the right error signature was found
+        sigs = " ".join(str(s) for s in observed.get("signatures") or [])
+        checks["signature"] = float(expect["signature_includes"] in sigs)
+    if expect.get("fix_files"):  # recall of the files the real fix touched
+        files = set(observed.get("files") or [])
+        checks["fix_file_recall"] = sum(f in files for f in expect["fix_files"]) / len(expect["fix_files"])
+    if expect.get("root_cause"):  # the leading hypothesis names the cause
+        top = str(observed.get("hypothesis") or "").lower()
+        checks["root_cause"] = float(all(term.lower() in top for term in expect["root_cause"]))
+    if expect.get("sourced"):  # every claim cites what it comes from
+        sourced, unsourced = observed.get("sourced") or (0, 0)
+        checks["claims_sourced"] = sourced / (sourced + unsourced) if sourced + unsourced else 0.0
     if "max_tokens" in case:
         checks["token_budget"] = float(observed.get("tokens", 0) <= case["max_tokens"])
     return checks
+
+
+def _covers(window: Any, incident: dict[str, float]) -> bool:
+    from datetime import UTC, datetime, timedelta
+
+    if not window:
+        return False
+    now = datetime.now(UTC)
+    start, end = (datetime.fromisoformat(w) for w in window)
+    started = now - timedelta(hours=float(incident["start_hours_ago"]))
+    ended = now - timedelta(hours=float(incident.get("end_hours_ago", 0)))
+    return start <= started and end >= ended - timedelta(minutes=5)
 
 
 def _fill(value: Any, tag: str) -> Any:
@@ -157,21 +186,50 @@ class EvalRun:
         return [k for k in integrations if k not in have]
 
     async def catalog(self, org_id: str, services: list[dict[str, Any]]) -> None:
-        """Confirmed services a case relies on (kept when they exist already)."""
+        """Confirmed services a case relies on: created when missing, and given the case's
+        repository, Jira component and log source when it states them."""
         async with tenant_tx(self.pool, org_id) as conn:
             for s in services:
+                repository = None
+                if s.get("repository"):
+                    found = await (
+                        await conn.execute(
+                            "select id from app.repositories where full_name = %s "
+                            "order by created_at limit 1",
+                            (s["repository"],),
+                        )
+                    ).fetchone()
+                    if found is None:
+                        found = await (
+                            await conn.execute(
+                                "insert into app.repositories (org_id, external_id, full_name) "
+                                "values (%s, %s, %s) returning id",
+                                (org_id, f"eval:{s['repository']}", s["repository"]),
+                            )
+                        ).fetchone()
+                    repository = found[0] if found else None
                 await conn.execute(
                     "insert into app.services (org_id, name, jira_project, jira_component) "
                     "values (%s, %s, %s, %s) on conflict do nothing",
                     (org_id, s["name"], s.get("jira_project"), s.get("jira_component")),
                 )
                 await conn.execute(
-                    "insert into app.service_owners (org_id, service_id, membership_id, source, reason) "
-                    "select %s, s.id, m.id, 'manual', %s from app.services s, app.org_memberships m "
-                    "join app.users u on u.id = m.user_id where lower(btrim(s.name)) = lower(btrim(%s)) "
-                    "and s.status = 'active' and u.email = %s on conflict do nothing",
-                    (org_id, s.get("reason"), s["name"], s["owner"]),
-                )
+                    "update app.services set repository_id = coalesce(%s, repository_id), "
+                    "jira_project = coalesce(%s, jira_project), "
+                    "jira_component = coalesce(%s, jira_component), "
+                    "log_source = coalesce(%s, log_source) "
+                    "where lower(btrim(name)) = lower(btrim(%s)) and status = 'active'",
+                    (repository, s.get("jira_project"), s.get("jira_component"),
+                     Jsonb(s["log_source"]) if s.get("log_source") else None, s["name"]),
+                )  # fmt: skip
+                if s.get("owner"):
+                    await conn.execute(
+                        "insert into app.service_owners (org_id, service_id, membership_id, source, reason) "
+                        "select %s, s.id, m.id, 'manual', %s from app.services s, app.org_memberships m "
+                        "join app.users u on u.id = m.user_id where lower(btrim(s.name)) = lower(btrim(%s)) "
+                        "and s.status = 'active' and u.email = %s on conflict do nothing",
+                        (org_id, s.get("reason"), s["name"], s["owner"]),
+                    )
 
     async def run_case(self, case: dict[str, Any]) -> CaseResult:
         started = time.monotonic()
@@ -211,6 +269,27 @@ class EvalRun:
             round(time.monotonic() - started, 2), notes=[k for k, v in checks.items() if v < 1],
         )  # fmt: skip
 
+    async def observe_investigation(self, ref: Any, u: Any, tier: str, observed: dict[str, Any]) -> None:
+        """The investigation's own steps, as the task workflow runs them (investigators one after
+        another here), and what they found."""
+        from app.agent.types import INVESTIGATORS
+
+        case = await self.runner.orient(ref, u)
+        found = [await self.runner.investigate(ref, u, case, kind, tier) for kind in INVESTIGATORS]
+        c = await self.runner.plan_investigation(ref, u, case, found, tier)
+        plan = await _plan_of(self.pool, ref)
+        facts = plan.get("facts") or {}
+        observed["service"] = (case.service or {}).get("name")
+        observed["case_window"] = case.window
+        observed["signatures"] = [s.get("signature") for s in facts.get("signatures") or []]
+        observed["files"] = sorted({str(f.get("path")) for f in facts.get("files") or []}
+                                   | {str(f.get("path")) for f in plan.get("files") or []})  # fmt: skip
+        observed["hypothesis"] = ((plan.get("hypotheses") or [{}])[0]).get("text", "")
+        unsourced = sum(1 for n in c.not_verified if n.startswith("Evidence without a source"))
+        observed["sourced"] = len(plan.get("evidence") or []), unsourced
+        observed["answer"] = render_answer(c, [])
+        observed["delivered"] = (await self.runner.deliver(ref, u, c, [])).where
+
     async def observe(self, ref: Any, setup_ts: list[str]) -> dict[str, Any]:
         observed: dict[str, Any] = {"setup_ts": setup_ts}
         try:
@@ -223,7 +302,9 @@ class EvalRun:
             if u.brief:
                 observed["channels"] = u.brief["entities"]["channels"]
                 observed["window"] = u.brief["entities"]["time_window"]["label"]
-            if u.playbook_key and not u.stopped:
+            if u.playbook_key == "investigate_issue" and not u.stopped:
+                await self.observe_investigation(ref, u, start.model_tier, observed)
+            elif u.playbook_key and not u.stopped:
                 f = await self.runner.gather(ref, u, start.model_tier)
                 observed["refused"] = any("not a member" in g or "not enabled" in g for g in f.gaps)
                 actions = await self.runner.plan(ref, u, f, start.model_tier)
@@ -241,6 +322,18 @@ class EvalRun:
         finally:
             await self.runner.finish(ref, "completed")
         return observed
+
+
+async def _plan_of(pool: Any, ref: Any) -> dict[str, Any]:
+    async with tenant_tx(pool, ref.org_id) as conn:
+        row = await (
+            await conn.execute(
+                "select content from app.artifacts where task_id = %s and kind = 'plan' "
+                "order by created_at desc limit 1",
+                (ref.task_id,),
+            )
+        ).fetchone()
+    return dict(row[0]) if row and isinstance(row[0], dict) else {}
 
 
 async def evaluate(settings: Settings, cases: list[dict[str, Any]]) -> list[CaseResult]:

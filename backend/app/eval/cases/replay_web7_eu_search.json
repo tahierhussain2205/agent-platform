@@ -1,0 +1,45 @@
+{
+  "id": "replay_web7_eu_search",
+  "description": "Replayed bug WEB-7: EU searches became slow after search moved to an index without an EU replica; the fix added the europe-west1 replica in search/index.ts.",
+  "requester": "U0BOB",
+  "channel": "C0BUGS",
+  "requires": [
+    "jira",
+    "github",
+    "google_cloud_logging"
+  ],
+  "catalog": [
+    {
+      "name": "web-app",
+      "repository": "acme/web-app",
+      "jira_project": "WEB",
+      "jira_component": "Search",
+      "log_source": {
+        "provider": "google_cloud_logging",
+        "project": "acme-prod",
+        "resource_type": "cloud_run_revision"
+      },
+      "owner": "quinn@acme.test",
+      "reason": "leads search"
+    }
+  ],
+  "request": "why is search slow in the EU? see WEB-7 ({tag})",
+  "expect": {
+    "playbook": "investigate_issue",
+    "service": "web-app",
+    "incident": {
+      "start_hours_ago": 28.5,
+      "end_hours_ago": 0
+    },
+    "signature_includes": "slow search request",
+    "fix_files": [
+      "search/index.ts"
+    ],
+    "root_cause": [
+      "products_v2",
+      "europe-west1"
+    ],
+    "sourced": true
+  },
+  "max_tokens": 160000
+}

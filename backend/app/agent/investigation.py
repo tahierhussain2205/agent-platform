@@ -155,6 +155,8 @@ def case_for_model(case: CaseFile) -> dict[str, Any]:
         }
     if case.notes:
         out["not_found"] = case.notes
+    if case.code_at:
+        out["code_as_of"] = case.code_at  # the code is read as it was when the incident started
     return out
 
 
@@ -404,6 +406,8 @@ class Investigation:
             if not service.get("repository"):
                 notes.append(f"{service['name']} has no repository in the catalog")
         window = window_of(entities.get("time_window"), issue, self.r.d.now())
+        # An incident that ended a while ago happened in the code as it was then, not as it is now.
+        past = self.r.d.now() - datetime.fromisoformat(window[1]) > timedelta(hours=1)
         prior = await self.r._prior_plan(ref)
         await self.r.step(
             ref,
@@ -411,7 +415,16 @@ class Investigation:
             "completed",
             f"{(issue or {}).get('key') or 'No issue'}, {(service or {}).get('name') or 'no service'}",
         )
-        return CaseFile(str(brief.get("goal") or ""), window, issue, service, prior, points, notes)
+        return CaseFile(
+            str(brief.get("goal") or ""),
+            window,
+            issue,
+            service,
+            prior,
+            points,
+            notes,
+            window[0] if past else None,
+        )
 
     @staticmethod
     def _points(refs: RefBook, before: set[str], text: str) -> list[dict[str, Any]]:
@@ -470,6 +483,8 @@ class Investigation:
             }
         ]
         seen: list[tuple[str, ExecResult]] = []
+        if kind == "code" and case.code_at and (case.service or {}).get("repository"):
+            await self._pin(executor, str(case.service["repository"]), case.code_at)  # type: ignore[index]
         system = prompts.system(ctx.org_name, spec, ctx.roles, prompts.INVESTIGATE[kind])
         tools.append(prompts.submit_tool("submit_findings", "Submit findings."))
         found = await self.r._subagent(
@@ -481,6 +496,15 @@ class Investigation:
         )
         await self.r.step(ref, "gather", "failed" if found.stopped else "completed", summary)
         return found
+
+    @staticmethod
+    async def _pin(executor: Any, repo: str, when: str) -> None:
+        """Read a past incident's code at the last commit before it (through the policy, like any
+        read); the code tools then build the sandbox at that commit."""
+        listed = await executor.run(tool_name("github", "list_commits"), {"repo": repo, "until": when})
+        commits = listed.data.get("commits") or []
+        if commits:
+            executor.ctx.cache[f"github:base:{repo}"] = str(commits[0]["sha"])
 
     async def plan(
         self, ref: TaskRef, u: Understanding, case: CaseFile, findings: list[Findings], tier: str

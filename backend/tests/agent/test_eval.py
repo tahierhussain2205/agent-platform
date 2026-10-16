@@ -8,7 +8,15 @@ import pytest
 from app import cli
 from app.eval import CaseResult, EvalRun, load_cases, score, summarize
 from tests.agent.conftest import Agent
-from tests.connect import connect_jira, enable, reset_jira_issues, sql
+from tests.connect import (
+    connect_github,
+    connect_jira,
+    connect_logging,
+    enable,
+    link_github,
+    reset_jira_issues,
+    sql,
+)
 from tests.stack import FAKES
 
 
@@ -95,8 +103,12 @@ def test_the_eval_command_is_registered() -> None:
 
 async def test_every_built_in_case_passes_against_the_stand_ins(agent: Agent) -> None:
     acme = agent.world.acme
-    enable(agent.stack, acme, "jira")  # the ticket case needs Jira (an admin connects it)
+    enable(agent.stack, acme, "jira")  # the ticket and replay cases need Jira, GitHub and logs
     await connect_jira(agent.stack, acme, "acc-alice")
+    enable(agent.stack, acme, "github")
+    await connect_github(agent.stack, acme)
+    await link_github(agent.stack, acme, acme.user, "bob-gh")
+    await connect_logging(agent.stack, acme)
     reset_jira_issues()
     run = EvalRun(agent.runner, agent.slack_activities, agent.stack.pool, f"{FAKES}/slack")
     results = [await run.run_case(case) for case in load_cases()]

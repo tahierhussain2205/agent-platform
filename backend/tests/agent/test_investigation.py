@@ -289,3 +289,22 @@ async def test_the_workflow_runs_the_investigators_in_parallel(world: Agent, liv
     plans = [m for m in await channel_messages(dm) if "*Plan: Checkout returns 500" in json.dumps(m)]
     assert plans
     assert "IndexError" in json.dumps(plans[-1])
+
+
+async def test_a_past_incidents_code_is_read_as_it_was_then(world: Agent) -> None:
+    acme = world.world.acme
+    world.sql("insert into app.services (org_id, name, repository_id, jira_project, jira_component, log_source) "
+              "select org_id, 'webhooks', repository_id, 'PAY', 'Webhooks', %s from app.services "
+              "where org_id = %s and name = 'cart-service' on conflict do nothing",
+              (json.dumps({**LOG_SOURCE, "value": "cart-service"}), acme.id))  # fmt: skip
+    try:
+        ref = await ask(world, "investigate PAY-105: how did the webhook signature failures happen?")
+        case, found, _ = await investigate(world, ref)
+        assert case.code_at == case.window[0]  # resolved: the window ended a day ago
+        (base,) = world.sql("select base_sha from app.sandboxes where task_id = %s", (ref.task_id,))[0]
+        head = [c for c in found[2].facts.get("commits") or [] if c.get("message")]
+        before = next(c for c in head if c["message"] == "Verify webhook signatures with the signing key")
+        assert base == before["sha"]  # the commit before the incident, not the fix after it
+        assert "read once at import" in stored_plan(world, ref)["hypotheses"][0]["text"]
+    finally:
+        world.sql("delete from app.services where org_id = %s and name = 'webhooks'", (acme.id,))

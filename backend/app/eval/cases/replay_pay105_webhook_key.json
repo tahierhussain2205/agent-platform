@@ -1,0 +1,45 @@
+{
+  "id": "replay_pay105_webhook_key",
+  "description": "Replayed resolved bug PAY-105: webhook signatures failed after a signing key rotation because the key was read once at import; fixed by reading it per request in src/webhooks/verify.py.",
+  "requester": "U0BOB",
+  "channel": "C0BUGS",
+  "requires": [
+    "jira",
+    "github",
+    "google_cloud_logging"
+  ],
+  "catalog": [
+    {
+      "name": "webhooks",
+      "repository": "acme/cart-service",
+      "jira_project": "PAY",
+      "jira_component": "Webhooks",
+      "log_source": {
+        "provider": "google_cloud_logging",
+        "project": "acme-prod",
+        "resource_type": "cloud_run_revision",
+        "value": "cart-service"
+      },
+      "owner": "alice@acme.test",
+      "reason": "owns webhooks"
+    }
+  ],
+  "request": "investigate PAY-105: how did the webhook signature failures happen? ({tag})",
+  "expect": {
+    "playbook": "investigate_issue",
+    "service": "webhooks",
+    "incident": {
+      "start_hours_ago": 48,
+      "end_hours_ago": 35
+    },
+    "signature_includes": "SignatureError",
+    "fix_files": [
+      "src/webhooks/verify.py"
+    ],
+    "root_cause": [
+      "read once at import"
+    ],
+    "sourced": true
+  },
+  "max_tokens": 160000
+}

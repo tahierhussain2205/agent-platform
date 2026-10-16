@@ -1,0 +1,44 @@
+{
+  "id": "replay_pay101_checkout_items",
+  "description": "Replayed bug PAY-101: checkout fails for carts of 20 or more items after a deploy; the fix grew the preallocated price list in src/pricing/cart.py.",
+  "requester": "U0BOB",
+  "channel": "C0BUGS",
+  "requires": [
+    "jira",
+    "github",
+    "google_cloud_logging"
+  ],
+  "catalog": [
+    {
+      "name": "cart-service",
+      "repository": "acme/cart-service",
+      "jira_project": "PAY",
+      "jira_component": "Checkout",
+      "log_source": {
+        "provider": "google_cloud_logging",
+        "project": "acme-prod",
+        "resource_type": "cloud_run_revision"
+      },
+      "owner": "bob@acme.test",
+      "reason": "owns checkout"
+    }
+  ],
+  "request": "investigate PAY-101 and plan a fix ({tag})",
+  "expect": {
+    "playbook": "investigate_issue",
+    "service": "cart-service",
+    "incident": {
+      "start_hours_ago": 6.4,
+      "end_hours_ago": 0
+    },
+    "signature_includes": "IndexError: list assignment index out of range",
+    "fix_files": [
+      "src/pricing/cart.py"
+    ],
+    "root_cause": [
+      "MAX_LINES = 19"
+    ],
+    "sourced": true
+  },
+  "max_tokens": 160000
+}
