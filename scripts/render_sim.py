@@ -67,6 +67,8 @@ DASHBOARD_SECRETS = {
     "API_PUBLIC_URL": f"http://localhost:{RENDER_PORT}",
     # No model provider in the simulation: the worker runs without the agent loop, as without a key.
     "ANTHROPIC_API_KEY": "",
+    "SANDBOX_URL": "",  # no sandbox provider in the simulation: code tools say so (B-008)
+    "SANDBOX_API_KEY": "",
     "CONSOLE_URL": "http://localhost:5173",
     "SLACK_CLIENT_ID": "",
     "SLACK_CLIENT_SECRET": "",
