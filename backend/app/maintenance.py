@@ -226,6 +226,7 @@ def sandbox_cleanup_job(settings: Settings) -> Job:
 
 
 def run_jobs(settings: Settings) -> int:
+    from app.alerts import alerts_job
     from app.lifecycle import offboarding_job, retention_job
 
     jobs = [
@@ -236,6 +237,7 @@ def run_jobs(settings: Settings) -> int:
         sandbox_cleanup_job(settings),
         retention_job(settings),
         offboarding_job(settings),
+        alerts_job(settings),  # last: sees what the other jobs left
     ]
     results = run_all(settings.component_dsn("maintenance"), jobs)
     for r in results:

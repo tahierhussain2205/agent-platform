@@ -29,6 +29,7 @@ declare -a MUTATIONS=(
   "grant execute on function app.maintenance_set_plan(uuid, text) to app_user"
   "alter table app.orgs drop constraint orgs_plan_known"
   "grant update (plan) on app.orgs to app_user"
+  "grant execute on function app.maintenance_alert_figures() to app_user"
 )
 
 failed=0

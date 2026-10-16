@@ -5,7 +5,6 @@ maintenance role, which has no BYPASSRLS (B-010)."""
 import asyncio
 import os
 import uuid
-from collections.abc import Iterator
 from datetime import timedelta
 from typing import Any
 
@@ -14,34 +13,14 @@ import pytest
 from psycopg import sql
 
 from app import kv
-from app.db import roles
-from app.db.roles import LoginUser, ensure_login_user
 from app.lifecycle import apply_retention, offboard, offboarding_job
 from app.settings import Settings
 from app.storage import ObjectNotFoundError, ObjectStore
-from tests.conftest import ADMIN_URL, throwaway_database
-from tests.schema.test_db_roles import PASSWORD, _url_for
+from tests.schema.test_db_roles import PASSWORD
 from tests.stack import kv_url
-from tests.world import World, create_world
+from tests.world import World
 
 S3 = os.environ.get("TEST_S3_ENDPOINT", "http://localhost:8333")
-
-
-@pytest.fixture
-def fresh(postgres: None) -> Iterator[World]:
-    with throwaway_database("lworld") as url:
-        yield create_world(url)
-
-
-@pytest.fixture
-def maintenance(fresh: World, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    user = LoginUser("maintenance", f"t{uuid.uuid4().hex[:6]}_maintenance", "app_maintenance")
-    with psycopg.connect(fresh.url, autocommit=True) as conn:
-        ensure_login_user(conn, user, PASSWORD)
-    monkeypatch.setitem(roles.LOGIN_USERS, "maintenance", user)
-    yield _url_for(user.username, PASSWORD, fresh.url.rsplit("/", 1)[1])
-    with psycopg.connect(ADMIN_URL, autocommit=True) as conn:
-        conn.execute(sql.SQL("drop role if exists {}").format(sql.Identifier(user.username)))
 
 
 def settings(**kw: Any) -> Settings:

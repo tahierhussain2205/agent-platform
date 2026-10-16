@@ -1,4 +1,4 @@
--- Production readiness (plan phase 13): shadow mode, plans, retention and offboarding.
+-- Production readiness (plan phase 13): shadow mode, plans, alerts, retention and offboarding.
 --
 -- Shadow mode (spec 15): the agent reads, plans and answers, but the policy module denies every
 -- write. Orgs created by self service sign up (the Clerk webhook) start in it; admins turn it off.
@@ -6,6 +6,8 @@
 -- Plans (spec 4.8): each org is on one; the plan caps what its admins may set (token limits,
 -- concurrency, schedules, retention, model tiers). New orgs start on Free with its limits applied;
 -- operators change an org's plan (`app org plan`), which brings its settings within the new plan.
+--
+-- Alerts read counts across tenants through one security definer function.
 --
 -- Retention and offboarding run as the maintenance role, which has no BYPASSRLS on managed
 -- Postgres (B-010): per org work sets the org's context like any tenant transaction; work that
@@ -204,13 +206,42 @@ begin
   return v_dropped;
 end $$;
 
+-- Figures for the alerts job, per active org: counts and ages only, no tenant content.
+create function app.maintenance_alert_figures()
+returns table (org_id uuid, name text, finished bigint, failed bigint, queued bigint,
+               oldest_queued_seconds integer, budget_stops bigint, month_tokens bigint, month_limit bigint,
+               schedules_paused bigint)
+language sql stable security definer set search_path = app, pg_temp as $$
+  select o.id, o.name,
+         (select count(*) from app.tasks t where t.org_id = o.id
+             and t.status in ('completed', 'failed', 'cancelled') and t.finished_at > now() - interval '1 hour'),
+         (select count(*) from app.tasks t where t.org_id = o.id
+             and t.status = 'failed' and t.finished_at > now() - interval '1 hour'),
+         (select count(*) from app.tasks t where t.org_id = o.id and t.status = 'queued'),
+         (select extract(epoch from now() - min(t.created_at))::integer from app.tasks t
+           where t.org_id = o.id and t.status = 'queued'),
+         -- A budget stops a task between steps: it finishes with the reason (TaskWorkflow._stopped).
+         (select count(*) from app.tasks t where t.org_id = o.id and t.error like 'stopped:%'
+             and t.finished_at > now() - interval '1 hour'),
+         (select coalesce(sum(d.tokens), 0)::bigint from app.usage_daily d
+           where d.org_id = o.id and d.day >= date_trunc('month', now() at time zone 'UTC')::date),
+         s.org_monthly_token_limit,
+         (select count(*) from app.schedules sc where sc.org_id = o.id and sc.status = 'paused'
+             and sc.pause_reason <> 'admin' and sc.paused_at > now() - interval '1 hour')
+    from app.orgs o join app.org_settings s on s.org_id = o.id
+   where o.status = 'active'
+   order by o.id
+$$;
+
 revoke all on function app.maintenance_orgs() from public;
 revoke all on function app.maintenance_begin_offboarding(uuid) from public;
 revoke all on function app.maintenance_offboard_org(uuid, interval) from public;
 revoke all on function app.maintenance_drop_partitions(text, integer) from public;
 revoke all on function app.maintenance_set_plan(uuid, text) from public;
+revoke all on function app.maintenance_alert_figures() from public;
 grant execute on function app.maintenance_orgs() to app_maintenance;
 grant execute on function app.maintenance_begin_offboarding(uuid) to app_maintenance;
 grant execute on function app.maintenance_offboard_org(uuid, interval) to app_maintenance;
 grant execute on function app.maintenance_drop_partitions(text, integer) to app_maintenance;
 grant execute on function app.maintenance_set_plan(uuid, text) to app_maintenance;
+grant execute on function app.maintenance_alert_figures() to app_maintenance;

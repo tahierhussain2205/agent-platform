@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     usage_retention_months: int = Field(default=13, ge=2, le=120)
     audit_retention_months: int = Field(default=13, ge=2, le=120)
     approval_ttl_hours: int = Field(default=24, ge=1, le=24 * 30)
+    # Alerts (plan phase 13): a Slack incoming webhook (unset: alerts are logged only) and thresholds.
+    alert_webhook_url: SecretStr | None = None
+    alert_failure_rate: float = Field(default=0.25, gt=0, le=1)
+    alert_min_finished: int = Field(default=8, ge=1)  # tasks in the hour before a rate means anything
+    alert_queue_depth: int = Field(default=50, ge=1)
+    alert_queue_age_minutes: int = Field(default=10, ge=1)
+    alert_ingress_p95_ms: int = Field(default=1500, ge=50)
+    alert_ingress_p99_ms: int = Field(default=2500, ge=50)
 
     # Scheduled reports: random delay Temporal adds to each run (so every tenant's 9 AM report does not
     # start at once), and how late a missed run may still start (after an outage).

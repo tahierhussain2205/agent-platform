@@ -305,7 +305,7 @@ projects:
               - key: OTEL_EXPORTER_OTLP_ENDPOINT
                 sync: false
 
-          # Partition creation, retention pruning, Slack membership reconciliation.
+          # Partitions, retention and offboarding, Slack and task reconciliation, schedule sync, alerts.
           - type: cron
             name: maintenance-staging
             runtime: docker
@@ -333,6 +333,9 @@ projects:
               - key: TEMPORAL_NAMESPACE
                 sync: false
               - key: TEMPORAL_API_KEY
+                sync: false
+              # Alerts go to a Slack incoming webhook; unset, they are only logged (plan phase 13).
+              - key: ALERT_WEBHOOK_URL
                 sync: false
               # Retention and offboarding delete objects and an offboarded org's keys (plan phase 13).
               - key: REDIS_URL
