@@ -169,7 +169,7 @@ class Anthropic:
         if forced == "submit_report":
             return [use(forced, report(last_user))]
         if "submit_findings" in tool_names:
-            return gather(body["messages"], first_user)
+            return gather(body["messages"], first_user, {str(t) for t in tool_names})
         return [{"type": "text", "text": "OK."}]
 
 
@@ -237,13 +237,55 @@ def brief(user: str) -> dict[str, Any]:
             "people": [asker],
             "time_window": window(request, now),
             "ids": re.findall(r"\b[A-Z]{2,10}-\d+\b", request),
+            "repositories": REPO.findall(request),
+            "files": [f for f in FILE.findall(request) if "/" in f or "." in f or f == "CODEOWNERS"],
         },
     }
 
 
-def gather(messages: list[dict[str, Any]], first_user: str) -> list[dict[str, Any]]:
-    """Read every channel the brief names (or the current thread), then submit findings built
-    from the lines of the tool results."""
+# owner/name, not part of a longer path (src/pricing/cart.py is a file, not a repository)
+REPO = re.compile(r"(?<![\w/.-])([a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9_-]+)?)(?![\w/.-])")
+FILE = re.compile(r"\b(CODEOWNERS|README(?:\.md)?|[\w.-]+/[\w./-]+\.\w+|[\w-]+\.(?:py|ts|md|tf|yaml|json))\b")
+PROJECT = re.compile(r"\b([A-Z]{2,10})\b(?!-\d)")
+
+
+def tool_calls(tools: set[str], the_brief: dict[str, Any]) -> list[dict[str, Any]]:
+    """Calls to Jira, GitHub and MCP tools the brief asks for (when those tools are offered)."""
+    entities = the_brief.get("entities") or {}
+    goal = str(the_brief.get("goal") or "")
+    lowered = goal.lower()
+    calls = []
+    for key in entities.get("ids") or []:
+        if "jira_get_issue" in tools:
+            calls.append(use("jira_get_issue", {"key": key}))
+    words = re.findall(r"(?<![\w-])(jira|tickets?|issues?|bugs?)(?![\w-])", lowered)
+    if not entities.get("ids") and words and "jira_search_issues" in tools:
+        projects = [p for p in PROJECT.findall(goal) if p not in ("I", "OK", "UTC")]
+        calls.append(use("jira_search_issues", {"project": projects[0]} if projects else {"jql": ""}))
+    for repo in entities.get("repositories") or []:
+        files = [f for f in entities.get("files") or [] if f != "CODEOWNERS"]
+        owners = re.search(r"\bown(s|ed|er|ers|ership)?\b", lowered) or "CODEOWNERS" in (entities.get("files") or [])
+        if owners and "github_get_codeowners" in tools:
+            calls.append(use("github_get_codeowners", {"repo": repo}))
+        for path in files:
+            if "github_read_file" in tools:
+                calls.append(use("github_read_file", {"repo": repo, "path": path}))
+    if (
+        not entities.get("repositories")
+        and re.search(r"\brepo(sitorie)?s?\b", lowered)
+        and "github_list_repos" in tools
+    ):
+        calls.append(use("github_list_repos", {}))
+    sheet = re.search(r"\b([a-z0-9]+(?:-[a-z0-9]+)+)\b", goal)
+    reader = next((t for t in tools if t.endswith("_sheets_read_range")), None)
+    if reader and "sheet" in lowered and sheet:
+        calls.append(use(reader, {"spreadsheet_id": sheet.group(1)}))
+    return calls
+
+
+def gather(messages: list[dict[str, Any]], first_user: str, tools: set[str] | None = None) -> list[dict[str, Any]]:
+    """Read every channel the brief names (or the current thread) and call the Jira, GitHub and MCP
+    tools it asks for, then submit findings built from the lines of the tool results."""
     try:
         the_brief = json.loads(tag(first_user, "brief") or "{}")
     except ValueError:
@@ -262,13 +304,14 @@ def gather(messages: list[dict[str, Any]], first_user: str) -> list[dict[str, An
                 asked.add(json.dumps(block.get("input"), sort_keys=True))
             elif block.get("type") == "tool_result":
                 results.append(text_of(block.get("content")))
-    calls = []
+    calls = [c for c in tool_calls(tools or set(), the_brief) if json.dumps(c["input"], sort_keys=True) not in asked]
+    other_tools = bool(tool_calls(tools or set(), the_brief))
     if channels:
         for name in channels:
             args = {"channel": name, **{k: tw[k] for k in ("start", "end") if tw.get(k)}}
             if json.dumps(args, sort_keys=True) not in asked:
                 calls.append(use("slack_read_channel", args))
-    else:
+    elif not other_tools:
         conversation = re.search(r'<conversation channel="([^"]*)" thread="([^"]*)"', first_user)
         if conversation and conversation.group(2):
             args = {"channel": conversation.group(1), "ts": conversation.group(2)}

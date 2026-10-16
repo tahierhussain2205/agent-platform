@@ -84,7 +84,7 @@ Pick the playbook that fits the request, or "none" if nothing fits or it is uncl
 {catalog}"""
 
 BRIEF = """Step: write the brief.
-Turn the conversation into a structured brief for the request (the message marked by <request_ref>). Later messages override earlier ones. Separate what was decided from what was only suggested. Every item lists the refs (like B2) of the messages it comes from. The time window is in ISO 8601 with an offset, relative to <now> in the requester's time zone; leave start and end null if no window is implied. Channels are names without #."""
+Turn the conversation into a structured brief for the request (the message marked by <request_ref>). Later messages override earlier ones. Separate what was decided from what was only suggested. Every item lists the refs (like B2) of the messages it comes from. The time window is in ISO 8601 with an offset, relative to <now> in the requester's time zone; leave start and end null if no window is implied. Channels are names without #. Issue keys (like PAY-101) go in ids; repositories as owner/name; file paths in files."""
 
 GATHER = """Step: gather.
 Use the tools to read what the brief needs, then call submit_findings. Each point is one fact or finding from the messages, citing the refs it comes from. Put anything you could not read or did not find in gaps. Keep points short and specific; quote numbers and names exactly."""
@@ -120,6 +120,8 @@ SCHEMAS: dict[str, dict[str, Any]] = {
                     "channels": {"type": "array", "items": {"type": "string"}},
                     "people": {"type": "array", "items": {"type": "string"}},
                     "ids": {"type": "array", "items": {"type": "string"}},
+                    "repositories": {"type": "array", "items": {"type": "string"}},
+                    "files": {"type": "array", "items": {"type": "string"}},
                     "time_window": {
                         "type": "object",
                         "properties": {

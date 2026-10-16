@@ -747,8 +747,8 @@ class AgentRunner:
         team, token = await self._token(ref)
         out = []
         for i, source in enumerate(sources):
-            link = None
-            if i < MAX_PERMALINKS:
+            link = source.get("permalink")  # other tools give their own links (a Jira issue, a file)
+            if source.get("kind", "slack") == "slack" and i < MAX_PERMALINKS:
                 try:
                     body = await self.d.slack.call(
                         "chat.getPermalink",
@@ -1120,6 +1120,8 @@ def clean_brief(raw: dict[str, Any], refs: RefBook, now: datetime) -> dict[str, 
             "channels": channels[:10],
             "people": [str(p)[:100] for p in entities.get("people") or []][:20],
             "ids": [str(i)[:60] for i in entities.get("ids") or []][:20],
+            "repositories": [str(r)[:200] for r in entities.get("repositories") or []][:10],
+            "files": [str(f)[:300] for f in entities.get("files") or []][:20],
             "time_window": {
                 "start": start.isoformat() if start else None,
                 "end": end.isoformat() if end else None,

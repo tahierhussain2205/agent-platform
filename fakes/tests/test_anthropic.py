@@ -209,3 +209,29 @@ def test_faults_scripts_and_recorded_requests(client: TestClient) -> None:
     assert recorded[-1]["model"] == MODEL
     client.post("/_admin/reset")
     assert client.get("/_admin/anthropic/requests").json() == []
+
+
+def test_brief_and_gather_reach_jira_github_and_mcp_tools(client: TestClient) -> None:
+    user = (
+        "<thread>\n[B1] (2026-10-16 09:00 UTC) Bob Builder: @agent what is the status of PAY-101 and who owns "
+        "src/pricing/cart.py in acme/cart-service?</thread>\n<request_ref>B1</request_ref>\n<now>2026-10-16T09:01:00+00:00</now>"
+    )
+    brief = tool_input(call(client, messages=[{"role": "user", "content": user}], **forced("submit_brief")))
+    assert brief["entities"]["ids"] == ["PAY-101"]
+    assert brief["entities"]["repositories"] == ["acme/cart-service"]
+    assert brief["entities"]["files"] == ["src/pricing/cart.py"]
+    names = ["jira_get_issue", "jira_search_issues", "github_get_codeowners", "github_read_file", "github_list_repos",
+             "google_workspace_sheets_read_range", "slack_read_thread", "submit_findings"]  # fmt: skip
+    tools = [{"name": n, "input_schema": {"type": "object"}} for n in names]
+    response = call(client, messages=[{"role": "user", "content": f"<brief>{json.dumps(brief)}</brief>"}], tools=tools)
+    calls = [(b["name"], b["input"]) for b in response.json()["content"] if b["type"] == "tool_use"]
+    assert ("jira_get_issue", {"key": "PAY-101"}) in calls
+    assert ("github_get_codeowners", {"repo": "acme/cart-service"}) in calls
+    assert ("github_read_file", {"repo": "acme/cart-service", "path": "src/pricing/cart.py"}) in calls
+    assert all(name != "slack_read_thread" for name, _ in calls)  # tools were enough
+    search = {"goal": "list open bugs in PAY", "entities": {"ids": []}}
+    response = call(client, messages=[{"role": "user", "content": f"<brief>{json.dumps(search)}</brief>"}], tools=tools)
+    assert tool_input(response) == {"project": "PAY"}
+    sheet = {"goal": "read the bug-metrics sheet", "entities": {}}
+    response = call(client, messages=[{"role": "user", "content": f"<brief>{json.dumps(sheet)}</brief>"}], tools=tools)
+    assert tool_input(response) == {"spreadsheet_id": "bug-metrics"}
