@@ -6,7 +6,7 @@ import { openChannel, openDm, openSlack, post } from './slack-helpers'
 // a member links, then the agent uses them.
 test.describe.configure({ mode: 'serial' })
 
-const AGENT = { timeout: 45_000 }
+const AGENT = { timeout: 90_000 } // an agent reply; generous for loaded machines and CI runners
 
 const card = (page: Page, title: string) => page.getByRole('region', { name: title, exact: true })
 

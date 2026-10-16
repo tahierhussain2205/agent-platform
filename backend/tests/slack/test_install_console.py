@@ -420,3 +420,22 @@ async def test_slack_invite_button(
     dismissed = pending_request(world, f"U0D{uuid.uuid4().hex[:5].upper()}", "d@acme.test")
     await interaction(console, "U0ALICE", "access_request_dismiss", dismissed)
     assert q(world, "select status from app.access_requests where id = %s", (dismissed,)) == "dismissed"
+
+
+async def test_allowing_a_channel_stands_when_its_member_sync_cannot_start(
+    console: httpx.AsyncClient, stack: Stack, env: Any
+) -> None:
+    """Temporal briefly unavailable: the admin's change is kept; the hourly reconciliation syncs
+    the channel's members instead."""
+    world = env.world
+    bugs = q(world, "select id from app.channels where external_id = 'C0BUGS'")
+    sql(world, "update app.channels set is_allowlisted = false, bot_is_member = true where id = %s", (bugs,))
+    stack.temporal.fail = True
+    try:
+        response = await console.patch(
+            f"/api/slack/channels/{bugs}", json={"is_allowlisted": True}, headers=ALICE
+        )
+    finally:
+        stack.temporal.fail = False
+    assert response.status_code == 200, response.text
+    assert q(world, "select is_allowlisted from app.channels where id = %s", (bugs,)) is True

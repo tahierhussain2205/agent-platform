@@ -1,5 +1,6 @@
 """Console: Slack connection, channels and the allowlist, access requests."""
 
+import logging
 import secrets
 import uuid
 from typing import Any
@@ -21,6 +22,7 @@ from app.slack import service
 from app.slack.client import SlackError
 from app.workflows.slack_types import SyncRequest
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
@@ -163,12 +165,17 @@ async def update_channel(
                 sync = SyncRequest(
                     str(identity.org_id), str(workspace["id"]), workspace["external_id"], [str(channel_id)]
                 )
-                await _start(
-                    request,
-                    "SyncWorkspaceWorkflow",
-                    sync,
-                    f"slack-sync-channel-{channel_id}-{uuid.uuid4().hex[:8]}",
-                )
+                try:
+                    await _start(
+                        request,
+                        "SyncWorkspaceWorkflow",
+                        sync,
+                        f"slack-sync-channel-{channel_id}-{uuid.uuid4().hex[:8]}",
+                    )
+                except ApiError:  # the allowlist change stands; the hourly reconciliation syncs members
+                    log.warning(
+                        "could not start the channel's member sync", extra={"channel": channel["name"]}
+                    )
     if paused:  # after the commit (background tasks run once the response is sent)
         background.add_task(sync_schedules, request, identity.org_id)
     return {"id": channel_id, "is_allowlisted": body.is_allowlisted, "paused_schedules": paused}

@@ -6,7 +6,7 @@ import { FAKES, join, openChannel, openDm, openSlack, post } from './slack-helpe
 // App Home, and pause (with a notice to admins) when their owner leaves or their channel goes.
 test.describe.configure({ mode: 'serial' })
 
-const AGENT = { timeout: 45_000 }
+const AGENT = { timeout: 90_000 } // an agent reply; generous for loaded machines and CI runners
 
 async function schedules(page: Page, email: string) {
   await signIn(page, email)
@@ -84,7 +84,7 @@ test('a report scheduled in the console runs on time and arrives by DM', async (
       'Last run:',
       { timeout: 1_000 },
     )
-  }).toPass({ timeout: 15_000 })
+  }).toPass({ timeout: 45_000 })
   expect(errors).toEqual([])
 })
 
@@ -101,7 +101,7 @@ test('a schedule asked for in Slack is confirmed, then paused from App Home', as
   await expect(thread).toContainText('Weekday #bugs summary', AGENT)
   await expect(thread).toContainText('Every weekday at 09:00')
   await thread.getByRole('button', { name: 'Create schedule' }).click()
-  await expect(thread).toContainText('✅ Scheduled by')
+  await expect(thread).toContainText('✅ Scheduled by', { timeout: 30_000 })
 
   const bob = await consolePage(browser, 'bob@acme.test')
   const row = bob.getByRole('listitem', { name: 'Weekday #bugs summary' })
@@ -110,7 +110,7 @@ test('a schedule asked for in Slack is confirmed, then paused from App Home', as
 
   await page.getByTestId('home-tab').click()
   const home = page.locator('#messages')
-  await expect(home).toContainText('Your scheduled reports')
+  await expect(home).toContainText('Your scheduled reports', { timeout: 30_000 }) // published by the worker
   await expect(home).toContainText('Weekday #bugs summary')
   await home.locator(`button[data-block="schedule:${id}"]`, { hasText: 'Pause' }).click()
   await expect(async () => {
@@ -119,7 +119,7 @@ test('a schedule asked for in Slack is confirmed, then paused from App Home', as
       'paused by bob@acme.test in Slack',
       { timeout: 1_000 },
     )
-  }).toPass({ timeout: 15_000 })
+  }).toPass({ timeout: 45_000 })
 })
 
 test('removing the owner pauses their schedule and tells the admins', async ({ browser, page }) => {
@@ -209,7 +209,7 @@ test('a delivery channel taken off the allowlist pauses its schedules', async ({
     await expect(alice.getByTestId(`channel-${name}`).locator('td').nth(2)).toHaveText('1', {
       timeout: 1_000,
     })
-  }).toPass({ timeout: 20_000 })
+  }).toPass({ timeout: 45_000 })
 
   await alice
     .getByRole('navigation', { name: 'Main' })

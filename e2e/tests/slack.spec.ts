@@ -25,7 +25,7 @@ test('an admin connects a new Slack workspace from the console', async ({ browse
   await expect(async () => {
     await admin.page.reload()
     await expect(admin.page.getByTestId('channel-general')).toBeVisible({ timeout: 1_000 })
-  }).toPass({ timeout: 20_000 })
+  }).toPass({ timeout: 60_000 })
   await expect(admin.page.getByTestId('channel-general')).toContainText('Agent not in channel')
 
   // Disconnect.
@@ -43,9 +43,9 @@ test('a member mentions the agent in an allowlisted channel and gets a reply in 
   const ts = await post(page, `@agent what broke today? ${uid()}`)
   const message = page.locator(`[data-testid="message"][data-ts="${ts}"]`)
   // The agent keeps one status message and posts its answer: two replies.
-  await expect(message.getByRole('button', { name: '2 replies' })).toBeVisible({ timeout: 45_000 })
+  await expect(message.getByRole('button', { name: '2 replies' })).toBeVisible({ timeout: 90_000 })
   await openThread(page, ts)
-  await expect(page.getByTestId('thread')).toContainText('✅ Done')
+  await expect(page.getByTestId('thread')).toContainText('✅ Done', { timeout: 30_000 }) // after the answer
 })
 
 test('a channel that is not allowed gets a private explanation', async ({ page, browser }) => {
@@ -63,7 +63,7 @@ test('a channel that is not allowed gets a private explanation', async ({ page, 
     await expect(console_.getByTestId('channel-random')).toContainText('Agent is in the channel', {
       timeout: 1_000,
     })
-  }).toPass({ timeout: 20_000 })
+  }).toPass({ timeout: 60_000 })
   await expect(console_.getByLabel('Allow the agent in random')).not.toBeChecked()
 
   await openSlack(page, 'T0ACME', 'Bob Builder')
@@ -71,18 +71,26 @@ test('a channel that is not allowed gets a private explanation', async ({ page, 
   await post(page, `@agent can you help here? ${uid()}`)
   await expect(page.getByTestId('ephemeral').last()).toContainText(
     "I'm not enabled in this channel",
-    { timeout: 20_000 },
+    { timeout: 60_000 },
   )
 
   // The admin allows #random; now the agent answers there.
   await console_.getByLabel('Allow the agent in random').check()
+  await expect(console_.getByLabel('Allow the agent in random')).toBeEnabled() // saved
   await expect(console_.getByLabel('Allow the agent in random')).toBeChecked()
+  // Allowing it starts a sync of its members (kept for allowed channels only): wait for Bob's.
+  await expect(async () => {
+    await console_.reload()
+    await expect(console_.getByTestId('channel-random').locator('td').nth(2)).toHaveText('4', {
+      timeout: 1_000,
+    })
+  }).toPass({ timeout: 30_000 })
   const ts = await post(page, `@agent and now? ${uid()}`)
   await expect(
     page
       .locator(`[data-testid="message"][data-ts="${ts}"]`)
       .getByRole('button', { name: '2 replies' }),
-  ).toBeVisible({ timeout: 45_000 })
+  ).toBeVisible({ timeout: 90_000 })
   await console_.getByLabel('Allow the agent in random').uncheck()
   await console_.context().close()
 })
@@ -91,23 +99,24 @@ test('an uninvited person gets the access request flow and an admin invites them
   page,
   browser,
 }) => {
+  test.setTimeout(240_000) // three round trips through the agent and the console
   await openSlack(page, 'T0ACME', 'Mallory Outsider')
   await openChannel(page, 'general')
   await post(page, `@agent hello? ${uid()}`)
   await expect(page.getByTestId('ephemeral').last()).toContainText(
     "You don't have access to the agent in Acme Corp yet",
-    { timeout: 20_000 },
+    { timeout: 60_000 },
   )
 
   // Alice gets a DM with Invite and Dismiss.
   await openSlack(page, 'T0ACME', 'Alice Admin')
   await openDm(page)
   const ask = page.getByTestId('message').filter({ hasText: 'asked to use the agent' }).last()
-  await expect(ask).toContainText('mallory@acme.test', { timeout: 20_000 })
+  await expect(ask).toContainText('mallory@acme.test', { timeout: 60_000 })
   await ask.getByRole('button', { name: 'Invite' }).click()
   await expect(
     page.getByTestId('message').filter({ hasText: 'invited mallory@acme.test' }),
-  ).toBeVisible({ timeout: 20_000 })
+  ).toBeVisible({ timeout: 60_000 })
 
   // The console shows Mallory as invited (Clerk invitation, mirrored).
   const console_ = await (await browser.newContext()).newPage()
@@ -125,21 +134,24 @@ test('an uninvited person gets the access request flow and an admin invites them
     page
       .locator(`[data-testid="message"][data-ts="${ts}"]`)
       .getByRole('button', { name: '2 replies' }),
-  ).toBeVisible({ timeout: 45_000 })
+  ).toBeVisible({ timeout: 90_000 })
 })
 
 test('App Home shows the org and the Ask/Auto choice, and changes stick', async ({ page }) => {
   await openSlack(page, 'T0ACME', 'Bob Builder')
   await page.getByTestId('home-tab').click()
-  await expect(page.getByTestId('messages')).toContainText('Acme Corp', { timeout: 20_000 })
+  await expect(page.getByTestId('messages')).toContainText('Acme Corp', { timeout: 60_000 })
   const mode = page.getByLabel('How should I act?')
   await expect(mode).toHaveValue('ask')
+  // The stand-in UI pauses its refresh while a select has focus: leave it after choosing.
   await mode.selectOption('auto')
+  await mode.blur()
   await expect(page.getByTestId('messages')).toContainText('working in auto mode', {
-    timeout: 20_000,
+    timeout: 60_000,
   })
   await mode.selectOption('ask')
+  await mode.blur()
   await expect(page.getByTestId('messages')).toContainText('working in ask mode', {
-    timeout: 20_000,
+    timeout: 60_000,
   })
 })

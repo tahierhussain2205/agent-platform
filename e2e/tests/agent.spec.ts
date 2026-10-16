@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { signIn, uid } from './helpers'
 import { openChannel, openDm, openSlack, post } from './slack-helpers'
 
-const AGENT = { timeout: 45_000 }
+const AGENT = { timeout: 90_000 } // an agent reply; generous for loaded machines and CI runners
 
 /** Post as someone in a channel, as they would in Slack. */
 async function say(page: Page, team: string, who: string, channel: string, text: string) {

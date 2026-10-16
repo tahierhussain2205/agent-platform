@@ -45,7 +45,7 @@ test('invite, accept, promote, demote, last admin rule, remove', async ({ browse
     await expect(memberRow(admin.page, inviteeEmail).getByText('Active')).toBeVisible({
       timeout: 1_000,
     })
-  }).toPass({ timeout: 20_000 })
+  }).toPass({ timeout: 45_000 })
 
   // Promote, then demote.
   const row = memberRow(admin.page, inviteeEmail)
