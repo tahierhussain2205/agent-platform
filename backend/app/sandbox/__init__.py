@@ -6,11 +6,12 @@ API: files (list, read, search, write), commands (``exec``: run in the sandbox, 
 network and holds no credential) and the change of a working tree (``diff``), which is all that
 leaves it.
 
-``HttpSandboxProvider`` speaks the provider API the local stand-in implements (B-008): replacing it
-with a managed provider is a client for that provider's API, nothing else.
+``HttpSandboxProvider`` speaks the provider API the local stand-in implements; ``E2BSandboxProvider``
+(``app.sandbox.e2b_provider``) gives the same contract on E2B (B-008). ``SANDBOX_PROVIDER`` chooses.
 """
 
 import base64
+import functools
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -248,7 +249,21 @@ class HttpSandboxProvider:
                 raise
 
 
-def provider_from_settings(settings: Any, http: httpx.AsyncClient) -> HttpSandboxProvider | None:
-    if settings is None or not settings.sandbox_url or settings.sandbox_api_key is None:
+def provider_from_settings(settings: Any, http: httpx.AsyncClient) -> SandboxProvider | None:
+    """The configured provider, or None (code tools then say there is none)."""
+    if settings is None or settings.sandbox_api_key is None:
         return None
-    return HttpSandboxProvider(settings.sandbox_url, settings.sandbox_api_key.get_secret_value(), http)
+    key = settings.sandbox_api_key.get_secret_value()
+    if getattr(settings, "sandbox_provider", "http") == "e2b":
+        return _e2b(key, settings.sandbox_template)
+    if not settings.sandbox_url:
+        return None
+    return HttpSandboxProvider(settings.sandbox_url, key, http)
+
+
+@functools.cache
+def _e2b(key: str, template: str) -> SandboxProvider:
+    """One E2B client per process, so the sandboxes it connected to are reused across tool calls."""
+    from app.sandbox.e2b_provider import E2BSandboxProvider
+
+    return E2BSandboxProvider(key, template)

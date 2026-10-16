@@ -121,6 +121,8 @@ def run_check(args: argparse.Namespace) -> int:
             print(asyncio.run(diagnostics.check_model(get_settings())))
         elif args.target == "storage":
             print(asyncio.run(diagnostics.check_storage(get_settings())))
+        elif args.target == "sandbox":
+            print(asyncio.run(diagnostics.check_sandbox(get_settings())))
     except Exception as exc:
         print(f"check {args.target} failed: {exc}", file=sys.stderr)
         return 1
@@ -214,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
         cmd = sub.add_parser(name, help=help_text)
         cmd.set_defaults(handler=handler)
         if name == "check":
-            cmd.add_argument("target", choices=["temporal", "vault", "model", "storage"])
+            cmd.add_argument("target", choices=["temporal", "vault", "model", "storage", "sandbox"])
         if name == "offboard":
             cmd.add_argument("--org", required=True, help="the org's id")
             cmd.add_argument(

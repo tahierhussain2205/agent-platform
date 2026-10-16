@@ -139,9 +139,13 @@ class Settings(BaseSettings):
     gcp_error_reporting_url: str = "https://clouderrorreporting.googleapis.com"
     gcp_trace_url: str = "https://cloudtrace.googleapis.com"
 
-    # The sandbox provider (spec 8; B-008): its API and key, used by the worker and maintenance.
+    # The sandbox provider (spec 8; B-008), used by the worker and maintenance: ``http`` speaks the
+    # provider API at ``sandbox_url`` (the local stand-in), ``e2b`` runs sandboxes at E2B from
+    # ``sandbox_template`` (built by scripts/e2b_template.py). The key is the provider's API key.
+    sandbox_provider: Literal["http", "e2b"] = "http"
     sandbox_url: str | None = None
     sandbox_api_key: SecretStr | None = None
+    sandbox_template: str = "agent-platform-sandbox"
 
     # Key Value (Redis compatible).
     redis_url: SecretStr | None = None
