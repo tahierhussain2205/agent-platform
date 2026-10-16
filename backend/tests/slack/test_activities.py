@@ -205,6 +205,7 @@ async def test_sync_workspace(acts: SlackActivities, env: Any) -> None:
         )
     }
     assert {"U0ALICE", "U0BOB", "U0QUINN"} <= members
+    assert "U0ACMEBOT" not in members  # Slack lists the bot itself; it is no audience
     assert (
         q(world, "select archived from app.channels where external_id = 'C0GHOST'") is True
     )  # gone from Slack

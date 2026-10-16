@@ -148,7 +148,7 @@ def test_conversations_respect_bot_visibility(client: TestClient) -> None:
     assert channels["random"]["is_member"] is False
     assert api(client, "conversations.history", channel="C0RANDOM").json()["error"] == "not_in_channel"
     members = api(client, "conversations.members", channel="C0BUGS").json()["members"]
-    assert set(members) == {"U0ALICE", "U0BOB", "U0QUINN"}
+    assert set(members) == {"U0ALICE", "U0BOB", "U0QUINN", "U0ACMEBOT"}  # Slack lists the bot too
     page = api(client, "conversations.list", types="public_channel", limit=2).json()
     assert len(page["channels"]) == 2
     assert page["response_metadata"]["next_cursor"] == "2"
