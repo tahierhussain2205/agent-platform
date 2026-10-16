@@ -8,6 +8,7 @@ from psycopg_pool import AsyncConnectionPool
 from app import kv
 from app.db.pool import open_pool
 from tests.api.conftest import build_app
+from tests.stack import kv_url
 from tests.world import World
 
 
@@ -19,7 +20,7 @@ async def _get(app: FastAPI) -> httpx.Response:
 
 
 async def test_ready_when_dependencies_are_up(world: World, pool: AsyncConnectionPool) -> None:
-    client = kv.make_client("redis://localhost:56379/15")
+    client = kv.make_client(kv_url(15))
     try:
         await client.ping()
     except Exception:

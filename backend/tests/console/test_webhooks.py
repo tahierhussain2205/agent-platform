@@ -12,7 +12,7 @@ import pytest
 
 from app.identity import svix
 from tests.console.conftest import q
-from tests.stack import FakeTemporal
+from tests.stack import FakeTemporal, kv_url
 from tests.world import World
 
 SECRET = "whsec_" + base64.b64encode(b"console-test-webhook-secret-0001").decode()
@@ -340,7 +340,7 @@ async def test_failed_delivery_can_be_retried(console: httpx.AsyncClient, module
 async def _kv_up() -> bool:
     from app import kv
 
-    client = kv.make_client("redis://localhost:56379/14")
+    client = kv.make_client(kv_url(14))
     try:
         return await kv.ping(client)
     except Exception:

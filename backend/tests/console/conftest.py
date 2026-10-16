@@ -26,7 +26,7 @@ from app.db.roles import LoginUser, ensure_login_user
 from app.identity.clerk_api import ClerkClient
 from app.settings import Settings
 from tests.conftest import ADMIN_URL
-from tests.stack import FakeTemporal
+from tests.stack import FakeTemporal, kv_url
 from tests.world import World
 
 ISSUER = "https://clerk.test.example"
@@ -202,7 +202,7 @@ async def console(
     identity_pool = await open_pool(
         dsn(module_world, login_users["identity"]), "identity", min_size=0, max_size=2
     )
-    kv_client: Any = kv.make_client("redis://localhost:56379/14")
+    kv_client: Any = kv.make_client(kv_url(14))
     try:
         await kv_client.ping()
     except Exception:

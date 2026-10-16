@@ -25,6 +25,7 @@ from app.slack.adapter import (
 )
 from app.slack.client import SlackClient, SlackError
 from app.slack.limiter import SlackRateLimiter
+from tests.stack import kv_url
 
 SECRET = "s3cret"
 
@@ -245,7 +246,7 @@ async def test_paginate_follows_cursors() -> None:
 
 @pytest.fixture
 async def redis() -> Any:
-    client = kv.make_client("redis://localhost:56379/12")
+    client = kv.make_client(kv_url(12))
     try:
         await client.ping()
     except Exception:
