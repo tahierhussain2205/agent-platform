@@ -2,7 +2,15 @@
 
 Everything Render runs is defined in [`render.yaml`](../../render.yaml). The dashboard is only used to create the Blueprint once and to enter `sync: false` secrets. Never change service settings in the dashboard: the next Blueprint sync overwrites them.
 
-> Status: written before a Render account existed (B-001). Steps marked **unverified** have not been run against Render yet.
+> Status: staging was first deployed on 2026-10-16 (B-001). Previews and `checksPass` on a real push are still unverified.
+
+## What the first deploy showed
+
+- Render adds a suffix to a service's URL when the name is taken (staging: `https://api-staging-u9gh.onrender.com`, `https://web-staging-o82n.onrender.com`). After the first deploy, set `API_PUBLIC_URL`, `CONSOLE_URL` and `CONSOLE_ORIGINS` on `api-staging`, `CONSOLE_URL` on `worker-staging` and `VITE_API_URL` on `web-staging`, then redeploy them (the console bakes `VITE_API_URL` in at build time).
+- On a first deploy the vault and worker start before the API's pre-deploy migration has created their login users: their logs show `FATAL: no such user` until it has, then the pools connect. Later deploys do not have this window.
+- Migration 001 logs `skipped, needs a superuser` for the `bypassrls` statements: expected (Render's user has `CREATEROLE`, is not a superuser; B-010).
+- `sync: false` values left empty in the Blueprint form are not stored; enter them later as their blocker is cleared.
+- Checks run as one-off jobs with the service's environment (dashboard, service, Jobs, or the API): `app check vault` and `app check temporal` from `api-staging`; `app check model` from `worker-staging` (once phase 12 is on `main`).
 
 ## Resources
 
