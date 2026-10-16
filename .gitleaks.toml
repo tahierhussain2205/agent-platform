@@ -1,0 +1,24 @@
+# Secret scanning (plan phase 13): gitleaks' default rules over the whole history, except the files
+# below, which hold credentials on purpose. Each works only against the local stand-ins (fakes/) or
+# is a fake value a test needs to look real. A new file with a secret fails CI: add it here only
+# when it is one of these kinds, with its reason.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local development credentials for the stand-ins (never deployed)"
+paths = [
+  '''^dev/github/app-dev-private-key\.pem$''',  # the GitHub stand-in verifies with its public half
+  '''^dev/gcp/service-account-dev\.json$''',    # the Google Cloud stand-in's service account
+  '''^compose\.yaml$''',                         # Compose wires the stand-ins' keys and secrets
+  '''^\.env\.example$''',                        # placeholders that match the local stand-ins
+  '''^fakes/fakes/config\.py$''',                # the stand-ins' own defaults
+]
+
+[[allowlists]]
+description = "Fake secrets that tests use to prove redaction and secret checks"
+paths = [
+  '''^backend/tests/agent/test_change_checks\.py$''',
+  '''^backend/tests/tools/test_slack_adapter\.py$''',
+  '''^backend/tests/api/test_observability\.py$''',
+]
