@@ -165,6 +165,7 @@ async def test_sandboxes_go_when_the_task_ends_or_expires(setup: Setup) -> None:
     await bob.run("github_search_code", {"repo": REPO, "pattern": "total"})
     (row,) = sandboxes(setup, bob.ctx.task_id)
     provider = HttpSandboxProvider(f"{FAKES}/sandbox/v1", "sbx-local-key", setup.http)
+    assert bob.ctx.task_id is not None
     assert await Workspaces(setup.stack.pool, provider).release_task(setup.acme.id, bob.ctx.task_id) == 1
     assert sandboxes(setup, bob.ctx.task_id)[0][1] == "destroyed"
     assert row[3] not in [s["id"] for s in (await admin("/sandboxes"))["live"]]
