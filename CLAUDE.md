@@ -19,16 +19,18 @@ A multi tenant AI agent that works as a teammate inside Slack. Each customer is 
 | Agent: playbooks, prompts, the loop's steps (runner), outbox | `backend/app/agent/` |
 | LLM gateway (tiers, budgets, rate limits, retries, metering) | `backend/app/llm/` |
 | Policy module and redaction | `backend/app/policy/` |
-| Tool adapter interface and adapters (Slack) | `backend/app/tools/` |
+| Tool adapter interface, executor and adapters (Slack, Jira, GitHub, MCP) | `backend/app/tools/` |
+| Integration catalog, OAuth providers, signed state | `backend/app/integrations/` |
+| Token vault service (secrets, OAuth exchange and refresh, task scoped credentials) | `backend/app/vault_service/` (`app vault`) |
 | Task workflow and activities | `backend/app/workflows/task*.py` |
 | Eval harness and cases | `backend/app/eval/` (`app eval`) |
 | Temporal workers (agent tasks, schedules, approvals) | `backend/app/` `worker` command |
 | Maintenance jobs (partitions, retention, reconciliation) | `backend/app/` `maintenance` command |
 | SQL migrations | `backend/migrations/NNN_*.sql` |
 | Admin console | `web/` (React, TypeScript, Vite, React Router, TanStack Query, Tailwind) |
-| Local SaaS stand-ins (Clerk, Slack, Anthropic, later Jira, ...) | `fakes/` (own image, Compose only, never deployed) |
+| Local SaaS stand-ins (Clerk, Slack, Anthropic, Atlassian, GitHub, Google, MCP servers) | `fakes/` (own image, Compose only, never deployed) |
 
-**One image, many commands.** `backend/Dockerfile` builds one image; `app <api|worker|maintenance|migrate|seed|check>` (console script, same as `python -m app`) selects the process. The image has no `ENTRYPOINT`; `CMD` is `app api` and every caller passes a full command. On Render ([render.yaml](render.yaml), runbook [docs/runbooks/deploy.md](docs/runbooks/deploy.md)): `api-staging` web service (migrations in `preDeployCommand`), `worker-staging` background worker, `maintenance-staging` cron job, `web-staging` static site, `db-staging` Render Postgres (PgBouncer pool), `kv-staging` Render Key Value. Production is an empty project until phase 13.
+**One image, many commands.** `backend/Dockerfile` builds one image; `app <api|worker|maintenance|migrate|seed|check>` (console script, same as `python -m app`) selects the process. The image has no `ENTRYPOINT`; `CMD` is `app api` and every caller passes a full command. On Render ([render.yaml](render.yaml), runbook [docs/runbooks/deploy.md](docs/runbooks/deploy.md)): `api-staging` web service (migrations in `preDeployCommand`), `worker-staging` background worker, `vault-staging` private service (`app vault`), `maintenance-staging` cron job, `web-staging` static site, `db-staging` Render Postgres (PgBouncer pool), `kv-staging` Render Key Value. Production is an empty project until phase 13.
 
 ## Invariants every phase must keep
 
@@ -70,7 +72,7 @@ A change never weakens one of these to make something work. If an invariant bloc
 Backend only: `cd backend && uv run pytest -k name`, `uv run python -m app api`.
 Web only: `pnpm --dir web dev`.
 
-Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173 (seeded accounts: alice@acme.test, bob@acme.test, frank@both.test, dave@globex.test; password `password123`), fakes http://localhost:4100 (Clerk stand-in at `/clerk`, Slack stand-in at `/slack` with a Slack-like UI at http://localhost:4100/slack/ui, Anthropic stand-in at `/anthropic`, test admin at `/_admin`), Temporal UI http://localhost:8233,
+Local URLs: API http://localhost:8000 (`/healthz`, `/readyz`), console http://localhost:5173 (seeded accounts: alice@acme.test, bob@acme.test, frank@both.test, dave@globex.test; password `password123`), fakes http://localhost:4100 (Clerk stand-in at `/clerk`, Slack stand-in at `/slack` with a Slack-like UI at http://localhost:4100/slack/ui, Anthropic stand-in at `/anthropic`, Atlassian at `/atlassian`, GitHub at `/github`, Google at `/google`, MCP servers at `/google/mcp` and `/mcp/status`, test admin at `/_admin`); the vault service listens on `vault:8100` inside Compose only, Temporal UI http://localhost:8233,
 Jaeger http://localhost:16686, Postgres `localhost:55432` (postgres/postgres, db `agent`), PgBouncer `localhost:56432`,
 Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 
@@ -89,6 +91,8 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - **Logging**: `log = logging.getLogger(__name__)`, structured fields via `extra={...}`. Request id, org id and trace ids are added automatically from context. Never log tokens, secrets, raw Slack text or raw database errors to clients.
 - **Tracing**: binding a unit of work tags spans with `tenant.id` automatically; spans never include SQL parameters or query strings.
 - **Secrets at rest**: `Envelope.seal(org_id, plaintext, context="<table>:<row id>")`; store `ciphertext` and `kms_key_id`. Never put plaintext secrets in the database, logs or model context.
+- **Connection secrets and credentials** go through the `VaultClient` (`resources.vault`, `AgentDeps.vault`): `RemoteVault` when `VAULT_URL` is set (Compose, Render), `LocalVault` in process otherwise. Commit the `connections` row before calling the vault (it uses its own connection). Ask for a credential with the task id (`credential(org, connection, task_id=...)`): user links are released only for their owner's running task. Only the vault reads client secrets, the GitHub App key and `ENCRYPTION_KEYS`.
+- **OAuth flows** (`app/api/oauth.py`): state from `app.integrations.state.make_state` (signed, ten minutes), nonce claimed once in Key Value, PKCE verifier in Key Value; callbacks redirect to `CONSOLE_URL/integrations?connected=|linked=|error=`. Authorize URLs (browser) and token/API URLs (server) are separate settings.
 - **Object storage**: `ObjectStore.put(org_id, kind, data)` returns the `storage_ref`; reads and deletes need the same org id.
 - **Key Value**: build tenant keys with `kv.tenant_key(org_id, ...)`; `kv.global_key` only for data that is not tenant scoped.
 - **Console routes**: depend on `console_identity` (any active member) or `require_admin`; both bind the unit of work to the verified org. Privilege always comes from our database. Every mutation writes an audit row (`app/api/console/common.audit`).
@@ -100,7 +104,7 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - **Activities** open their own tenant transactions with `tenant_tx(pool, org_id)` (sets `app.org_id` first); never share a connection across awaits on Slack.
 - **Model calls** only through `LLMGateway.complete(CallContext(...), tier, ...)`: it resolves the tier against what the org allows, refuses when a budget is spent (`BudgetExceededError`), rate limits per org, retries and falls back, meters usage and traces without content. Structured output: a forced `submit_*` tool (`app/agent/prompts.py`), validated in code before use.
 - **No raw Slack text in Temporal history** (invariant 7): read Slack and call the model inside the same activity; return only derived content and source references (`app/agent/types.py`).
-- **Adding a tool adapter**: implement `ToolAdapter` (`app/tools/base.py`) with `Operation` metadata (kind, reversible, outward facing, credential mode, approver rule) and `resolve_target`; register it in `AgentRunner._registry`. The policy module (enablement, overrides, channel rule, tiers, credential modes) and the audit log then apply automatically. Tool output is capped and redacted; cite with `ctx.refs.add(Source(...))`.
+- **Adding a tool adapter**: implement `ToolAdapter` (`app/tools/base.py`) with `Operation` metadata (kind, reversible, outward facing, default credential mode, approver rule), `resolve_target` and `execute(ctx, operation, args, credential)`; add it to `CATALOG` (`app/integrations/catalog.py`) and `build_registry` (`app/tools/executor.py`), and to `operations()` in the console API. Call tools only through `ToolExecutor.run`: it resolves the target, asks the policy module, fetches the credential for the operation's mode (`org`, `org_with_check`, `user_required`) and audits. For `org_with_check`, filter results to what the requester may see; label sources only some people may see `visibility="restricted"` and implement `audience_ok` so channel output can be checked. Cap and redact output; cite with `ctx.refs.add(Source(...))`. Add the provider's endpoints to the stand-in. A long tail tool is an MCP server, not an adapter.
 - **Adding a playbook**: add `app/agent/playbooks/<key>.v<N>.md` (front matter: key, version, title, description, `read:`/`write:` operation lists). Never edit a released version: add `v<N+1>` (sync refuses changed content). `app migrate` syncs built ins; tasks pin the version they started with.
 - **External writes from the agent** go through `post_once` (`app/agent/outbox.py`) or `AgentRunner.execute`: an `external_actions` key checked first, the key also in Slack message metadata.
 - **Every policy decision is audited** by the policy module (`actor_type` agent, `actor_id` the requester). Do not add tool calls or outputs that bypass `Policy.check_tool` / `Policy.check_output`.
@@ -147,7 +151,7 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - `pydantic.EmailStr` rejects reserved domains such as `.test`; the console validates emails with a plain pattern.
 - Clerk Core 3 (`@clerk/react` v6) removed `SignedIn`/`SignedOut`; the console uses `useAuth()` state.
 - Webhook lag: right after signup or accepting an invitation `/api/me` can answer `not_a_member` for a moment; the console retries those codes for a few seconds.
-- Playwright `globalSetup` resets the stand-ins (`POST /_admin/reset`: Clerk with its signing key kept, and Slack) and re-runs the seed, which also puts fixture orgs back (undeclared members removed, pending access requests dismissed); e2e tests use unique emails, org names and Slack teams.
+- Playwright `globalSetup` resets the stand-ins (`POST /_admin/reset`: Clerk with its signing key kept, and Slack) and re-runs the seed, which also puts fixture orgs back (undeclared members removed, pending access requests dismissed, integrations other than Slack removed, token usage cleared); e2e tests use unique emails, org names and Slack teams. Spec files run in parallel workers and post into the same seeded channels: find your message by text, never by message count.
 - The running Compose stack answers every Slack event the stand-in delivers, including those from backend tests that post into seeded workspaces: tests that call our ingress directly should post without mentioning the bot, or expect a second reply. Create a fresh team with `POST /_admin/slack/teams` when a test needs an uninstalled workspace. Backend tests share the stand-in's state with the dev stack and the e2e suite (which, for example, adds the bot to #random): a test that relies on stand-in state sets it up itself.
 - Store the bot token only after the install transaction commits: the vault's connection must see the new `connections` row (foreign key).
 - A controlled checkbox that waits for a mutation flips back for one render (TanStack Query reports `isPending` a tick late); keep the requested value in local state set in `onChange`.
@@ -157,3 +161,7 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 - Temporal's workflow sandbox re-imports workflow modules: monkeypatching a workflow module constant only works with `UnsandboxedWorkflowRunner` (see the lost signal test). Keep at least one test on the sandboxed `build_worker`.
 - Test tokens with a short TTL must be minted when used, not at import: a long earlier module lets module level tokens expire (`token_expired`).
 - Tests must never start workflows on the dev stack's task queue (`agent-tasks` on localhost:7233): use a unique `TEMPORAL_TASK_QUEUE`, and stub the Temporal backed maintenance jobs when running `app maintenance` from a test. Workflow ids are global per namespace, whatever the queue.
+- `app migrate` must not rewrite an unchanged login password: a new SCRAM verifier breaks PgBouncer's pass-through for services that authenticated before it (they lose the database until restarted). `ensure_login_user` logs in first and only alters on failure.
+- After changing `fakes/`, rebuild the running stand-ins (`docker compose up -d --build --wait fakes`); the backend tests and e2e use the running container.
+- The GitHub stand-in verifies app JWTs with `GITHUB_APP_PUBLIC_KEY` (`dev/github/app-dev-public-key.pem`, local only); a fakes container started without it refuses installation tokens. The vault signs with the matching private key (`GITHUB_APP_PRIVATE_KEY`, `\n` escapes accepted).
+- `docker compose up --wait` (2.23) fails when a one-shot container that nothing depends on exits during the wait: make a long running service depend on it (`api` depends on `seed`).
