@@ -381,6 +381,55 @@ async def test_an_assignee_needs_evidence(tickets: Agent) -> None:
     )
 
 
+async def test_plans_naming_actions_by_their_combined_name_still_count(tickets: Agent) -> None:
+    """Real models write the combined name (jira_create_issue) in either field; an action that is
+    not available is said in the thread, never dropped silently (staging: the answer then claimed a
+    ticket nobody had created)."""
+    from tests.agent.conftest import model_requests, script_model
+
+    agent = tickets
+    name, external = await channel(agent)
+    await ui_post("U0QUINN", external, "Gift cards are rejected at checkout")
+    ref = await ask(agent, f"create Jira tickets for the problems reported today in #{name}")
+    u = await agent.runner.understand(ref, "ask")
+    f = await agent.runner.gather(ref, u, "standard")
+    issue = {"project": "PAY", "summary": "Gift cards are rejected at checkout", "description": "From Slack",
+             "finding": 1}  # fmt: skip
+    await script_model(
+        [{"type": "tool_use", "name": "submit_plan", "input": {"actions": [
+            {"tool": "jira_create_issue", "operation": "create_issue", "args": issue, "summary": "Ticket"},
+            {"tool": "jira", "operation": "jira_add_comment",
+             "args": {"key": "PAY-104", "body": "Seen again today"}, "summary": "Comment"},
+            {"tool": "github", "operation": "delete_repository", "args": {}, "summary": "Delete it"},
+        ]}}]
+    )  # fmt: skip
+    mark = len(agent.sink.sent)
+    actions = await agent.runner.plan(ref, u, f, "standard")
+    assert [(a.tool, a.operation) for a in actions] == [("jira", "create_issue"), ("jira", "add_comment")]
+    sent = (await model_requests())[-1]
+    offered = sent["messages"][0]["content"].split("<available_actions>")[1].split("</available_actions>")[0]
+    assert {"action": "jira_create_issue", "tool": "jira", "operation": "create_issue"} in json.loads(offered)
+    notes = [i.text for i, _ in agent.sink.sent[mark:] if isinstance(i, Reply)]
+    assert any("could not turn part of this request into an action" in t and "github delete_repository" in t
+               for t in notes)  # fmt: skip
+
+
+async def test_the_answer_is_told_not_to_claim_changes(tickets: Agent) -> None:
+    from tests.agent.conftest import model_requests
+
+    agent = tickets
+    ref = await ask(agent, "create a Jira ticket for gift cards being rejected")
+    u = await agent.runner.understand(ref, "ask")
+    f = await agent.runner.gather(ref, u, "standard")
+    await agent.runner.compose(ref, u, f, "standard")
+    report = [r for r in await model_requests() if "Step: write the answer" in json.dumps(r.get("system"))][
+        -1
+    ]
+    assert "Never say that something was created, changed, assigned, posted or sent" in json.dumps(
+        report["system"]
+    )
+
+
 # ------------------------------------------------------------------ through the task workflow
 
 JQL = "project = PAY AND statusCategory != Done AND reporter = acc-bob ORDER BY created DESC"
