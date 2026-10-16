@@ -189,8 +189,9 @@ def test_seed_refused_outside_local(
 
 
 def test_reseed_puts_fixture_orgs_back(seeded_db: str) -> None:
-    """People invited since the last seed are removed and open access requests are dismissed, so
-    end to end runs start from the fixture. Declared members are untouched. (Runs last: it adds rows.)"""
+    """People invited since the last seed are removed, open access requests are dismissed,
+    integrations other than Slack are removed and token usage is cleared, so end to end runs start
+    from the fixture. Declared members are untouched. (Runs last: it adds rows.)"""
     acme = _org_id(seeded_db, "org_acme")
     with psycopg.connect(seeded_db) as conn:
         conn.execute("set role app_owner")
@@ -209,6 +210,19 @@ def test_reseed_puts_fixture_orgs_back(seeded_db: str) -> None:
             "values (%s, %s, 'U0MALLORY', 'mallory@acme.test')",
             (acme, workspace[0]),
         )
+        conn.execute(
+            "insert into app.org_integrations (org_id, integration_key, kind, enabled) "
+            "values (%s, 'jira', 'native', true)",
+            (acme,),
+        )
+        conn.execute(
+            "insert into app.connections (org_id, integration_key, scope) values (%s, 'jira', 'org')", (acme,)
+        )
+        conn.execute(
+            "insert into app.usage_events (org_id, kind, model, input_tokens, output_tokens) "
+            "values (%s, 'llm', 'claude-sonnet-5', 1000, 100)",
+            (acme,),
+        )
         conn.commit()
     seed(seeded_db)
     with psycopg.connect(seeded_db) as conn:
@@ -220,6 +234,13 @@ def test_reseed_puts_fixture_orgs_back(seeded_db: str) -> None:
             ).fetchall()
         )
         pending = conn.execute("select count(*) from app.access_requests where status = 'pending'").fetchone()
+        left = conn.execute(
+            "select (select count(*) from app.org_integrations where org_id = %s and integration_key <> 'slack'), "
+            "(select count(*) from app.connections where org_id = %s and integration_key <> 'slack'), "
+            "(select count(*) from app.usage_daily where org_id = %s)",
+            (acme, acme, acme),
+        ).fetchone()
+    assert left == (0, 0, 0)  # integrations unconnected, budgets unspent
     assert statuses.pop("extra@acme.test") == "removed"
     assert statuses == {m["email"]: m["status"] for m in FIXTURE["orgs"][0]["members"]}
     assert pending == (0,)

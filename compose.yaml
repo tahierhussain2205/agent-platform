@@ -217,6 +217,9 @@ services:
     stop_grace_period: 30s
     depends_on:
       migrate: { condition: service_completed_successfully }
+      # A one-shot dependency rather than a free-standing service: `up --wait` fails when an
+      # independent container exits, even with status 0.
+      seed: { condition: service_completed_successfully }
       valkey: { condition: service_healthy }
       pgbouncer: { condition: service_healthy }
       vault: { condition: service_healthy }
