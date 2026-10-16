@@ -752,11 +752,15 @@ class AgentRunner:
                 continue
             sources = [s.to_dict() for r in point.get("sources") or [] if (s := refs.get(str(r))) is not None]
             points.append({"text": redact(str(point["text"]).strip())[0][:600], "sources": sources})
-        gaps = [redact(str(g))[0][:300] for g in (raw.get("gaps") or []) if str(g).strip()][:20]
-        for note in denied:  # what could not be read is always reported, whatever the model wrote
-            if not any(note.split(":", 1)[0] in g for g in gaps):
-                gaps.append(note[:300])
-        return Findings(points, gaps, read)
+        # What could not be read is always reported in the tools' own words, whatever the model wrote;
+        # the model's own account of the same source is dropped.
+        labels = [note.split(":", 1)[0] for note in denied]
+        model_gaps = [redact(str(g))[0][:300] for g in (raw.get("gaps") or []) if str(g).strip()]
+        gaps = [
+            *(note[:300] for note in denied),
+            *(g for g in model_gaps if not any(lb in g for lb in labels)),
+        ]
+        return Findings(points, gaps[:20], read)
 
     # ------------------------------------------------------------------ investigate
 
@@ -925,7 +929,7 @@ class AgentRunner:
                 or "I had not found anything yet."
             )
             confidence, model_unverified = "low", []
-        answer = escape(redact(answer)[0])
+        answer = expand_citations(escape(redact(answer)[0]))
         # Keep only citations of known findings, renumbered in order of first use.
         order: list[int] = []
         for match in re.finditer(r"\[(\d{1,3})\]", answer):
@@ -1277,6 +1281,30 @@ class AgentRunner:
 
 
 # ------------------------------------------------------------------ helpers
+
+
+CITATION_RANGE = re.compile(
+    r"\[(\d{1,3})\]\s*[-\u2013\u2014]\s*\[(\d{1,3})\]|\[(\d{1,3})\s*[-\u2013\u2014]\s*(\d{1,3})\]"
+)
+CITATION_LIST = re.compile(r"\[(\d{1,3}(?:\s*,\s*\d{1,3})+)\]")
+MAX_RANGE = 40
+
+
+def expand_citations(text: str) -> str:
+    """Ranges (``[4]-[9]``, ``[4-9]``) and lists (``[1, 2]``) as one citation each (``[4] [5] ... [9]``),
+    so every source a sentence draws on is kept, not only the two ends of a range."""
+
+    def each(numbers: list[int]) -> str:
+        return " ".join(f"[{n}]" for n in numbers)
+
+    def expand_range(m: re.Match[str]) -> str:
+        first, last = (int(m.group(1)), int(m.group(2))) if m.group(1) else (int(m.group(3)), int(m.group(4)))
+        if not first <= last <= first + MAX_RANGE:
+            return m.group(0)
+        return each(list(range(first, last + 1)))
+
+    text = CITATION_RANGE.sub(expand_range, text)
+    return CITATION_LIST.sub(lambda m: each([int(n) for n in m.group(1).split(",")]), text)
 
 
 def _target_ref(data: dict[str, Any]) -> str | None:
