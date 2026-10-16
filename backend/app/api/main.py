@@ -104,7 +104,11 @@ async def build_resources(settings: Settings, res: Resources) -> None:
             settings.clerk_issuer, settings.clerk_jwks_url, settings.console_origin_list, jwks_bearer=bearer
         )
     if settings.clerk_secret_key:
-        res.clerk_client = ClerkClient(settings.clerk_api_url, settings.clerk_secret_key.get_secret_value())
+        res.clerk_client = ClerkClient(
+            settings.clerk_api_url,
+            settings.clerk_secret_key.get_secret_value(),
+            invitation_redirect_url=f"{settings.console_url.rstrip('/')}/sign-up",
+        )
         res.owned.append(res.clerk_client.aclose)
 
 

@@ -14,10 +14,19 @@ class ClerkError(Exception):
 
 
 class ClerkClient:
-    def __init__(self, base_url: str, secret_key: str, http: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        secret_key: str,
+        http: httpx.AsyncClient | None = None,
+        invitation_redirect_url: str | None = None,
+    ) -> None:
         self._http = http or httpx.AsyncClient(timeout=10.0)
         self._base = base_url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {secret_key}"}
+        # Where an accepted invitation lands: the console's sign up page, which reads Clerk's ticket.
+        # Without it Clerk falls back to the instance's default (localhost on a development one).
+        self._invitation_redirect_url = invitation_redirect_url
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         try:
@@ -43,6 +52,8 @@ class ClerkClient:
         body: dict[str, Any] = {"email_address": email, "role": role}
         if inviter_user_id:
             body["inviter_user_id"] = inviter_user_id
+        if self._invitation_redirect_url:
+            body["redirect_url"] = self._invitation_redirect_url
         result: dict[str, Any] = await self._request(
             "POST", f"/organizations/{org_id}/invitations", json=body
         )
