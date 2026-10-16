@@ -155,6 +155,29 @@ def run_offboard(args: argparse.Namespace) -> int:
     return 0 if result.deleted else 1
 
 
+def run_org(args: argparse.Namespace) -> int:
+    """Operator changes to an org: ``app org plan --org <id> --plan <key>`` moves it to another plan
+    and brings its settings within the new plan's ceilings (audited)."""
+    from uuid import UUID
+
+    import psycopg
+
+    settings = get_settings()
+    org = UUID(args.org)
+    with psycopg.connect(settings.component_dsn("maintenance"), prepare_threshold=None) as conn:
+        plans = [r[0] for r in conn.execute("select key from app.plans order by key").fetchall()]
+        if args.plan not in plans:
+            print(f"unknown plan {args.plan!r}; plans: {', '.join(plans)}", file=sys.stderr)
+            return 1
+        row = conn.execute("select app.maintenance_set_plan(%s, %s)", (org, args.plan)).fetchone()
+        conn.commit()
+    if not row or not row[0]:
+        print(f"org {org}: unknown", file=sys.stderr)
+        return 1
+    print(f"org {org}: now on the {args.plan} plan; settings above its ceilings were lowered")
+    return 0
+
+
 def run_eval(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -178,6 +201,7 @@ COMMANDS: dict[str, tuple[str, Callable[[argparse.Namespace], int]]] = {
         "Offboard an org: stop serving it, delete its data (after the grace period, or --now).",
         run_offboard,
     ),
+    "org": ("Operator changes to an org (plan).", run_org),
 }
 
 
@@ -194,6 +218,10 @@ def build_parser() -> argparse.ArgumentParser:
             cmd.add_argument(
                 "--now", action="store_true", help="delete its data now instead of after the grace period"
             )
+        if name == "org":
+            cmd.add_argument("action", choices=["plan"])
+            cmd.add_argument("--org", required=True, help="the org's id")
+            cmd.add_argument("--plan", required=True, help="the plan's key (free, team, enterprise)")
         if name == "eval":
             cmd.add_argument("--cases", help="directory of case files (default: the built in cases)")
             cmd.add_argument("--report", help="write a JSON report to this file")

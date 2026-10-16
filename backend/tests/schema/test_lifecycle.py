@@ -235,6 +235,67 @@ def test_self_service_orgs_start_in_shadow_mode(fresh: World) -> None:
     assert q(fresh, "select shadow_mode from app.org_settings where org_id = %s", (fresh.acme.id,)) == [
         (False,)
     ]
+    # ... on the Free plan, with its limits applied (the defaults would have no token limit at all).
+    limits = q(
+        fresh,
+        "select o.plan, s.user_daily_token_limit, s.org_monthly_token_limit, s.max_concurrent_tasks, "
+        "s.max_schedules, s.retention_days, s.allowed_model_tiers::text[], s.default_model_tier::text "
+        "from app.orgs o join app.org_settings s on s.org_id = o.id where o.id = %s",
+        (org[0],),
+    )
+    assert limits == [("free", 250000, 5000000, 3, 5, 90, ["fast", "standard"], "standard")]
+
+
+def test_changing_plan_brings_the_settings_within_it(fresh: World, maintenance: str) -> None:
+    columns = (
+        "select o.plan, s.user_daily_token_limit, s.org_monthly_token_limit, s.max_concurrent_tasks, "
+        "s.max_schedules, s.retention_days, s.allowed_model_tiers::text[], s.default_model_tier::text "
+        "from app.orgs o join app.org_settings s on s.org_id = o.id where o.id = %s"
+    )
+    q(fresh, "update app.org_settings set default_model_tier = 'advanced', retention_days = 400, "
+             "org_monthly_token_limit = null where org_id = %s", (fresh.acme.id,))  # fmt: skip
+    with psycopg.connect(maintenance, autocommit=True) as conn:
+        assert conn.execute("select app.maintenance_set_plan(%s, 'free')", (fresh.acme.id,)).fetchone() == (
+            True,
+        )
+        assert conn.execute("select app.maintenance_set_plan(%s, 'free')", (uuid.uuid4(),)).fetchone() == (
+            False,
+        )
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            conn.execute("select app.maintenance_set_plan(%s, 'platinum')", (fresh.acme.id,))
+    # Over the ceiling (or unlimited) comes down to it; the advanced tier goes; below stays.
+    assert q(fresh, columns, (fresh.acme.id,)) == [
+        ("free", 250000, 5000000, 3, 5, 90, ["fast", "standard"], "standard")
+    ]
+    assert q(fresh, "select metadata->>'from' from app.audit_log where action = 'maintenance.plan_changed' "
+                    "and org_id = %s", (fresh.acme.id,)) == [("team",)]  # fmt: skip
+    # Moving up raises nothing by itself: admins choose their limits within the new ceilings.
+    with psycopg.connect(maintenance, autocommit=True) as conn:
+        conn.execute("select app.maintenance_set_plan(%s, 'enterprise')", (fresh.acme.id,))
+    assert q(fresh, columns, (fresh.acme.id,))[0][:6] == ("enterprise", 250000, 5000000, 3, 5, 90)
+    # The other org is untouched.
+    assert q(fresh, "select plan, user_daily_token_limit from app.orgs o join app.org_settings s "
+                    "on s.org_id = o.id where o.id = %s", (fresh.globex.id,)) == [("free", 50000)]  # fmt: skip
+
+
+def test_plans_are_read_only_for_tenants(fresh: World) -> None:
+    from tests.world import tx
+
+    with tx(fresh.url, role="app_user", org=fresh.acme.id) as conn:
+        assert conn.execute("select count(*) from app.plans").fetchone() == (3,)
+    for statement in (
+        "update app.plans set max_concurrent_tasks = 1000 where key = 'free'",
+        "insert into app.plans values ('mine', 'Mine', null, null, 1000, 10000, 3650, '{fast}')",
+        "update app.orgs set plan = 'enterprise'",
+        "select app.maintenance_set_plan(app.current_org_id(), 'enterprise')",
+        "select app.apply_plan(app.current_org_id())",
+    ):
+        with (
+            tx(fresh.url, role="app_user", org=fresh.acme.id) as conn,
+            pytest.raises(psycopg.errors.InsufficientPrivilege),
+        ):
+            conn.execute(statement)
+    assert q(fresh, "select plan from app.orgs where id = %s", (fresh.acme.id,)) == [("team",)]
 
 
 def test_only_the_maintenance_role_may_delete_orgs_or_partitions(fresh: World) -> None:
@@ -255,3 +316,23 @@ def test_only_the_maintenance_role_may_delete_orgs_or_partitions(fresh: World) -
     ):
         conn.execute("select app.maintenance_drop_partitions('audit_log', 13)")
     assert q(fresh, "select status from app.orgs where id = %s", (fresh.acme.id,)) == [("active",)]
+
+
+def test_operators_change_a_plan_from_the_command_line(
+    fresh: World, maintenance: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from app.cli import main
+    from app.settings import get_settings
+
+    monkeypatch.setenv("DATABASE_URL", fresh.url)
+    monkeypatch.setenv("DB_MAINTENANCE_PASSWORD", PASSWORD)
+    get_settings.cache_clear()
+    try:
+        assert main(["org", "plan", "--org", str(fresh.globex.id), "--plan", "team"]) == 0
+        assert "now on the team plan" in capsys.readouterr().out
+        assert main(["org", "plan", "--org", str(fresh.globex.id), "--plan", "platinum"]) == 1
+        assert "unknown plan 'platinum'" in capsys.readouterr().err
+        assert main(["org", "plan", "--org", str(uuid.uuid4()), "--plan", "free"]) == 1
+    finally:
+        get_settings.cache_clear()
+    assert q(fresh, "select plan from app.orgs where id = %s", (fresh.globex.id,)) == [("team",)]

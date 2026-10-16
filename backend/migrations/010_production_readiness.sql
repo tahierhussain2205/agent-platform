@@ -1,7 +1,11 @@
--- Production readiness (plan phase 13): shadow mode, retention and offboarding.
+-- Production readiness (plan phase 13): shadow mode, plans, retention and offboarding.
 --
 -- Shadow mode (spec 15): the agent reads, plans and answers, but the policy module denies every
 -- write. Orgs created by self service sign up (the Clerk webhook) start in it; admins turn it off.
+--
+-- Plans (spec 4.8): each org is on one; the plan caps what its admins may set (token limits,
+-- concurrency, schedules, retention, model tiers). New orgs start on Free with its limits applied;
+-- operators change an org's plan (`app org plan`), which brings its settings within the new plan.
 --
 -- Retention and offboarding run as the maintenance role, which has no BYPASSRLS on managed
 -- Postgres (B-010): per org work sets the org's context like any tenant transaction; work that
@@ -31,7 +35,76 @@ end $$;
 create trigger orgs_offboarding_since before update of status on app.orgs
   for each row execute function app.orgs_offboarding_since();
 
--- Self service orgs start in shadow mode (the settings row is created by the orgs insert trigger).
+-- Plans are platform data (no org_id): every org may read them; only migrations change them.
+-- A null token ceiling means admins may lift the limit altogether.
+create table app.plans (
+  key                      text primary key check (key ~ '^[a-z][a-z0-9_]*$'),
+  title                    text not null,
+  user_daily_token_limit   bigint check (user_daily_token_limit > 0),
+  org_monthly_token_limit  bigint check (org_monthly_token_limit > 0),
+  max_concurrent_tasks     integer not null check (max_concurrent_tasks between 1 and 1000),
+  max_schedules            integer not null check (max_schedules between 0 and 10000),
+  max_retention_days       integer not null check (max_retention_days between 1 and 3650),
+  model_tiers              app.model_tier[] not null check (cardinality(model_tiers) > 0)
+);
+insert into app.plans values
+  ('free',       'Free',       250000,  5000000,   3,     5,   90, '{fast,standard}'),
+  ('team',       'Team',       2000000, 100000000, 25,    100, 365, '{fast,standard,advanced}'),
+  ('enterprise', 'Enterprise', null,    null,      1000, 10000, 3650, '{fast,standard,advanced}');
+alter table app.plans enable row level security;
+create policy plans_read on app.plans for select using (true);
+grant select on app.plans to app_user, app_maintenance;
+
+alter table app.orgs add constraint orgs_plan_known foreign key (plan) references app.plans (key);
+
+-- Brings an org's settings within its plan: limits above a ceiling come down to it (no limit
+-- counts as above), tiers the plan does not offer go (keeping at least the plan's own).
+create function app.apply_plan(p_org uuid)
+returns void
+language plpgsql security definer set search_path = app, pg_temp as $$
+declare
+  p       app.plans;
+  v_tiers app.model_tier[];
+begin
+  select pl.* into strict p from app.plans pl join app.orgs o on o.plan = pl.key where o.id = p_org;
+  select coalesce(array_agg(t order by n), p.model_tiers) into v_tiers
+    from app.org_settings s, unnest(s.allowed_model_tiers) with ordinality as u(t, n)
+   where s.org_id = p_org and t = any (p.model_tiers);
+  update app.org_settings s
+     set user_daily_token_limit = case when p.user_daily_token_limit is null then s.user_daily_token_limit
+           else least(coalesce(s.user_daily_token_limit, p.user_daily_token_limit), p.user_daily_token_limit) end,
+         org_monthly_token_limit = case when p.org_monthly_token_limit is null then s.org_monthly_token_limit
+           else least(coalesce(s.org_monthly_token_limit, p.org_monthly_token_limit), p.org_monthly_token_limit) end,
+         max_concurrent_tasks = least(s.max_concurrent_tasks, p.max_concurrent_tasks),
+         max_schedules = least(s.max_schedules, p.max_schedules),
+         retention_days = least(s.retention_days, p.max_retention_days),
+         allowed_model_tiers = v_tiers,
+         default_model_tier = case when s.default_model_tier = any (v_tiers) then s.default_model_tier
+           when 'standard' = any (v_tiers) then 'standard' else v_tiers[1] end
+   where s.org_id = p_org;
+end $$;
+revoke all on function app.apply_plan(uuid) from public;
+
+-- An operator moves an org to another plan (`app org plan`). Returns false for an unknown org.
+create function app.maintenance_set_plan(p_org uuid, p_plan text)
+returns boolean
+language plpgsql security definer set search_path = app, pg_temp as $$
+declare
+  v_old text;
+begin
+  select plan into v_old from app.orgs where id = p_org for update;
+  if not found then
+    return false;
+  end if;
+  update app.orgs set plan = p_plan where id = p_org;
+  perform app.apply_plan(p_org);
+  insert into app.audit_log (org_id, actor_type, action, target, decision, metadata)
+  values (p_org, 'system', 'maintenance.plan_changed', p_plan, 'info', jsonb_build_object('from', v_old));
+  return true;
+end $$;
+
+-- Self service orgs start on the Free plan's limits and in shadow mode (the settings row is
+-- created by the orgs insert trigger).
 create or replace function app.identity_upsert_org(p_clerk_org_id text, p_name text)
 returns uuid
 language plpgsql security definer set search_path = app, pg_temp as $$
@@ -50,6 +123,7 @@ begin
   returning id, (xmax = 0) into v_id, v_created;
   if v_created then
     update app.org_settings set shadow_mode = true where org_id = v_id;
+    perform app.apply_plan(v_id);
     perform app.identity_audit(v_id, 'identity.org_created', p_clerk_org_id);
   end if;
   return v_id;
@@ -134,7 +208,9 @@ revoke all on function app.maintenance_orgs() from public;
 revoke all on function app.maintenance_begin_offboarding(uuid) from public;
 revoke all on function app.maintenance_offboard_org(uuid, interval) from public;
 revoke all on function app.maintenance_drop_partitions(text, integer) from public;
+revoke all on function app.maintenance_set_plan(uuid, text) from public;
 grant execute on function app.maintenance_orgs() to app_maintenance;
 grant execute on function app.maintenance_begin_offboarding(uuid) to app_maintenance;
 grant execute on function app.maintenance_offboard_org(uuid, interval) to app_maintenance;
 grant execute on function app.maintenance_drop_partitions(text, integer) to app_maintenance;
+grant execute on function app.maintenance_set_plan(uuid, text) to app_maintenance;

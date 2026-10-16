@@ -13,6 +13,7 @@ from app.auth.clerk import VerifiedSession
 from app.auth.console import ConsoleIdentity, console_identity, require_admin, resources, verified_session
 from app.db.uow import UnitOfWork, get_uow
 from app.identity.clerk_api import ClerkError
+from app.plans import org_plan
 
 router = APIRouter(prefix="/api")
 
@@ -126,6 +127,7 @@ class SettingsUpdate(BaseModel):
     max_schedules: int | None = Field(default=None, ge=0, le=10000)
     retention_days: int | None = Field(default=None, ge=1, le=3650)
     display_settings: dict[str, Any] | None = None
+    shadow_mode: bool | None = None
     # Explicit nulls lift a limit; omitted fields stay as they are.
     clear_user_daily_token_limit: bool = False
     clear_org_monthly_token_limit: bool = False
@@ -143,7 +145,7 @@ SETTINGS_COLUMNS = (
     # app.model_tier[] is a domain array psycopg does not know: read it as text[].
     "default_model_tier::text, allowed_model_tiers::text[] as allowed_model_tiers, user_daily_token_limit, "
     "org_monthly_token_limit, "
-    "max_concurrent_tasks, max_schedules, retention_days, display_settings, updated_at"
+    "max_concurrent_tasks, max_schedules, retention_days, display_settings, shadow_mode, updated_at"
 )
 
 
@@ -153,7 +155,7 @@ async def get_settings_(
 ) -> dict[str, Any]:
     row = await fetch_one(uow.connection, f"select {SETTINGS_COLUMNS} from app.org_settings")  # noqa: S608
     assert row is not None
-    return row
+    return {**row, "plan": (await org_plan(uow.connection)).as_dict()}
 
 
 @router.patch("/settings")
@@ -171,8 +173,6 @@ async def update_settings(
     assert current is not None
     allowed = body.allowed_model_tiers or current["allowed_model_tiers"]
     default = body.default_model_tier or current["default_model_tier"]
-    if default not in allowed:
-        raise ApiError(422, "invalid", "The default model tier must be one of the allowed tiers.")
     changes: dict[str, Any] = dict(
         body.model_dump(
             exclude_none=True, exclude={"clear_user_daily_token_limit", "clear_org_monthly_token_limit"}
@@ -184,6 +184,11 @@ async def update_settings(
         changes["org_monthly_token_limit"] = None
     if not changes:
         raise ApiError(422, "invalid", "Nothing to change.")
+    refusal = (await org_plan(conn)).refusal(changes)
+    if refusal:
+        raise ApiError(422, "plan_limit", refusal)
+    if default not in allowed:
+        raise ApiError(422, "invalid", "The default model tier must be one of the allowed tiers.")
     if "display_settings" in changes:
         changes["display_settings"] = Jsonb(changes["display_settings"])
     if "allowed_model_tiers" in changes or "default_model_tier" in changes:
