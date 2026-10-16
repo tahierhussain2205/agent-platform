@@ -135,6 +135,7 @@ function Shell() {
     { to: '/slack', label: 'Slack' },
     { to: '/integrations', label: 'Integrations' },
     { to: '/catalog', label: 'Catalog' },
+    { to: '/repositories', label: 'Repositories' },
     { to: '/schedules', label: 'Schedules' },
     ...(isAdmin
       ? [

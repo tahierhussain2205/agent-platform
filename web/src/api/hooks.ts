@@ -248,6 +248,23 @@ export interface CatalogProposal {
   notes?: string[]
 }
 
+export type RecipeStatus = 'untested' | 'works' | 'failed' | 'unavailable'
+
+export interface Repository {
+  id: string
+  full_name: string
+  default_branch: string
+  status: string
+  protected_paths: string[]
+  recipe: {
+    test: string | null
+    source: 'detected' | 'admin' | null
+    status: RecipeStatus | null
+    last_run: { at?: string; exit_code?: number; summary?: string } | null
+  }
+  services: string[]
+}
+
 export function useApi() {
   const { getToken } = useAuth()
   return useCallback(
@@ -394,6 +411,15 @@ export function useCatalogProposal(enabled: boolean) {
     queryFn: () => api<CatalogProposal>('/api/catalog/proposal'),
     enabled,
     refetchInterval: (query) => (query.state.data?.status === 'running' ? 1500 : false),
+  })
+}
+
+export function useRepositories() {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'repositories'],
+    queryFn: () => api<{ repositories: Repository[]; can_manage: boolean }>('/api/repositories'),
   })
 }
 

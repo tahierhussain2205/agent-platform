@@ -65,13 +65,21 @@ jobs:
       # The SaaS stand-ins (Clerk, Slack, Anthropic, Atlassian, GitHub, Google, Google Cloud, MCP, a
       # sandbox provider) the integration tests call over HTTP. The GitHub and Google Cloud stand-ins
       # verify signed requests with the local-only dev keys.
-      - name: Start SaaS stand-ins
+      # Sandbox commands run in the sandbox runner (B-008): its own container with no network at all,
+      # sharing the sandboxes volume with the provider API, as in Compose.
+      - name: Start SaaS stand-ins and the sandbox runner
         run: |
           docker build -q -t agentplatform-fakes:ci ../fakes
+          docker build -q -t agentplatform-sandbox-runner:ci -f ../fakes/runner.Dockerfile ../fakes
+          docker volume create sandboxes
           docker run -d --name fakes -p 4100:4100 \
             -e GITHUB_APP_PUBLIC_KEY="$(cat ../dev/github/app-dev-public-key.pem)" \
             -e GCP_SA_PUBLIC_KEY="$(cat ../dev/gcp/sa-dev-public-key.pem)" \
+            -e SANDBOX_ROOT=/sandboxes -v sandboxes:/sandboxes \
             -v "$PWD/app/seed/fixture.json:/seed/fixture.json:ro" agentplatform-fakes:ci
+          docker run -d --name sandbox-runner --network none --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges:true --user 10001 --memory 1g --cpus 1 --pids-limit 256 \
+            -e SANDBOX_ROOT=/sandboxes -v sandboxes:/sandboxes agentplatform-sandbox-runner:ci
           for _ in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:4100/healthz && exit 0; sleep 1; done; exit 1
       - uses: astral-sh/setup-uv@v5
         with:

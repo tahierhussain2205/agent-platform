@@ -9,6 +9,7 @@ import { CreateOrgPage, InvitationsPage, SignInPage, SignUpPage } from './pages/
 import { IntegrationsPage } from './pages/Integrations'
 import { MembersPage } from './pages/Members'
 import { OverviewPage } from './pages/Overview'
+import { RepositoriesPage } from './pages/Repositories'
 import { RolesPage } from './pages/Roles'
 import { SchedulesPage } from './pages/Schedules'
 import { SettingsPage } from './pages/Settings'
@@ -56,6 +57,7 @@ const router = createBrowserRouter([
       { path: 'slack', element: <SlackPage /> },
       { path: 'integrations', element: <IntegrationsPage /> },
       { path: 'catalog', element: <CatalogPage /> },
+      { path: 'repositories', element: <RepositoriesPage /> },
       { path: 'schedules', element: <SchedulesPage /> },
       {
         path: 'settings',
