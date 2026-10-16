@@ -192,7 +192,8 @@ class AgentRunner:
             names = [
                 op.name
                 for op in adapter.operations.values()
-                if (op.tier == "read") == (kind == "read") and spec.allows(adapter.key, op.name, op.tier, mcp)
+                if (op.tier == "read") == (kind == "read")
+                and spec.allows(adapter.key, op.name, op.tier, mcp, getattr(adapter, "family", None))
             ]
             out += definitions(adapter, names)
         return out

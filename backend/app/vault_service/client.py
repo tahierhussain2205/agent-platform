@@ -83,6 +83,14 @@ class RemoteVault:
         )
         return data
 
+    async def register_service_account(
+        self, org_id: UUID | str, connection_id: UUID | str, key_json: str
+    ) -> dict[str, Any]:
+        data: dict[str, Any] = await self._post(
+            "/v1/google-cloud/service-accounts", org_id=org_id, connection_id=connection_id, key_json=key_json
+        )
+        return data
+
     async def credential(
         self,
         org_id: UUID | str,

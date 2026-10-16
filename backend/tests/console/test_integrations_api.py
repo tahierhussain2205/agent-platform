@@ -57,6 +57,7 @@ def _integration_settings(monkeypatch: pytest.MonkeyPatch) -> None:
         "GOOGLE_AUTH_URL": f"{FAKES}/google/o/oauth2/v2/auth",
         "GOOGLE_CLIENT_ID": "local-google-client",
         "GOOGLE_MCP_URL": f"{FAKES}/google/mcp",
+        "GCP_LOGGING_URL": f"{FAKES}/gcp/logging",
     }.items():
         monkeypatch.setenv(name, value)
 
@@ -118,7 +119,12 @@ async def integrations(console: httpx.AsyncClient, who: Any) -> dict[str, Any]:
 
 async def test_catalog_listing(console: httpx.AsyncClient) -> None:
     listed = await integrations(console, BOB)
-    assert list(listed)[:4] == ["slack", "jira", "github", "google_workspace"]
+    assert list(listed)[:5] == ["slack", "jira", "github", "google_cloud_logging", "google_workspace"]
+    logs = listed["google_cloud_logging"]
+    assert (logs["auth"], logs["user_links"], logs["configured"]) == ("service_account", False, True)
+    assert {o["name"]: (o["tier"], o["default_mode"]) for o in logs["operations"]} == {
+        "search_events": ("read", "org"), "list_error_groups": ("read", "org"), "get_trace": ("read", "org"),
+    }  # fmt: skip
     jira = listed["jira"]
     assert (jira["configured"], jira["user_links"], jira["kind"]) == (True, True, "native")
     ops = {o["name"]: o for o in jira["operations"]}
@@ -264,3 +270,58 @@ async def test_another_org_sees_and_touches_nothing(console: httpx.AsyncClient) 
     await console.delete("/api/integrations/jira/connection", headers=DAVE)  # Globex's own, if any
     assert (await integrations(console, ALICE))["jira"]["connection"]["id"] == acme_conn["id"]
     assert "mcp_status_page" not in globex
+
+
+async def test_admins_connect_cloud_logging_with_a_service_account_key(
+    console: httpx.AsyncClient, stack: Stack
+) -> None:
+    import json
+
+    from app.settings import get_settings
+    from tests.stack import GCP_KEY
+
+    get_settings.cache_clear()
+    path = "/api/integrations/google_cloud_logging/service-account"
+    assert (await console.post(path, json={"key_json": GCP_KEY}, headers=BOB)).status_code == 403
+    wrong = await console.post(
+        "/api/integrations/jira/service-account", json={"key_json": GCP_KEY}, headers=ALICE
+    )
+    assert wrong.status_code == 404
+    first = await console.post(path, json={"key_json": GCP_KEY}, headers=ALICE)
+    assert first.status_code == 200, first.text
+    assert first.json() == {"key": "google_cloud_logging", "account": "agent-reader@acme-prod.iam.gserviceaccount.com",
+                            "project_id": "acme-prod"}  # fmt: skip
+    active = (
+        "select id from app.connections where integration_key = 'google_cloud_logging' and status = 'active'"
+    )
+    (connected,) = sql(stack, active)
+    # A key Google refuses changes nothing: the working connection stays.
+    refused_key = json.dumps(
+        {**json.loads(GCP_KEY), "client_email": "x@other-project.iam.gserviceaccount.com"}
+    )
+    refused = await console.post(path, json={"key_json": refused_key}, headers=ALICE)
+    assert (refused.status_code, refused.json()["error"]["code"]) == (502, "provider_refused")
+    assert sql(stack, active) == [connected]
+    bad = await console.post(path, json={"key_json": '{"type": "authorized_user", "x": 1}'}, headers=ALICE)
+    assert (bad.status_code, bad.json()["error"]["code"]) == (422, "invalid_key")
+    assert sql(stack, active) == [connected]
+    assert "PRIVATE KEY" not in bad.text
+    # A new key replaces the old one.
+    again = await console.post(path, json={"key_json": GCP_KEY}, headers=ALICE)
+    assert again.status_code == 200
+    assert sql(stack, active) != [connected]
+    health = await console.post("/api/integrations/google_cloud_logging/check", headers=ALICE)
+    assert health.json() == {
+        "key": "google_cloud_logging",
+        "health": "ok",
+        "detail": "Logs of project acme-prod are readable.",
+    }
+    actions = [
+        r[0]
+        for r in sql(
+            stack,
+            "select action from app.audit_log where target = 'google_cloud_logging' order by occurred_at",
+        )
+    ]
+    assert actions.count("integration.connected") == 2
+    assert actions.count("integration.connect_failed") == 2

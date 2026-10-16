@@ -132,6 +132,7 @@ async def build_registry(ctx: ToolContext, bot_user_id: str | None, executor_fac
     from app.tools.catalog import CatalogAdapter
     from app.tools.github import GitHubAdapter
     from app.tools.jira import JiraAdapter
+    from app.tools.logs import LogsAdapter
     from app.tools.mcp import McpAdapter
     from app.tools.slack import SlackAdapter
 
@@ -151,6 +152,8 @@ async def build_registry(ctx: ToolContext, bot_user_id: str | None, executor_fac
             registry.register(JiraAdapter(settings.atlassian_api_url))
         elif key == "github" and settings is not None:
             registry.register(GitHubAdapter(settings.github_api_url))
+        elif key == "google_cloud_logging" and settings is not None:
+            registry.register(LogsAdapter(settings))
         elif key == "google_workspace" and settings is not None and settings.google_mcp_url:
             registry.register(
                 McpAdapter(key, settings.google_mcp_url, config.get("tools") or [], "user_required")

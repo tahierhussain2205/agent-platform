@@ -63,7 +63,14 @@ PROVIDER_SETTINGS = Settings(
     google_mcp_url=f"{FAKES}/google/mcp",
     google_client_id="local-google-client",
     google_client_secret="local-google-client-secret",
+    gcp_token_url=f"{FAKES}/gcp/token",
+    gcp_logging_url=f"{FAKES}/gcp/logging",
+    gcp_error_reporting_url=f"{FAKES}/gcp/errorreporting",
+    gcp_trace_url=f"{FAKES}/gcp/trace",
+    sandbox_url=f"{FAKES}/sandbox/v1",
+    sandbox_api_key="sbx-local-key",
 )
+GCP_KEY = (Path(__file__).resolve().parents[2] / "dev" / "gcp" / "service-account-dev.json").read_text()
 
 
 def fakes_up() -> bool:

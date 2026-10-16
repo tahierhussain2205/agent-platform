@@ -15,7 +15,7 @@ from uuid import UUID
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.settings import Settings
 from app.vault_service import LocalVault, VaultError
@@ -43,6 +43,10 @@ class InstallationBody(Scoped):
     installation_id: str
     code: str
     redirect_uri: str
+
+
+class ServiceAccountBody(Scoped):
+    key_json: str = Field(max_length=20_000)
 
 
 class CredentialBody(Scoped):
@@ -145,6 +149,10 @@ def create_vault_app(settings: Settings, vault: LocalVault | None = None) -> Fas
         return await v().register_installation(
             body.org_id, body.connection_id, body.installation_id, body.code, body.redirect_uri
         )
+
+    @app.post("/v1/google-cloud/service-accounts")
+    async def service_account(body: ServiceAccountBody) -> dict[str, Any]:
+        return await v().register_service_account(body.org_id, body.connection_id, body.key_json)
 
     @app.post("/v1/credentials")
     async def credential(body: CredentialBody) -> dict[str, Any]:

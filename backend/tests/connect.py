@@ -120,3 +120,13 @@ async def delete_jira_issues(*phrases: str) -> None:
     """Delete the issues a test created (summaries containing a phrase; seed issues are kept)."""
     async with httpx.AsyncClient(timeout=10) as client:
         await client.post(f"{FAKES}/_admin/atlassian/issues/delete", json={"contains": list(phrases)})
+
+
+async def connect_logging(stack: Stack, org: Any) -> uuid.UUID:
+    """Google Cloud Logging enabled and connected with the dev service account (local key)."""
+    from tests.stack import GCP_KEY
+
+    enable(stack, org, "google_cloud_logging")
+    conn = new_connection(stack, org, "google_cloud_logging")
+    await stack.vault.register_service_account(org.id, conn, GCP_KEY)
+    return conn

@@ -37,12 +37,17 @@ class PlaybookSpec:
     write: tuple[str, ...]
     kind: str = "task"  # task | report
 
-    def allows(self, adapter: str, operation: str, tier: str, is_mcp: bool = False) -> bool:
+    def allows(
+        self, adapter: str, operation: str, tier: str, is_mcp: bool = False, family: str | None = None
+    ) -> bool:
         """Whether an operation may be loaded: ``adapter.operation``, ``adapter.*`` (every operation of
-        that tier), or ``mcp.*`` (any MCP server's). Reads come from ``read``, writes from ``write``."""
+        that tier), ``mcp.*`` (any MCP server's) or ``<family>.*``/``<family>.<op>`` (any adapter of a
+        family, such as ``observability`` for every log backend). Reads come from ``read``, writes
+        from ``write``."""
         for entry in self.read if tier == "read" else self.write:
             name, _, op = entry.partition(".")
-            if (name == adapter or (name == "mcp" and is_mcp)) and op in ("*", operation):
+            named = name == adapter or (name == "mcp" and is_mcp) or (family is not None and name == family)
+            if named and op in ("*", operation):
                 return True
         return False
 

@@ -213,3 +213,26 @@ async def test_proposals_start_once_and_report_back(console: httpx.AsyncClient, 
     stack.temporal.results[workflow_id] = {}
     down = await console.post("/api/catalog/propose", headers=ALICE)
     assert (down.status_code, down.json()["error"]["code"]) == (503, "unavailable")
+
+
+async def test_log_sources_are_set_by_admins_and_validated(console: httpx.AsyncClient, stack: Stack) -> None:
+    sid = (
+        await create(console, log_source={"project": "acme-prod", "resource_type": "cloud_run_revision"})
+    ).json()["id"]
+    listed = next(
+        s for s in (await console.get("/api/catalog", headers=BOB)).json()["services"] if s["id"] == sid
+    )
+    assert listed["log_source"] == {"provider": "google_cloud_logging", "project": "acme-prod",
+                                    "resource_type": "cloud_run_revision", "label": "service_name"}  # fmt: skip
+    for bad in (
+        {"project": "Acme Prod"},  # not a project id
+        {"project": "acme-prod", "value": 'x" OR severity>=DEBUG'},  # would leave the filter's literal
+        {"project": "acme-prod", "label": "labels.x"},
+        {"project": "acme-prod", "provider": "datadog"},
+    ):
+        refused = await console.patch(f"/api/catalog/{sid}", json={"log_source": bad}, headers=ALICE)
+        assert refused.status_code == 422, bad
+    cleared = await console.patch(f"/api/catalog/{sid}", json={"log_source": None}, headers=ALICE)
+    assert cleared.json()["log_source"] is None
+    assert (await console.patch(f"/api/catalog/{sid}", json={"log_source": {"project": "acme-prod"}},
+                                headers=BOB)).status_code == 403  # fmt: skip

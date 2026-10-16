@@ -33,10 +33,11 @@ def operations(key: str, config: dict[str, Any]) -> list[Operation]:
     """Operation metadata: in code for native adapters, discovered for MCP servers."""
     from app.tools.github import OPERATIONS as GITHUB
     from app.tools.jira import OPERATIONS as JIRA
+    from app.tools.logs import OPERATIONS as LOGS
     from app.tools.mcp import operation_for
     from app.tools.slack import OPERATIONS as SLACK
 
-    native = {"slack": SLACK, "jira": JIRA, "github": GITHUB}
+    native = {"slack": SLACK, "jira": JIRA, "github": GITHUB, "google_cloud_logging": LOGS}
     if key in native:
         return [op for op in native[key].values() if not op.internal]  # internal ones are code only
     mode: CredentialMode = "user_required" if key == "google_workspace" else "org"
@@ -49,6 +50,7 @@ def configured(settings: Settings, key: str, config: dict[str, Any]) -> bool:
         "jira": bool(settings.atlassian_client_id),
         "github": bool(settings.github_app_slug and settings.github_client_id),
         "google_workspace": bool(settings.google_client_id and settings.google_mcp_url),
+        "google_cloud_logging": True,  # a key an admin uploads: nothing to configure for us
     }.get(key, bool(config.get("url")))
 
 
@@ -379,6 +381,74 @@ async def add_custom_mcp(
     return {"key": key, "enabled": False, "approved": False}
 
 
+class ServiceAccountBody(BaseModel):
+    key_json: str = Field(min_length=20, max_length=20_000)
+
+
+@router.post("/{key}/service-account")
+async def connect_service_account(
+    key: str, body: ServiceAccountBody, request: Request, identity: ConsoleIdentity = Depends(require_admin)
+) -> dict[str, Any]:
+    """Connect with a service account key file. The vault checks it (one token exchange) and keeps
+    it; a key that does not work leaves the previous connection as it was."""
+    integration = CATALOG.get(key)
+    if integration is None or integration.auth != "service_account":
+        raise ApiError(404, "not_found", "This integration does not connect with a service account key.")
+    res = resources(request)
+    if res.db_pool is None or res.vault is None:
+        raise ApiError(503, "vault_unavailable", "The token vault is not configured.")
+    async with tenant_tx(res.db_pool, identity.org_id) as conn:  # committed before the vault reads it
+        await conn.execute(
+            "insert into app.org_integrations (org_id, integration_key, kind) values (%s, %s, %s) "
+            "on conflict (org_id, integration_key) do nothing",
+            (identity.org_id, key, integration.kind),
+        )
+        previous = await (
+            await conn.execute(
+                "update app.connections set status = 'revoked' where integration_key = %s and scope = 'org' "
+                "and status = 'active' returning id",
+                (key,),
+            )
+        ).fetchall()
+        created = await (
+            await conn.execute(
+                "insert into app.connections (org_id, integration_key, scope) values (%s, %s, 'org') "
+                "returning id",
+                (identity.org_id, key),
+            )
+        ).fetchone()
+    assert created is not None
+    try:
+        result = await res.vault.register_service_account(identity.org_id, created[0], body.key_json)
+    except VaultError as exc:
+        async with tenant_tx(res.db_pool, identity.org_id) as conn:
+            await conn.execute("update app.connections set status = 'revoked' where id = %s", (created[0],))
+            for (old,) in previous:  # put the previous connection back
+                await conn.execute("update app.connections set status = 'active' where id = %s", (old,))
+            await conn.execute(
+                "insert into app.audit_log (org_id, actor_type, actor_id, action, target, decision, "
+                "metadata) values (%s, 'user', %s, 'integration.connect_failed', %s, 'denied', %s)",
+                (identity.org_id, identity.membership_id, key, Jsonb({"reason": exc.message[:200]})),
+            )
+        status = 422 if exc.code == "bad_request" else 502
+        raise ApiError(status, "invalid_key" if status == 422 else "provider_refused", exc.message) from exc
+    for (old,) in previous:  # the old key is not needed any more
+        try:
+            await res.vault.delete(identity.org_id, old)
+        except VaultError:
+            log.info("could not delete a replaced service account key", extra={"integration": key})
+    async with tenant_tx(res.db_pool, identity.org_id) as conn:
+        await conn.execute(  # connecting enables it, as an OAuth connection does
+            "update app.org_integrations set enabled = true where integration_key = %s", (key,)
+        )
+        await conn.execute(
+            "insert into app.audit_log (org_id, actor_type, actor_id, action, target, metadata) "
+            "values (%s, 'user', %s, 'integration.connected', %s, %s)",
+            (identity.org_id, identity.membership_id, key, Jsonb({"account": result["external_account_id"]})),
+        )
+    return {"key": key, "account": result["external_account_id"], "project_id": result.get("project_id")}
+
+
 @router.post("/{key}/approve")
 async def approve(
     key: str, request: Request, identity: ConsoleIdentity = Depends(require_admin)
@@ -446,6 +516,15 @@ async def _probe(request: Request, identity: ConsoleIdentity, key: str) -> dict[
                     headers=headers,
                 )
                 response.raise_for_status()
+            elif key == "google_cloud_logging":
+                project = credential.details.get("project_id")
+                response = await http.post(
+                    f"{settings.gcp_logging_url}/v2/entries:list",
+                    json={"resourceNames": [f"projects/{project}"], "pageSize": 1},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                detail = f"Logs of project {project} are readable."
             elif key == "github":
                 response = await http.get(
                     f"{settings.github_api_url}/installation/repositories", headers=headers

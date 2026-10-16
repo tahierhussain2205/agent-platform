@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 Kind = Literal["native", "vendor_mcp", "custom_mcp"]
-Auth = Literal["slack", "oauth2", "github_app", "api_key", "none"]
+Auth = Literal["slack", "oauth2", "github_app", "service_account", "api_key", "none"]
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,16 @@ CATALOG: dict[str, Integration] = {
         "account so the agent can check what they may read.",
         user_links=True,
         provider="github",
+    ),
+    "google_cloud_logging": Integration(
+        key="google_cloud_logging",
+        title="Google Cloud Logging",
+        kind="native",
+        auth="service_account",
+        description="Search logs, error groups and traces of catalog services, with a read only service "
+        "account an admin uploads (the key stays in the vault).",
+        user_links=False,
+        provider="google_cloud_logging",
     ),
     "google_workspace": Integration(
         key="google_workspace",

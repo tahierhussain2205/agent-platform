@@ -119,6 +119,17 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None
 
+    # Google Cloud for observability: service account tokens (minted by the vault) and the Logging,
+    # Error Reporting and Trace APIs (called by the worker). The real endpoints by default.
+    gcp_token_url: str = "https://oauth2.googleapis.com/token"  # noqa: S105 (a URL, not a secret)
+    gcp_logging_url: str = "https://logging.googleapis.com"
+    gcp_error_reporting_url: str = "https://clouderrorreporting.googleapis.com"
+    gcp_trace_url: str = "https://cloudtrace.googleapis.com"
+
+    # The sandbox provider (spec 8; B-008): its API and key, used by the worker and maintenance.
+    sandbox_url: str | None = None
+    sandbox_api_key: SecretStr | None = None
+
     # Key Value (Redis compatible).
     redis_url: SecretStr | None = None
 
@@ -172,6 +183,8 @@ class Settings(BaseSettings):
         "google_mcp_url",
         "google_client_id",
         "google_client_secret",
+        "sandbox_url",
+        "sandbox_api_key",
         mode="before",
     )
     @classmethod

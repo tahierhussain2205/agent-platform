@@ -5,11 +5,12 @@ Only confirmed (active) services suggest owners to the agent. Every change is au
 import logging
 import re
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 import psycopg
 from fastapi import APIRouter, Depends, Request
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, field_validator
 from temporalio.client import WorkflowExecutionStatus
 from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -37,6 +38,7 @@ async def _services(
 ) -> list[dict[str, Any]]:
     query = f"""
         select s.id, s.name, s.description, s.status, s.jira_project, s.jira_component, s.paths, s.evidence,
+               s.log_source,
                s.repository_id, r.full_name as repository, s.confirmed_at, cu.email as confirmed_by_email,
                s.created_at
           from app.services s
@@ -74,6 +76,7 @@ async def _services(
             "jira_component": r["jira_component"],
             "paths": r["paths"],
             "evidence": r["evidence"],
+            "log_source": r["log_source"] or None,
             "confirmed_at": r["confirmed_at"],
             "confirmed_by": r["confirmed_by_email"],
             "created_at": r["created_at"],
@@ -143,6 +146,17 @@ async def options(
     }
 
 
+class LogSourceBody(BaseModel):
+    """Where a service's logs are: for Google Cloud Logging, the project, the resource type and the
+    resource label carrying the service's name (its value defaults to the service's name)."""
+
+    provider: Literal["google_cloud_logging"] = "google_cloud_logging"
+    project: str = Field(pattern=r"^[a-z][a-z0-9-]{4,61}[a-z0-9]$")
+    resource_type: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_.]{0,63}$")
+    label: str = Field(default="service_name", pattern=r"^[a-z_][a-z0-9_]{0,62}$")
+    value: str | None = Field(default=None, min_length=1, max_length=200, pattern=r'^[^"\\]+$')
+
+
 class ServiceBody(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=2000)
@@ -152,6 +166,7 @@ class ServiceBody(BaseModel):
     paths: list[str] | None = Field(default=None, max_length=50)
     owners: list[UUID] | None = Field(default=None, max_length=MAX_OWNERS)
     channels: list[UUID] | None = Field(default=None, max_length=MAX_CHANNELS)
+    log_source: LogSourceBody | None = None
 
     @field_validator("name")
     @classmethod
@@ -226,8 +241,8 @@ async def create(
             row = await fetch_one(
                 conn,
                 "insert into app.services (org_id, name, description, repository_id, jira_project, "
-                "jira_component, paths, status, confirmed_by, confirmed_at) "
-                "values (%s, %s, %s, %s, %s, %s, %s, 'active', %s, now()) returning id",
+                "jira_component, paths, log_source, status, confirmed_by, confirmed_at) "
+                "values (%s, %s, %s, %s, %s, %s, %s, %s, 'active', %s, now()) returning id",
                 (
                     identity.org_id,
                     body.name,
@@ -236,6 +251,7 @@ async def create(
                     body.jira_project,
                     body.jira_component or None,
                     body.paths or [],
+                    Jsonb(body.log_source.model_dump(exclude_none=True) if body.log_source else {}),
                     identity.membership_id,
                 ),
             )
@@ -257,6 +273,8 @@ async def update(
     conn = uow.connection
     before = await _one(conn, service_id)
     fields = body.model_dump(exclude_unset=True, exclude={"owners", "channels"})
+    if "log_source" in fields:
+        fields["log_source"] = Jsonb(body.log_source.model_dump(exclude_none=True) if body.log_source else {})
     if "jira_component" in fields:
         fields["jira_component"] = fields["jira_component"] or None
     if "paths" in fields:

@@ -4,6 +4,8 @@ secrets and the app key)."""
 
 import base64
 import hashlib
+import json
+import re
 import secrets
 import time
 from dataclasses import asdict, dataclass, field
@@ -13,6 +15,8 @@ from urllib.parse import urlencode
 
 import httpx
 import jwt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from app.settings import Settings
 
@@ -319,6 +323,69 @@ class GoogleProvider(OAuthProvider):
         )
 
 
+GCP_SCOPES = ("https://www.googleapis.com/auth/cloud-platform.read-only",)
+
+
+class GoogleCloudProvider(OAuthProvider):
+    """Google Cloud with a service account key an admin uploads (no browser flow): the vault keeps
+    the key, signs a JWT assertion and exchanges it for a one hour token. The token endpoint is
+    always ours to choose (settings), never the key file's ``token_uri``."""
+
+    key = "google_cloud_logging"
+    supports_user_links = False
+
+    @property
+    def configured(self) -> bool:
+        return True
+
+    @staticmethod
+    def parse_key(text: str) -> dict[str, str]:
+        """The parts of a service account key file we keep; refuses anything else."""
+        try:
+            data = json.loads(text)
+        except ValueError as exc:
+            raise ProviderError("invalid_key", "not a JSON service account key") from exc
+        if not isinstance(data, dict) or data.get("type") != "service_account":
+            raise ProviderError("invalid_key", "not a service account key file")
+        email, project, key = data.get("client_email"), data.get("project_id"), data.get("private_key")
+        if not (isinstance(email, str) and email.endswith(".gserviceaccount.com") and "@" in email):
+            raise ProviderError("invalid_key", "the key has no service account email")
+        if not (isinstance(project, str) and re.fullmatch(r"[a-z][a-z0-9-]{4,61}[a-z0-9]", project)):
+            raise ProviderError("invalid_key", "the key has no valid project id")
+        try:
+            loaded = serialization.load_pem_private_key(str(key).encode(), password=None)
+        except (ValueError, TypeError) as exc:
+            raise ProviderError("invalid_key", "the key's private key cannot be read") from exc
+        if not isinstance(loaded, rsa.RSAPrivateKey):
+            raise ProviderError("invalid_key", "the key is not an RSA key")
+        return {"client_email": email, "project_id": project, "private_key": str(key),
+                "private_key_id": str(data.get("private_key_id") or "")}  # fmt: skip
+
+    async def service_account_token(self, key: dict[str, str]) -> tuple[str, float]:
+        now = int(time.time())
+        claims = {
+            "iss": key["client_email"],
+            "scope": " ".join(GCP_SCOPES),
+            "aud": self.settings.gcp_token_url,
+            "iat": now,
+            "exp": now + 3600,
+        }
+        headers = {"kid": key["private_key_id"]} if key.get("private_key_id") else None
+        assertion = jwt.encode(claims, key["private_key"], algorithm="RS256", headers=headers)
+        try:
+            response = await self.http.post(
+                self.settings.gcp_token_url,
+                data={"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer", "assertion": assertion},
+            )
+            body = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ProviderError("unavailable", f"token endpoint: {type(exc).__name__}") from exc
+        if response.status_code != 200 or "access_token" not in body:
+            reason = str(body.get("error_description") or body.get("error") or response.status_code)
+            raise ProviderError(str(body.get("error") or "token_error"), reason[:200])
+        return str(body["access_token"]), time.time() + float(body.get("expires_in") or 3600)
+
+
 def providers(settings: Settings, http: httpx.AsyncClient | None = None) -> dict[str, OAuthProvider]:
     client = http or httpx.AsyncClient(timeout=15.0)
     return {
@@ -327,6 +394,7 @@ def providers(settings: Settings, http: httpx.AsyncClient | None = None) -> dict
             JiraProvider(settings, client),
             GitHubProvider(settings, client),
             GoogleProvider(settings, client),
+            GoogleCloudProvider(settings, client),
         )
     }
 

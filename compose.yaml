@@ -70,6 +70,13 @@ x-backend: &backend
     GOOGLE_AUTH_URL: http://localhost:4100/google/o/oauth2/v2/auth
     GOOGLE_MCP_URL: http://fakes:4100/google/mcp
     GOOGLE_CLIENT_ID: local-google-client
+    # Google Cloud stand-in (logs, errors, traces) and the sandbox provider stand-in (B-008, B-012).
+    GCP_TOKEN_URL: http://fakes:4100/gcp/token
+    GCP_LOGGING_URL: http://fakes:4100/gcp/logging
+    GCP_ERROR_REPORTING_URL: http://fakes:4100/gcp/errorreporting
+    GCP_TRACE_URL: http://fakes:4100/gcp/trace
+    SANDBOX_URL: http://fakes:4100/sandbox/v1
+    SANDBOX_API_KEY: sbx-local-key
   restart: "no"
 
 services:

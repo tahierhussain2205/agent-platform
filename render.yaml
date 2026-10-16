@@ -221,6 +221,11 @@ projects:
               # Model provider (Anthropic API key, B-005). Without it the agent only acknowledges.
               - key: ANTHROPIC_API_KEY
                 sync: false
+              # Sandbox provider for repository work (B-008). Without it the code tools say so.
+              - key: SANDBOX_URL
+                sync: false
+              - key: SANDBOX_API_KEY
+                sync: false
               - key: REDIS_URL
                 fromService:
                   type: keyvalue
@@ -314,6 +319,11 @@ projects:
             envVars:
               - fromGroup: backend-staging
               - fromGroup: db-maintenance-staging
+              # Destroys expired sandboxes at the provider (B-008).
+              - key: SANDBOX_URL
+                sync: false
+              - key: SANDBOX_API_KEY
+                sync: false
               # Starts Slack membership reconciliations through Temporal.
               - key: TEMPORAL_ADDRESS
                 sync: false

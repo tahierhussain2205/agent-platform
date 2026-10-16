@@ -31,6 +31,7 @@ from app.db.tenant import tenant_tx
 from app.integrations.providers import (
     Account,
     GitHubProvider,
+    GoogleCloudProvider,
     OAuthProvider,
     ProviderError,
     TokenSet,
@@ -65,7 +66,7 @@ class VaultError(Exception):
 @dataclass(frozen=True)
 class Credential:
     token: str
-    kind: str  # oauth2 | github_installation | static
+    kind: str  # oauth2 | github_installation | gcp_service_account | static
     connection_id: str
     scope: str  # org | user
     expires_at: float | None = None
@@ -108,6 +109,10 @@ class VaultClient(Protocol):
         redirect_uri: str,
     ) -> dict[str, Any]: ...
 
+    async def register_service_account(
+        self, org_id: UUID | str, connection_id: UUID | str, key_json: str
+    ) -> dict[str, Any]: ...
+
     async def credential(
         self,
         org_id: UUID | str,
@@ -135,6 +140,7 @@ class LocalVault:
         self.store_ = Vault(pool, envelope, cache_seconds=0)
         self.providers = providers or {}
         self._installation_tokens: dict[str, tuple[str, float]] = {}
+        self._service_account_tokens: dict[str, tuple[str, float]] = {}
 
     async def aclose(self) -> None:
         for client in {id(p.http): p.http for p in self.providers.values()}.values():
@@ -158,6 +164,7 @@ class LocalVault:
     async def delete(self, org_id: UUID | str, connection_id: UUID | str) -> None:
         await self.store_.delete(org_id, connection_id)
         self._installation_tokens.pop(str(connection_id), None)
+        self._service_account_tokens.pop(str(connection_id), None)
 
     # ------------------------------------------------------------------ connection rows
 
@@ -286,6 +293,32 @@ class LocalVault:
         await self._record(org_id, connection_id, Account(login, login, {}), None)
         return {"external_account_id": login, "label": login}
 
+    async def register_service_account(
+        self, org_id: UUID | str, connection_id: UUID | str, key_json: str
+    ) -> dict[str, Any]:
+        """Keep a Google Cloud service account key for an org connection, after proving it works
+        (one token exchange). Only the vault ever holds the key."""
+        row = await self._connection(org_id, connection_id)
+        if row["status"] != "active" or row["integration"] != "google_cloud_logging" or row["scope"] != "org":
+            raise VaultError("not_active", "the connection is not waiting for a service account key")
+        cloud = self._provider("google_cloud_logging")
+        assert isinstance(cloud, GoogleCloudProvider)
+        try:
+            key = cloud.parse_key(key_json)
+            token = await cloud.service_account_token(key)
+        except ProviderError as exc:
+            code = "bad_request" if exc.code == "invalid_key" else "provider"
+            raise VaultError(code, f"google cloud: {exc.message}") from exc
+        await self.store_.store(org_id, connection_id, json.dumps({"kind": "gcp_service_account", **key}))
+        self._service_account_tokens[str(connection_id)] = token
+        account = Account(key["client_email"], key["client_email"], {"project_id": key["project_id"]})
+        await self._record(org_id, connection_id, account, None)
+        return {
+            "external_account_id": key["client_email"],
+            "label": key["client_email"],
+            "project_id": key["project_id"],
+        }
+
     # ------------------------------------------------------------------ credentials
 
     async def _check_use(
@@ -329,6 +362,10 @@ class LocalVault:
             token, expires = await self._installation_token(str(connection_id), data["installation_id"])
             details = {"installation_id": data["installation_id"], "account": data["account"]}
             return Credential(token, "github_installation", expires_at=expires, details=details, **base)
+        if data["kind"] == "gcp_service_account":
+            token, expires = await self._service_account_token(str(connection_id), data)
+            details = {"project_id": data["project_id"], "account": data["client_email"]}
+            return Credential(token, "gcp_service_account", expires_at=expires, details=details, **base)
         tokens = TokenSet(
             data["access_token"], data.get("refresh_token"), data.get("expires_at"), data.get("scope", "")
         )
@@ -375,6 +412,19 @@ class LocalVault:
             )
         log.info("token refreshed", extra={"integration": integration})
         return fresh, data
+
+    async def _service_account_token(self, connection_id: str, key: dict[str, Any]) -> tuple[str, float]:
+        cached = self._service_account_tokens.get(connection_id)
+        if cached and cached[1] - time.time() > 300:
+            return cached
+        cloud = self._provider("google_cloud_logging")
+        assert isinstance(cloud, GoogleCloudProvider)
+        try:
+            minted = await cloud.service_account_token(key)
+        except ProviderError as exc:
+            raise VaultError("provider", f"google cloud: {exc.message}") from exc
+        self._service_account_tokens[connection_id] = minted
+        return minted
 
     async def _installation_token(self, connection_id: str, installation_id: str) -> tuple[str, float]:
         cached = self._installation_tokens.get(connection_id)
