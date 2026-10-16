@@ -53,6 +53,8 @@ x-backend: &backend
     ANTHROPIC_API_KEY: sk-ant-local-key
     # Token vault service; the API and worker call it with the shared token.
     VAULT_URL: http://vault:8100
+    # Scheduled reports start within seconds of their time locally (Render: the 300 s default).
+    SCHEDULE_JITTER_SECONDS: "5"
     VAULT_SERVICE_TOKEN: local-vault-service-token
     OAUTH_STATE_SECRET: local-oauth-state-secret
     # Jira, GitHub and Google stand-ins (fakes service). Browser facing pages on localhost, API calls

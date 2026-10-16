@@ -11,12 +11,33 @@ export async function openSlack(page: Page, team: string, userLabel: RegExp | st
   await page.getByLabel('Signed in as').selectOption((await option.getAttribute('value'))!)
 }
 
+/** The signed in person's DM with the agent. A click during a re-render (right after switching
+ * person) can be lost, so it retries until the DM is open. */
+export async function openDm(page: Page) {
+  await expect(async () => {
+    await page.getByTestId('dm-agent').click()
+    await expect(page.locator('#title')).toHaveText('Agent (direct message)', { timeout: 1_000 })
+  }).toPass({ timeout: 10_000 })
+}
+
+/** Open a channel; retried like openDm (the UI re-renders every second and after switching person). */
 export async function openChannel(page: Page, name: string) {
-  await page
-    .getByRole('navigation', { name: 'Channels' })
-    .getByRole('button', { name: new RegExp(`^(#|🔒) ${name}`) })
-    .click()
-  await expect(page.locator('#title')).toContainText(name)
+  await expect(async () => {
+    await page
+      .getByRole('navigation', { name: 'Channels' })
+      .getByRole('button', { name: new RegExp(`^(#|🔒) ${name}`) })
+      .click()
+    await expect(page.locator('#title')).toContainText(name, { timeout: 1_000 })
+  }).toPass({ timeout: 10_000 })
+}
+
+/** Add or remove someone (the agent: U0ACMEBOT) in a channel of the Slack stand-in. */
+export async function join(team: string, channel: string, user: string, joined = true) {
+  await fetch(`${FAKES}/slack/_ui/join`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ team, channel, user, join: joined }),
+  })
 }
 
 /** Post a message and return its timestamp (data-ts of the new message). Other specs may post in

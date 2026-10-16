@@ -237,10 +237,11 @@ def test_reseed_puts_fixture_orgs_back(seeded_db: str) -> None:
         left = conn.execute(
             "select (select count(*) from app.org_integrations where org_id = %s and integration_key <> 'slack'), "
             "(select count(*) from app.connections where org_id = %s and integration_key <> 'slack'), "
-            "(select count(*) from app.usage_daily where org_id = %s)",
-            (acme, acme, acme),
+            "(select count(*) from app.usage_daily where org_id = %s), "
+            "(select count(*) from app.schedules where org_id = %s and status <> 'deleted')",
+            (acme, acme, acme, acme),
         ).fetchone()
-    assert left == (0, 0, 0)  # integrations unconnected, budgets unspent
+    assert left == (0, 0, 0, 0)  # integrations unconnected, budgets unspent, schedules retired
     assert statuses.pop("extra@acme.test") == "removed"
     assert statuses == {m["email"]: m["status"] for m in FIXTURE["orgs"][0]["members"]}
     assert pending == (0,)

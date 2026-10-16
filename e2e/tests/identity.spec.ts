@@ -23,7 +23,7 @@ test('invite, accept, promote, demote, last admin rule, remove', async ({ browse
   await admin.page.getByRole('link', { name: 'Members' }).click()
   await admin.page.getByLabel('Email').fill(inviteeEmail)
   await admin.page.getByRole('button', { name: 'Send invitation' }).click()
-  await expect(admin.page.getByRole('status')).toHaveText(`Invitation sent to ${inviteeEmail}.`)
+  await expect(admin.page.getByText(`Invitation sent to ${inviteeEmail}.`)).toBeVisible() // not the spinner
   await expect(memberRow(admin.page, inviteeEmail).getByText('Invited')).toBeVisible()
 
   // The invitee signs up, sees the invitation and accepts it.
@@ -91,7 +91,7 @@ test('revoking a pending invitation', async ({ browser }) => {
   // Inviting the same address twice in a row is refused.
   await admin.page.getByLabel('Email').fill(email)
   await admin.page.getByRole('button', { name: 'Send invitation' }).click()
-  await expect(admin.page.getByRole('status')).toHaveText(`Invitation sent to ${email}.`)
+  await expect(admin.page.getByText(`Invitation sent to ${email}.`)).toBeVisible()
   await admin.page.getByLabel('Email').fill(email)
   await admin.page.getByRole('button', { name: 'Send invitation' }).click()
   await expect(admin.page.getByRole('alert')).toContainText('already has a pending invitation')

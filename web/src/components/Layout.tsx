@@ -134,6 +134,7 @@ function Shell() {
     { to: '/roles', label: 'Roles' },
     { to: '/slack', label: 'Slack' },
     { to: '/integrations', label: 'Integrations' },
+    { to: '/schedules', label: 'Schedules' },
     ...(isAdmin
       ? [
           { to: '/settings', label: 'Settings' },

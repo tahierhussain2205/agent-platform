@@ -162,6 +162,37 @@ export interface Integration {
   operations: IntegrationOperation[]
 }
 
+export type ScheduleKind = 'channel_summary' | 'jira_progress'
+
+export interface Schedule {
+  id: string
+  name: string
+  kind: ScheduleKind | 'other'
+  channels: { id: string; name: string | null }[]
+  project: string | null
+  cron: string
+  timezone: string
+  description: string
+  next_runs: string[]
+  delivery: { type: 'dm' | 'channel'; channel_id: string | null; channel_name: string | null }
+  status: 'active' | 'paused'
+  pause_reason: 'owner_removed' | 'access_lost' | 'budget' | 'admin' | null
+  pause_detail: string | null
+  paused_at: string | null
+  last_run_at: string | null
+  created_at: string
+  owner: { membership_id: string; email: string; name: string | null; status: string }
+  can_manage: boolean
+}
+
+export interface ScheduleOptions {
+  channels: { id: string; name: string; is_private: boolean }[]
+  delivery_channels: { id: string; name: string }[]
+  jira_enabled: boolean
+  has_slack_account: boolean
+  timezone: string
+}
+
 /** fetch bound to the current session token. */
 export function useApi() {
   const { getToken } = useAuth()
@@ -251,6 +282,28 @@ export function useIntegrations() {
   return useQuery({
     queryKey: [org, 'integrations'],
     queryFn: () => api<{ integrations: Integration[] }>('/api/integrations'),
+  })
+}
+
+export function useSchedules() {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'schedules'],
+    queryFn: () =>
+      api<{ schedules: Schedule[]; limits: { max_schedules: number; active: number } | null }>(
+        '/api/schedules',
+      ),
+  })
+}
+
+export function useScheduleOptions(enabled = true) {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'schedules', 'options'],
+    queryFn: () => api<ScheduleOptions>('/api/schedules/options'),
+    enabled,
   })
 }
 

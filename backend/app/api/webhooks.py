@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app import kv
+from app.api.temporal_client import temporal_client
 from app.auth.console import resources
 from app.identity import svix
 from app.identity.sync import apply_event
@@ -78,11 +79,11 @@ async def clerk_webhook(request: Request) -> JSONResponse:
         await res.kv.set(key, "done", ex=DONE_TTL)
     log.info("clerk webhook %s", outcome, extra={"event_type": event_type, "svix_id": msg_id})
     if event_type == "organizationMembership.deleted" and outcome == "applied":
-        await _after_removal(res, event)
+        await _after_removal(request, res, event)
     return JSONResponse({"status": outcome})
 
 
-async def _after_removal(res: Any, event: dict[str, Any]) -> None:
+async def _after_removal(request: Request, res: Any, event: dict[str, Any]) -> None:
     """The removal is committed: cancel the person's running tasks and notify about their schedules."""
     data = event.get("data") or {}
     try:
@@ -100,4 +101,4 @@ async def _after_removal(res: Any, event: dict[str, Any]) -> None:
             )
         ).fetchone()
     if row is not None and row[2] == "removed":
-        await start_member_removed(res.temporal, get_settings(), row[0], row[1])
+        await start_member_removed(await temporal_client(request), get_settings(), row[0], row[1])

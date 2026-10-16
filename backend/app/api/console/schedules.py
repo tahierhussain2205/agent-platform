@@ -14,12 +14,14 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field
 
 from app.api.console.common import audit, fetch_all, fetch_one
+from app.api.console.slack import sync_schedules
 from app.api.errors import ApiError
+from app.api.temporal_client import temporal_client
 from app.auth.console import ConsoleIdentity, console_identity, require_admin, resources
 from app.db.uow import UnitOfWork, get_uow
 from app.schedules.cron import Cadence, ScheduleError, cadence
 from app.schedules.service import KIND_OF, Draft, validate
-from app.schedules.temporal import start_sync, sync_org, temporal_id
+from app.schedules.temporal import sync_org, temporal_id
 from app.settings import get_settings
 
 log = logging.getLogger(__name__)
@@ -195,7 +197,7 @@ def _quota(exc: psycopg.errors.CheckViolation) -> ApiError | None:
 
 
 def _sync_later(background: BackgroundTasks, request: Request, org_id: UUID) -> None:
-    background.add_task(start_sync, resources(request).temporal, get_settings(), org_id)
+    background.add_task(sync_schedules, request, org_id)
 
 
 @router.post("", status_code=201)
@@ -434,12 +436,13 @@ async def run_now(
     if row["status"] != "active":
         raise ApiError(409, "not_active", "Only an active schedule can run.")
     res = resources(request)
-    if res.temporal is None or res.db_pool is None:
+    client = await temporal_client(request)
+    if client is None or res.db_pool is None:
         raise ApiError(503, "unavailable", "Schedules cannot run right now.")
     settings = get_settings()
-    await sync_org(res.db_pool, res.temporal, settings, identity.org_id)  # it may be brand new
+    await sync_org(res.db_pool, client, settings, identity.org_id)  # it may be brand new
     try:
-        await res.temporal.get_schedule_handle(temporal_id(schedule_id)).trigger()
+        await client.get_schedule_handle(temporal_id(schedule_id)).trigger()
     except Exception as exc:
         log.warning("could not trigger a schedule", extra={"schedule_id": str(schedule_id)}, exc_info=True)
         raise ApiError(503, "unavailable", "The schedule could not be started. Try again.") from exc

@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from app.api.console.common import audit, fetch_all, fetch_one
 from app.api.errors import ApiError
+from app.api.temporal_client import temporal_client
 from app.auth.console import ConsoleIdentity, console_identity, require_admin, resources
 from app.db.uow import UnitOfWork, get_uow
 from app.identity.invite import InviteError, invite_member
@@ -169,7 +170,7 @@ async def update_channel(
                     f"slack-sync-channel-{channel_id}-{uuid.uuid4().hex[:8]}",
                 )
     if paused:  # after the commit (background tasks run once the response is sent)
-        background.add_task(start_sync, resources(request).temporal, get_settings(), identity.org_id)
+        background.add_task(sync_schedules, request, identity.org_id)
     return {"id": channel_id, "is_allowlisted": body.is_allowlisted, "paused_schedules": paused}
 
 
@@ -258,3 +259,8 @@ async def dismiss_requester(
         raise ApiError(409, "already_decided", "This request was already handled or does not exist.")
     await audit(uow.connection, identity, "access_request.dismissed", row["email"] or row["external_user_id"])
     return {"id": request_id, "status": "dismissed"}
+
+
+async def sync_schedules(request: Request, org_id: UUID) -> None:
+    """After the commit: mirror the org's schedules into Temporal and notify about pauses."""
+    await start_sync(await temporal_client(request), get_settings(), org_id)

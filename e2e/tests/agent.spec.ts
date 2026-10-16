@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { signIn, uid } from './helpers'
-import { openChannel, openSlack, post } from './slack-helpers'
+import { openChannel, openDm, openSlack, post } from './slack-helpers'
 
 const AGENT = { timeout: 45_000 }
 
@@ -64,7 +64,7 @@ test('an answer drawn from a private channel is sent privately', async ({ page }
   const thread = await threadOf(page, ts)
   await expect(thread).toContainText('I sent you the answer privately', AGENT)
   await expect(thread).not.toContainText(`Offsite moved to May 12 ${t}`)
-  await page.getByTestId('dm-agent').click()
+  await openDm(page)
   await expect(
     page.getByTestId('message').filter({ hasText: `Offsite moved to May 12 ${t}` }),
   ).toBeVisible()

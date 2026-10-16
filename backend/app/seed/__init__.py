@@ -175,6 +175,12 @@ def _seed_org(cur: psycopg.Cursor[Any], org_id: UUID, org: dict[str, Any], user_
     cur.execute(
         "delete from app.org_integrations where org_id = %s and integration_key <> 'slack'", (org_id,)
     )
+    # Schedules are retired (marked deleted, so the next sync removes their Temporal Schedules).
+    cur.execute(
+        "update app.schedules set status = 'deleted', pause_reason = null "
+        "where org_id = %s and status <> 'deleted'",
+        (org_id,),
+    )
     # Token budgets start unspent (repeated test runs on one day would otherwise exhaust them).
     cur.execute("delete from app.usage_daily where org_id = %s", (org_id,))
     cur.execute("delete from app.usage_events where org_id = %s", (org_id,))

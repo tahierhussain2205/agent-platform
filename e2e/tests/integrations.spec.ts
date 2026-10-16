@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { signIn, trackErrors, uid } from './helpers'
-import { openChannel, openSlack, post } from './slack-helpers'
+import { openChannel, openDm, openSlack, post } from './slack-helpers'
 
 // One story in order: the seed leaves integrations disabled and unconnected, the admin connects,
 // a member links, then the agent uses them.
@@ -95,6 +95,53 @@ test('a member links their own Jira and GitHub accounts', async ({ page }) => {
   await expect(github.getByTestId('github-link')).toContainText('linked as bob-gh')
 })
 
+test('a QA user schedules a daily Jira report and gets exact numbers', async ({
+  browser,
+  page,
+}) => {
+  // The Jira stand-in's issues were created relative to its reset at the start of the run: in the
+  // last day PAY-104 and PAY-106 were created, PAY-105 and PAY-106 resolved; PAY-101, PAY-102 and
+  // PAY-104 are open (two To Do, unassigned; one In Progress).
+  const t = uid()
+  const bob = await (await browser.newContext()).newPage()
+  await signIn(bob, 'bob@acme.test')
+  await bob
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('link', { name: 'Schedules' })
+    .click()
+  await bob.getByRole('button', { name: 'New schedule' }).click()
+  const dialog = bob.getByRole('dialog')
+  await dialog.getByLabel('Name').fill(`PAY daily ${t}`)
+  await dialog.getByLabel(/Jira progress/).check()
+  await dialog.getByLabel('Jira project key').fill('PAY')
+  await dialog.getByLabel('Cadence').selectOption('daily')
+  // A run time just ahead: "Run now" then reports on the day since yesterday at that time.
+  const at = new Date(Date.now() + 120_000)
+  const time = `${String(at.getUTCHours()).padStart(2, '0')}:${String(at.getUTCMinutes()).padStart(2, '0')}`
+  await dialog.getByLabel('Time', { exact: true }).fill(time)
+  await dialog.getByLabel('Time zone').selectOption('UTC')
+  await dialog.getByRole('button', { name: 'Create schedule' }).click()
+  const row = bob.getByRole('listitem', { name: `PAY daily ${t}` })
+  await expect(row).toContainText('Jira progress of PAY')
+  await row.getByRole('button', { name: 'Run now' }).click()
+  await expect(row.getByText('Running now: the report follows shortly.')).toBeVisible({
+    timeout: 30_000,
+  })
+
+  await openSlack(page, 'T0ACME', 'Bob Builder')
+  await openDm(page)
+  const report = page
+    .getByTestId('message')
+    .filter({ hasText: `PAY daily ${t}` })
+    .first()
+  await expect(report).toContainText('Created: 2 · Resolved: 2 · Open now: 3', AGENT)
+  await expect(report).toContainText('Open by status: To Do 2, In Progress 1')
+  await expect(report).toContainText('Open by priority: High 1, Medium 2')
+  await expect(report).toContainText('Open and unassigned: 2')
+  await expect(report).toContainText('PAY-10')
+  await expect(report).toContainText('Sources')
+})
+
 test('the agent answers from Jira and refuses a project the requester cannot browse', async ({
   page,
 }) => {
@@ -120,7 +167,7 @@ test('a private repository answer goes only to the requester', async ({ page }) 
   // Not everyone in #bugs has linked a GitHub account that can read acme/cart-service.
   await expect(thread).toContainText('I sent you the answer privately')
   await expect(thread).not.toContainText('@bob-gh')
-  await page.getByTestId('dm-agent').click()
+  await openDm(page)
   await expect(page.getByTestId('message').filter({ hasText: '@bob-gh' }).last()).toBeVisible()
 })
 

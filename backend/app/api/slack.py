@@ -20,6 +20,7 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app import kv
 from app.api import slack_schedules
+from app.api.temporal_client import temporal_client
 from app.auth.console import resources
 from app.db.tenant import tenant_tx
 from app.identity.invite import InviteError, invite_member
@@ -166,7 +167,7 @@ async def _route(
                 conn, res.kv, org_id, workspace_id, bot[0] if bot else None, event
             )
         if kind in ARCHIVE_EVENTS:  # committed: schedules delivering there are paused (trigger)
-            await start_sync(res.temporal, get_settings(), org_id)
+            await start_sync(await temporal_client(request), get_settings(), org_id)
         return outcome
 
     if kind == "app_home_opened":

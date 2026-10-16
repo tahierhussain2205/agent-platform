@@ -61,7 +61,7 @@ function ChannelRow({ channel, isAdmin }: { channel: SlackChannel; isAdmin: bool
         method: 'PATCH',
         ...json({ is_allowlisted: value }),
       }),
-    ['slack', 'org'],
+    ['slack', 'org', 'schedules'], // removing a channel pauses the schedules delivering there
   )
   const paused = toggle.data?.paused_schedules ?? 0
   // Show the requested state while saving, set in the same render as the click (the mutation only

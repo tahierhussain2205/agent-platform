@@ -115,10 +115,16 @@ function renderMessage(m, opts = {}) {
     ${opts.ephemeral ? '<div class="note">Only visible to you</div>' : ''}${body}${replies}${reply}</div>`;
 }
 
+let loads = 0;
 async function load() {
+  // Only the latest load may render: an older one (started before the person or channel changed)
+  // would switch the view back.
+  const mine = ++loads;
   const params = new URLSearchParams({ team: view.team, user: view.user, channel: view.channel, thread: view.thread });
   const res = await fetch('/slack/_ui/state?' + params);
-  state = await res.json();
+  const next = await res.json();
+  if (mine !== loads) return;
+  state = next;
   if (!view.team && state.teams.length) { view.team = state.teams[0].id; return load(); }
   render();
 }

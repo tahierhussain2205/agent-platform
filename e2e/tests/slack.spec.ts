@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { founder, memberRow, signIn, uid } from './helpers'
-import { newTeam, openChannel, openSlack, openThread, post } from './slack-helpers'
+import { join, newTeam, openChannel, openDm, openSlack, openThread, post } from './slack-helpers'
 
 test('an admin connects a new Slack workspace from the console', async ({ browser }) => {
   const admin = await founder(browser, `Slackers ${uid()}`)
@@ -17,9 +17,9 @@ test('an admin connects a new Slack workspace from the console', async ({ browse
   await expect(admin.page.getByText('users:read.email')).toBeVisible()
   await admin.page.getByRole('button', { name: 'Allow' }).click()
   // Back in the console.
-  await expect(admin.page.getByRole('status')).toContainText(
-    `Connected to the ${teamName} Slack workspace`,
-  )
+  await expect(
+    admin.page.getByText(`Connected to the ${teamName} Slack workspace`, { exact: false }),
+  ).toBeVisible()
   await expect(admin.page.getByText(`Connected to ${teamName}`)).toBeVisible()
   // The first sync runs in the worker; the workspace's channel appears.
   await expect(async () => {
@@ -50,6 +50,7 @@ test('a member mentions the agent in an allowlisted channel and gets a reply in 
 
 test('a channel that is not allowed gets a private explanation', async ({ page, browser }) => {
   // Alice adds the agent to #random in Slack; the console sees it, but #random is not allowed yet.
+  await join('T0ACME', 'C0RANDOM', 'U0ACMEBOT', false) // whatever an earlier run left behind
   await openSlack(page, 'T0ACME', 'Alice Admin')
   await openChannel(page, 'random')
   await page.getByRole('button', { name: 'Add Agent to this channel' }).click()
@@ -100,7 +101,7 @@ test('an uninvited person gets the access request flow and an admin invites them
 
   // Alice gets a DM with Invite and Dismiss.
   await openSlack(page, 'T0ACME', 'Alice Admin')
-  await page.getByTestId('dm-agent').click()
+  await openDm(page)
   const ask = page.getByTestId('message').filter({ hasText: 'asked to use the agent' }).last()
   await expect(ask).toContainText('mallory@acme.test', { timeout: 20_000 })
   await ask.getByRole('button', { name: 'Invite' }).click()

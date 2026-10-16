@@ -166,7 +166,7 @@ function RoleEditor({ member, onClose }: { member: Member; onClose: () => void }
 function ConfirmRemove({ member, onClose }: { member: Member; onClose: () => void }) {
   const remove = useApiMutation(
     (api, id: string) => api(`/api/members/${id}`, { method: 'DELETE' }),
-    ['members', 'org'],
+    ['members', 'org', 'schedules'], // their schedules pause
   )
   return (
     <div className="space-y-4">

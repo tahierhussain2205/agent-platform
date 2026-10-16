@@ -9,6 +9,7 @@ import { IntegrationsPage } from './pages/Integrations'
 import { MembersPage } from './pages/Members'
 import { OverviewPage } from './pages/Overview'
 import { RolesPage } from './pages/Roles'
+import { SchedulesPage } from './pages/Schedules'
 import { SettingsPage } from './pages/Settings'
 import { SlackPage } from './pages/Slack'
 
@@ -53,6 +54,7 @@ const router = createBrowserRouter([
       { path: 'roles', element: <RolesPage /> },
       { path: 'slack', element: <SlackPage /> },
       { path: 'integrations', element: <IntegrationsPage /> },
+      { path: 'schedules', element: <SchedulesPage /> },
       {
         path: 'settings',
         element: (

@@ -15,6 +15,7 @@ from fastapi import Request
 from psycopg.types.json import Jsonb
 
 from app.agent.schedule_setup import proposal_key, summary
+from app.api.temporal_client import temporal_client
 from app.auth.console import resources
 from app.db.tenant import tenant_tx
 from app.schedules.cron import ScheduleError
@@ -167,7 +168,7 @@ async def _proposal(
         )
         await tell(text or "I can't create this schedule.")
         return
-    await start_sync(res.temporal, get_settings(), org_id)
+    await start_sync(await temporal_client(request), get_settings(), org_id)
     delivery = names.get(str(valid.delivery_channel_id)) if valid.delivery_channel_id else None
     text = summary(valid, names, delivery, now)
     await _update_message(
@@ -259,18 +260,19 @@ async def _home(
     except psycopg.errors.CheckViolation:
         await tell("The organization has reached its limit of active schedules.")
         return
+    client = await temporal_client(request)
     if action_id == "schedule_run":
-        if status != "active" or res.temporal is None:
+        if status != "active" or client is None:
             await tell("Only an active schedule can run.")
             return
-        await sync_org(res.db_pool, res.temporal, settings, org_id)
-        await res.temporal.get_schedule_handle(temporal_id(schedule_id)).trigger()
+        await sync_org(res.db_pool, client, settings, org_id)
+        await client.get_schedule_handle(temporal_id(schedule_id)).trigger()
         await tell(f"Running *{name}* now; the report follows shortly.")
     else:
-        await start_sync(res.temporal, settings, org_id)
-    if res.temporal is not None:  # refresh the home tab of the person who clicked
+        await start_sync(client, settings, org_id)
+    if client is not None:  # refresh the home tab of the person who clicked
         try:
-            await res.temporal.start_workflow(
+            await client.start_workflow(
                 "PublishHomeWorkflow",
                 HomeRequest(str(org_id), str(workspace_id), team_id, user),
                 id=f"slack-home-schedule-{user}-{uuid.uuid4().hex[:12]}",

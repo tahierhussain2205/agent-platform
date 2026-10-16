@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.console.common import audit, clerk, fetch_all, fetch_one, identity_tx
 from app.api.errors import ApiError
+from app.api.temporal_client import temporal_client
 from app.auth.console import ConsoleIdentity, console_identity, require_admin, resources
 from app.db.uow import UnitOfWork, get_uow
 from app.identity.clerk_api import ClerkError
@@ -222,7 +223,7 @@ async def remove_member(
     # Removal trigger: linked accounts revoked, owned schedules paused, sessions closed. The follow-up
     # workflow cancels their running tasks and tells admins about the paused schedules.
     await audit(uow.connection, identity, "member.removed", target["email"])
-    await start_member_removed(resources(request).temporal, get_settings(), identity.org_id, membership_id)
+    await start_member_removed(await temporal_client(request), get_settings(), identity.org_id, membership_id)
 
 
 class RoleAssignment(BaseModel):
