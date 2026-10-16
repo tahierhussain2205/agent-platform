@@ -82,13 +82,14 @@ OPERATIONS = {
         internal=True,
     ),
 }
+ISSUE_TYPES = ("Bug", "Task", "Story")  # in the order tried when the project lacks the one asked for
 WRITE_SCHEMA_ISSUE = {
     "type": "object",
     "properties": {
         "project": {"type": "string", "description": "Project key, for example PAY."},
         "summary": {"type": "string", "maxLength": 255},
         "description": {"type": "string", "maxLength": 8000},
-        "issue_type": {"type": "string", "enum": ["Bug", "Task", "Story"]},
+        "issue_type": {"type": "string", "enum": list(ISSUE_TYPES)},
         "assignee_email": {"type": "string", "description": "From catalog_find_owners; omit when unsure."},
         "component": {"type": "string"},
         "labels": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
@@ -501,6 +502,22 @@ class JiraAdapter:
             raise JiraError(f"no Jira user has the email {email}")
         return account
 
+    async def _issue_type(
+        self, ctx: ToolContext, credential: Credential, project: str, wanted: str
+    ) -> dict[str, str]:
+        """The project's own issue type for ``wanted``: team-managed projects have their own types, often
+        without Bug. The same name, else Bug, Task or Story; when none is there, Jira says what is wrong."""
+        meta = await self._call(ctx, credential, "GET", f"issue/createmeta/{project}/issuetypes")
+        types = {
+            str(t.get("name")).lower(): str(t.get("id"))
+            for t in (meta or {}).get("issueTypes") or []
+            if isinstance(t, dict) and not t.get("subtask") and t.get("id")
+        }
+        for name in (wanted, *ISSUE_TYPES):
+            if name.lower() in types:
+                return {"id": types[name.lower()]}
+        return {"name": wanted}
+
     def _issue_link(self, credential: Credential, key: str) -> str:
         site = credential.details.get("site_url") or ""
         return f"{site}/browse/{key}" if site else key
@@ -526,7 +543,9 @@ class JiraAdapter:
         labels = [label, *(LABEL_RE.sub("-", str(x))[:50] for x in (args.get("labels") or [])[:5])]
         fields: dict[str, Any] = {
             "project": {"key": project},
-            "issuetype": {"name": str(args.get("issue_type") or "Bug")},
+            "issuetype": await self._issue_type(
+                ctx, credential, project, str(args.get("issue_type") or "Bug")
+            ),
             "summary": summary,
             "description": adf_doc(str(args.get("description") or "")),
             "labels": labels,

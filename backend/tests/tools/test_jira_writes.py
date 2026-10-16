@@ -35,11 +35,11 @@ async def setup(stack: Stack) -> AsyncIterator[Setup]:
         await delete_jira_issues(RUN)
 
 
-async def as_quinn(path: str, method: str = "GET", **kw: Any) -> Any:
-    """Straight to the Jira stand-in, as someone else who can browse PAY."""
-    code = (
-        await consent("/atlassian/authorize", "acc-quinn", redirect_uri="http://x/cb", state="s", scope="r")
-    )["code"]
+async def as_account(account: str, path: str, method: str = "GET", **kw: Any) -> Any:
+    """Straight to the Jira stand-in, as ``account``."""
+    code = (await consent("/atlassian/authorize", account, redirect_uri="http://x/cb", state="s", scope="r"))[
+        "code"
+    ]
     async with httpx.AsyncClient() as client:
         token = (
             await client.post(
@@ -51,6 +51,11 @@ async def as_quinn(path: str, method: str = "GET", **kw: Any) -> Any:
         return (
             await client.request(method, f"{JIRA}/{path}", headers={"authorization": f"Bearer {token}"}, **kw)
         ).json()
+
+
+async def as_quinn(path: str, method: str = "GET", **kw: Any) -> Any:
+    """As someone else who can browse PAY."""
+    return await as_account("acc-quinn", path, method, **kw)
 
 
 def ticket(**overrides: Any) -> dict[str, Any]:
@@ -121,6 +126,31 @@ async def test_ask_needs_approval_and_auto_proceeds(setup: Setup) -> None:
     )
     assert auto.decision is not None
     assert auto.decision.outcome == "allowed"
+
+
+async def test_the_issue_type_is_one_the_project_has(setup: Setup) -> None:
+    """Staging: a team-managed project (a new site's first) has Task but no Bug, and Jira refused the
+    ticket. SEC in the stand-in is such a project; only Alice browses it, so she links for this test."""
+    stack, acme = setup.stack, setup.acme
+    link = await connect_jira(stack, acme, "acc-alice", acme.admin)
+    try:
+        alice = await setup.executor("alice", mode="auto")
+        bug = {**ticket(project="SEC", summary=f"Rotate the webhook key {RUN}"), "component": "",
+               "assignee_email": ""}  # fmt: skip
+        created = await alice.run("jira_create_issue", {**bug, "_idempotency_key": f"task:t9-{RUN}:action:1"})
+        assert not created.is_error, created.text
+        assert (await as_account("acc-alice", f"issue/{created.data['key']}"))["fields"]["issuetype"] == {
+            "name": "Task"
+        }
+        bob = await setup.executor("bob", mode="auto")
+        story = {**ticket(summary=f"Show saved carts {RUN}"), "issue_type": "story"}
+        created = await bob.run(
+            "jira_create_issue", {**story, "_idempotency_key": f"task:t10-{RUN}:action:1"}
+        )
+        assert not created.is_error, created.text
+        assert (await as_quinn(f"issue/{created.data['key']}"))["fields"]["issuetype"] == {"name": "Story"}
+    finally:
+        sql(stack, "update app.connections set status = 'revoked' where id = %s", (link,))
 
 
 async def test_without_a_linked_account_there_is_no_write(setup: Setup) -> None:
