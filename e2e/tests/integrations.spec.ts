@@ -12,7 +12,10 @@ const card = (page: Page, title: string) => page.getByRole('region', { name: tit
 
 async function integrations(page: Page, email: string) {
   await signIn(page, email)
-  await page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Integrations' }).click()
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('link', { name: 'Integrations' })
+    .click()
   await expect(page.getByRole('heading', { level: 1, name: 'Integrations' })).toBeVisible()
 }
 
