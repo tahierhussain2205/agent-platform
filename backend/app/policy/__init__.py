@@ -11,6 +11,7 @@ Every decision is written to the audit log. The model can be persuaded; this mod
 """
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
@@ -60,6 +61,19 @@ class Destination:
     channel_external_id: str
     channel_id: UUID | None = None
     name: str | None = None
+
+
+@dataclass(frozen=True)
+class Member:
+    """Someone at an output's destination, as the audience check sees them."""
+
+    membership_id: UUID
+    email: str
+    slack_user_id: str
+    links: dict[str, str]  # integration key -> linked external account (a Jira account id, a login)
+
+
+AudienceCheck = Callable[[Source, list[Member]], Awaitable[bool]]
 
 
 @dataclass(frozen=True)
@@ -185,8 +199,12 @@ class Policy:
 
     # ------------------------------------------------------------------ outputs
 
-    async def check_output(self, destination: Destination, sources: list[Source]) -> OutputDecision:
-        decision = await self._audience(destination, sources)
+    async def check_output(
+        self, destination: Destination, sources: list[Source], audience: AudienceCheck | None = None
+    ) -> OutputDecision:
+        """``audience`` answers, for a restricted source (a Jira project, a private repository), whether
+        every given member may see it; without it, restricted sources are delivered privately."""
+        decision = await self._audience(destination, sources, audience)
         await self.audit(
             "policy.output",
             f"{destination.kind} {destination.name or destination.channel_external_id}",
@@ -196,20 +214,26 @@ class Policy:
         )
         return decision
 
-    async def _audience(self, destination: Destination, sources: list[Source]) -> OutputDecision:
+    async def _audience(
+        self, destination: Destination, sources: list[Source], audience: AudienceCheck | None
+    ) -> OutputDecision:
         """Content goes to a channel only if everyone who can read that channel could read every
         source: the same channel, a public channel, or a private channel whose members include
-        every member of a private destination. A public destination never gets private content
-        (anyone in the workspace can join it later). Otherwise: deliver privately."""
+        every member of a private destination. A public destination never gets private Slack
+        content (anyone in the workspace can join it later). Restricted sources from other tools
+        need every member to be an identified org member the adapter confirms can see them.
+        Otherwise: deliver privately."""
         if destination.kind == "dm":
             return OutputDecision("as_is", "Direct message to the requester.")
+        slack = [s for s in sources if s.kind == "slack"]
+        tools = [s for s in sources if s.kind != "slack" and s.visibility != "public"]
         others = {
             s.channel_external_id: s
-            for s in sources
+            for s in slack
             if s.channel_external_id != destination.channel_external_id
         }
         risky = {cid: s for cid, s in others.items() if s.visibility != "public"}
-        if not risky:
+        if not risky and not tools:
             return OutputDecision("as_is", "Every source is visible to this audience.")
         restricted: list[str] = []
         async with tenant_tx(self.pool, self.scope.org_id) as conn:
@@ -223,7 +247,7 @@ class Policy:
             ).fetchone()
             for cid, source in risky.items():
                 if source.visibility == "dm" or dest is None or not dest[0] or not dest[1]:
-                    restricted.append(source.channel_name)
+                    restricted.append(f"#{source.channel_name}")
                     continue
                 members = await (
                     await conn.execute(
@@ -234,13 +258,47 @@ class Policy:
                     )
                 ).fetchone()
                 if not set(dest[1]) <= set(members[0] if members else []):
-                    restricted.append(source.channel_name)
+                    restricted.append(f"#{source.channel_name}")
+            people = await self._members(conn, list(dest[1]) if dest and dest[1] else [])
+        for source in tools:
+            known = people is not None and audience is not None
+            if not known or not await audience(source, people or []):  # type: ignore[misc]
+                restricted.append(source.channel_name)
         if not restricted:
-            return OutputDecision("as_is", "Every member here can read the private sources.")
-        names = ", ".join(f"#{n}" for n in sorted(set(restricted)))
+            return OutputDecision("as_is", "Everyone here can see the sources.")
+        names = ", ".join(sorted(set(restricted)))
         return OutputDecision(
-            "private", f"Uses {names}, which not everyone here can read.", tuple(sorted(set(restricted)))
+            "private", f"Uses {names}, which not everyone here can see.", tuple(sorted(set(restricted)))
         )
+
+    async def _members(self, conn: Any, slack_ids: list[str]) -> list[Member] | None:
+        """The destination's members as org members (email and linked accounts), or None when
+        someone there is not an identified org member (a guest, someone not invited)."""
+        if not slack_ids:
+            return None
+        rows = await (
+            await conn.execute(
+                "select pi.external_user_id, m.id, u.email from app.platform_identities pi "
+                "join app.org_memberships m on m.id = pi.membership_id and m.status in ('active', 'invited') "
+                "join app.users u on u.id = m.user_id "
+                "where pi.workspace_id = %s and pi.external_user_id = any(%s)",
+                (self.scope.workspace_id, slack_ids),
+            )
+        ).fetchall()
+        if len(rows) < len(set(slack_ids)):
+            return None
+        links = await (
+            await conn.execute(
+                "select membership_id, integration_key, external_account_id from app.connections "
+                "where scope = 'user' and status = 'active' and membership_id = any(%s)",
+                ([r[1] for r in rows],),
+            )
+        ).fetchall()
+        linked: dict[UUID, dict[str, str]] = {}
+        for membership, key, account in links:
+            if account:
+                linked.setdefault(membership, {})[key] = account
+        return [Member(r[1], r[2], r[0], linked.get(r[1], {})) for r in rows]
 
     # ------------------------------------------------------------------ audit
 

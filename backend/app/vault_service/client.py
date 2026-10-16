@@ -43,13 +43,23 @@ class RemoteVault:
         await self._post("/v1/secrets/delete", org_id=org_id, connection_id=connection_id)
 
     async def exchange(
-        self, org_id: UUID | str, connection_id: UUID | str, provider: str, code: str, redirect_uri: str,
+        self,
+        org_id: UUID | str,
+        connection_id: UUID | str,
+        provider: str,
+        code: str,
+        redirect_uri: str,
         verifier: str | None = None,
-    ) -> dict[str, Any]:  # fmt: skip
+    ) -> dict[str, Any]:
         data: dict[str, Any] = await self._post(
-            "/v1/exchange", org_id=org_id, connection_id=connection_id, provider=provider, code=code,
-            redirect_uri=redirect_uri, verifier=verifier,
-        )  # fmt: skip
+            "/v1/exchange",
+            org_id=org_id,
+            connection_id=connection_id,
+            provider=provider,
+            code=code,
+            redirect_uri=redirect_uri,
+            verifier=verifier,
+        )
         return data
 
     async def register_installation(
@@ -71,9 +81,12 @@ class RemoteVault:
         return data
 
     async def credential(
-        self, org_id: UUID | str, connection_id: UUID | str, task_id: UUID | str | None = None,
+        self,
+        org_id: UUID | str,
+        connection_id: UUID | str,
+        task_id: UUID | str | None = None,
         membership_id: UUID | str | None = None,
-    ) -> Credential:  # fmt: skip
+    ) -> Credential:
         data = await self._post(
             "/v1/credentials",
             org_id=org_id,

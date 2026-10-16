@@ -20,6 +20,9 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import httpx
+from psycopg.types.json import Jsonb
+
 from app.agent import prompts
 from app.agent.outbox import Sink, SlackSink, post_once
 from app.agent.playbooks import BUILTIN, PlaybookSpec, keys, latest
@@ -36,6 +39,7 @@ from app.agent.types import (
     Understanding,
 )
 from app.db.tenant import tenant_tx
+from app.integrations.catalog import CATALOG
 from app.llm.gateway import BudgetExceededError, CallContext, Lane, LLMGateway
 from app.llm.models import Tier
 from app.policy import Destination, Policy, TaskScope
@@ -44,6 +48,8 @@ from app.slack import service
 from app.slack.adapter import ApprovalRequest, ChannelAdapter, DirectMessage, Progress, Reply
 from app.slack.client import SlackClient, SlackError
 from app.tools.base import RefBook, Source, Target, ToolContext, definitions, tool_name
+from app.tools.executor import ToolExecutor, ToolUnavailableError, build_registry
+from app.tools.mcp import McpAdapter, McpError
 from app.tools.registry import Registry
 from app.tools.slack import SlackAdapter
 
@@ -72,6 +78,8 @@ class AgentDeps:
     approval_ttl_hours: int = 24
     sink_factory: Callable[[str, str], Sink] | None = None  # (team, token) -> Sink
     now: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
+    settings: Any = None  # provider API and MCP base URLs for the integration adapters
+    http: Any = None  # httpx.AsyncClient for the integration adapters
 
 
 @dataclass
@@ -81,6 +89,7 @@ class Context:
     timezone: str
     channel_name: str
     roles: list[prompts.RoleInfo]
+    requester_email: str | None = None
 
 
 def as_tier(value: str) -> Tier:
@@ -113,6 +122,13 @@ class AgentRunner:
                     (ref.workspace_id, ref.membership_id, ref.channel_id),
                 )
             ).fetchone()
+            email = await (
+                await conn.execute(
+                    "select u.email from app.org_memberships m join app.users u on u.id = m.user_id "
+                    "where m.id = %s",
+                    (ref.membership_id,),
+                )
+            ).fetchone()
             roles = await (
                 await conn.execute(
                     "select r.title, r.description, mr.is_primary from app.membership_roles mr "
@@ -124,16 +140,60 @@ class AgentRunner:
         if row is None:
             raise RuntimeError("task context not found")
         channel_name = row[3] or ("direct message" if ref.channel_type == "im" else ref.channel)
-        return Context(row[0], row[1], row[2], channel_name, [prompts.RoleInfo(t, d, p) for t, d, p in roles])
+        role_info = [prompts.RoleInfo(t, d, p) for t, d, p in roles]
+        return Context(row[0], row[1], row[2], channel_name, role_info, email[0] if email else None)
 
     def _call(self, ref: TaskRef, purpose: str) -> CallContext:
         lane: Lane = "batch" if ref.lane == "batch" else "interactive"
         return CallContext(UUID(ref.org_id), UUID(ref.membership_id), UUID(ref.task_id), purpose, lane)
 
-    def _registry(self, ctx: Context) -> Registry:
-        registry = Registry()
-        registry.register(SlackAdapter(ctx.bot_user_id))
-        return registry
+    async def _tools(
+        self, ref: TaskRef, ctx: Context, mode: str, refs: RefBook
+    ) -> tuple[ToolContext, Registry, Policy, ToolExecutor]:
+        """The task's tools: Slack plus the org's enabled integrations, the policy and the executor
+        every call goes through."""
+        tctx = await self._tool_ctx(ref, refs, ctx)
+        registry = await build_registry(tctx, ctx.bot_user_id)
+        policy = Policy(self.d.pool, self._scope(ref, mode), registry)
+        executor = ToolExecutor(tctx, registry, policy)
+        await self._discover(ref, registry, executor)
+        return tctx, registry, policy, executor
+
+    async def _discover(self, ref: TaskRef, registry: Registry, executor: ToolExecutor) -> None:
+        """MCP servers without cached tools: discover them with the credential their mode names, and
+        cache the list on the integration."""
+        for adapter in list(registry.adapters.values()):
+            if not isinstance(adapter, McpAdapter) or adapter.operations:
+                continue
+            try:
+                credential = await executor.credential_for(adapter.key, adapter.mode)
+                if credential is None:
+                    continue
+                tools = await adapter.discover(executor.ctx, credential)
+            except (ToolUnavailableError, McpError, httpx.HTTPError) as exc:
+                log.info(
+                    "mcp discovery skipped", extra={"integration": adapter.key, "reason": str(exc)[:200]}
+                )
+                continue
+            async with tenant_tx(self.d.pool, ref.org_id) as conn:
+                await conn.execute(
+                    "update app.org_integrations set config = config || %s where integration_key = %s",
+                    (Jsonb({"tools": tools}), adapter.key),
+                )
+
+    @staticmethod
+    def _definitions(registry: Registry, spec: PlaybookSpec, kind: str) -> list[dict[str, Any]]:
+        """Tool definitions for the operations of one kind (read or write) the playbook allows."""
+        out: list[dict[str, Any]] = []
+        for adapter in registry.adapters.values():
+            mcp = isinstance(adapter, McpAdapter)
+            names = [
+                op.name
+                for op in adapter.operations.values()
+                if (op.tier == "read") == (kind == "read") and spec.allows(adapter.key, op.name, op.tier, mcp)
+            ]
+            out += definitions(adapter, names)
+        return out
 
     def _scope(self, ref: TaskRef, mode: str) -> TaskScope:
         return TaskScope(
@@ -147,7 +207,7 @@ class AgentRunner:
             "auto" if mode == "auto" else "ask",
         )
 
-    async def _tool_ctx(self, ref: TaskRef, refs: RefBook) -> ToolContext:
+    async def _tool_ctx(self, ref: TaskRef, refs: RefBook, ctx: Context | None = None) -> ToolContext:
         team, token = await self._token(ref)
         return ToolContext(
             UUID(ref.org_id),
@@ -160,6 +220,11 @@ class AgentRunner:
             self.d.slack,
             self.d.kv,
             refs,
+            task_id=UUID(ref.task_id),
+            requester_email=ctx.requester_email if ctx else None,
+            http=self.d.http,
+            settings=self.d.settings,
+            vault=self.d.vault,
         )
 
     def _here(self, ref: TaskRef, ctx: Context) -> Target:
@@ -436,8 +501,6 @@ class AgentRunner:
     async def _artifact(
         self, ref: TaskRef, kind: str, content: dict[str, Any], source_refs: list[str]
     ) -> None:
-        from psycopg.types.json import Jsonb
-
         async with tenant_tx(self.d.pool, ref.org_id) as conn:
             await conn.execute(
                 "insert into app.artifacts (org_id, task_id, kind, content, source_refs) "
@@ -453,12 +516,9 @@ class AgentRunner:
         spec, brief = playbook_of(u)
         ctx = await self._context(ref)
         refs = RefBook("S")
-        tctx = await self._tool_ctx(ref, refs)
-        registry = self._registry(ctx)
-        policy = Policy(self.d.pool, self._scope(ref, u.mode), registry)
-        adapter = registry.adapters["slack"]
+        _, _, _, executor = await self._tools(ref, ctx, u.mode, refs)
         tools = [
-            *definitions(adapter, spec.operations("slack")),
+            *self._definitions(executor.registry, spec, "read"),
             prompts.submit_tool("submit_findings", "Submit findings."),
         ]
         allowed_names = {t["name"] for t in tools}
@@ -493,7 +553,7 @@ class AgentRunner:
                 submitted = next((c for c in calls if c.get("name") == "submit_findings"), None)
                 if submitted is not None:
                     findings = self._findings(submitted.get("input") or {}, refs, denied, read)
-                    where = ", ".join("#" + c for c in read) or "no channel"
+                    where = ", ".join(read) or "no source"
                     summary = f"{len(findings.points)} findings from {where}"
                     await self.step(ref, "gather", "completed", summary)
                     return findings
@@ -505,9 +565,7 @@ class AgentRunner:
                     continue
                 results = []
                 for call in calls:
-                    text, is_error = await self._run_tool(
-                        call, allowed_names, registry, policy, tctx, denied, read
-                    )
+                    text, is_error = await self._run_tool(call, allowed_names, executor, denied, read)
                     results.append(
                         {
                             "type": "tool_result",
@@ -531,30 +589,31 @@ class AgentRunner:
         self,
         call: dict[str, Any],
         allowed: set[str],
-        registry: Registry,
-        policy: Policy,
-        tctx: ToolContext,
+        executor: ToolExecutor,
         denied: list[str],
         read: list[str],
     ) -> tuple[str, bool]:
         name = str(call.get("name"))
         raw_args = call.get("input")
         args: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
-        found = registry.lookup(name) if name in allowed else None
-        if found is None:
-            return f"The tool {name} is not available in this step.", True
-        adapter, op = found
-        target = await adapter.resolve_target(tctx, op.name, args)
-        decision = await policy.check_tool(adapter.key, op.name, target)
-        if not decision.allowed:
-            label = f"#{target.name}" if target else str(args.get("channel") or name)
-            denied.append(f"{label}: {decision.reason}")
-            return f"Access denied: {decision.reason}", True
-        result = await adapter.execute(tctx, op.name, args)
-        if not result.is_error and target is not None and target.name not in read:
-            read.append(target.name)
+        result = await executor.run(name, args, allowed)
+        found = executor.registry.lookup(name)
+        tool = CATALOG[found[0].key].title if found and found[0].key in CATALOG else name
+        label = (
+            f"#{result.target.name}"
+            if result.target
+            else str(args.get("channel") or args.get("repo") or tool)
+        )
+        if result.denied:
+            reason = result.text.removeprefix("Access denied: ").removeprefix("Not available: ")
+            denied.append(f"{label}: {reason}")
+            return result.text, True
+        if result.decision is not None and result.decision.outcome == "needs_approval":
+            return "Changes are not made while gathering information.", True
         if result.is_error:
-            denied.append(result.text)
+            denied.append(f"{label}: {result.text}")
+        elif label not in read:
+            read.append(label)
         return result.text, result.is_error
 
     @staticmethod
@@ -575,11 +634,12 @@ class AgentRunner:
 
     async def plan(self, ref: TaskRef, u: Understanding, f: Findings, tier: str) -> list[PlannedAction]:
         spec, brief = playbook_of(u)
-        writes = spec.operations("slack", "write")
-        if not writes:
-            await self.step(ref, "plan", "skipped", "Read only playbook")
-            return []
         ctx = await self._context(ref)
+        _, registry, _, _ = await self._tools(ref, ctx, u.mode, RefBook())
+        writes = [d["name"] for d in self._definitions(registry, spec, "write")]
+        if not writes:
+            await self.step(ref, "plan", "skipped", "No changes are possible with this playbook")
+            return []
         await self.step(ref, "plan", "running")
         result = await self.d.gateway.complete(
             self._call(ref, "plan"),
@@ -590,9 +650,7 @@ class AgentRunner:
                     "role": "user",
                     "content": f"<brief>{json.dumps(brief_for_model(brief))}</brief>\n"
                     f"<findings>{json.dumps([p['text'] for p in f.points][:20])}</findings>\n"
-                    "<available_actions>"
-                    + ", ".join(tool_name("slack", w) for w in writes)
-                    + "</available_actions>",
+                    "<available_actions>" + ", ".join(writes) + "</available_actions>",
                 }
             ],
             tools=[prompts.submit_tool("submit_plan", "Submit the plan.")],
@@ -601,14 +659,17 @@ class AgentRunner:
         )
         actions = []
         for raw in (result.tool_input("submit_plan").get("actions") or [])[:MAX_ACTIONS]:
-            if not isinstance(raw, dict) or raw.get("tool") != "slack" or raw.get("operation") not in writes:
+            if not isinstance(raw, dict):
+                continue
+            name = tool_name(str(raw.get("tool")), str(raw.get("operation")))
+            if name not in writes:
                 continue
             raw_args = raw.get("args")
             args: dict[str, Any] = raw_args if isinstance(raw_args, dict) else {}
-            if not str(args.get("channel") or "").strip():
+            if raw.get("tool") == "slack" and not str(args.get("channel") or "").strip():
                 continue
-            summary = str(raw.get("summary") or f"{raw['operation']} in #{args['channel']}")[:300]
-            actions.append(PlannedAction("slack", str(raw["operation"]), dict(args), summary))
+            summary = str(raw.get("summary") or f"{raw['tool']} {raw['operation']}")[:300]
+            actions.append(PlannedAction(str(raw["tool"]), str(raw["operation"]), dict(args), summary))
         await self.step(
             ref, "plan", "completed", "; ".join(a.summary for a in actions) or "No changes needed"
         )
@@ -715,13 +776,14 @@ class AgentRunner:
     ) -> ActionOutcome:
         """The policy decides: denied, allowed now, or an approval request in the thread."""
         ctx = await self._context(ref)
-        registry = self._registry(ctx)
-        tctx = await self._tool_ctx(ref, RefBook())
-        policy = Policy(self.d.pool, self._scope(ref, u.mode), registry)
-        adapter = registry.adapters[action.tool]
+        tctx, registry, policy, executor = await self._tools(ref, ctx, u.mode, RefBook())
+        found = registry.lookup(tool_name(action.tool, action.operation))
+        if found is None:
+            return ActionOutcome("denied", f"{action.tool} {action.operation} is not available.")
+        adapter, op = found
         args = self._args(action, answer)
-        target = await adapter.resolve_target(tctx, action.operation, args)
-        decision = await policy.check_tool(action.tool, action.operation, target)
+        target = await adapter.resolve_target(tctx, op.name, args)
+        decision = await policy.check_tool(adapter.key, op.name, target)
         await self.step(ref, "act", "running", action.summary)
         if decision.outcome == "denied":
             return ActionOutcome("denied", decision.reason)
@@ -730,6 +792,7 @@ class AgentRunner:
             audience = await policy.check_output(
                 Destination("channel", target.external_id, target.id, target.name),
                 [Source.from_dict(s) for s in shared],
+                audience=executor.audience,
             )
             if audience.deliver != "as_is":
                 return ActionOutcome("denied", f"Not shared in #{target.name}: {audience.reason}")
@@ -860,15 +923,13 @@ class AgentRunner:
         """Perform an allowed or approved write once (idempotency key in ``external_actions``),
         re-checking the requester's access at execution time."""
         ctx = await self._context(ref)
-        registry = self._registry(ctx)
-        tctx = await self._tool_ctx(ref, RefBook())
-        policy = Policy(self.d.pool, self._scope(ref, u.mode), registry)
-        adapter = registry.adapters[action.tool]
+        tctx, registry, _, executor = await self._tools(ref, ctx, u.mode, RefBook())
+        name = tool_name(action.tool, action.operation)
+        found = registry.lookup(name)
+        if found is None:
+            return ActionOutcome("denied", f"{action.tool} {action.operation} is not available.")
         args = self._args(action, answer)
-        target = await adapter.resolve_target(tctx, action.operation, args)
-        decision = await policy.check_tool(action.tool, action.operation, target)
-        if decision.outcome == "denied":
-            return ActionOutcome("denied", decision.reason)
+        target = await found[0].resolve_target(tctx, found[1].name, args)
         key = f"task:{ref.task_id}:action:{n}"
         async with tenant_tx(self.d.pool, ref.org_id) as conn:
             row = await (
@@ -892,7 +953,16 @@ class AgentRunner:
                         key,
                     ),
                 )
-        result = await adapter.execute(tctx, action.operation, {**args, "_idempotency_key": key})
+        # The executor re-checks the policy and the requester's access at execution time.
+        result = await executor.run(name, {**args, "_idempotency_key": key}, approved=True)
+        if result.denied:
+            async with tenant_tx(self.d.pool, ref.org_id) as conn:
+                await conn.execute(
+                    "update app.external_actions set status = 'failed', error = %s "
+                    "where idempotency_key = %s",
+                    (result.text[:500], key),
+                )
+            return ActionOutcome("denied", result.text.removeprefix("Access denied: "))
         async with tenant_tx(self.d.pool, ref.org_id) as conn:
             await conn.execute(
                 "update app.external_actions "
@@ -916,7 +986,7 @@ class AgentRunner:
         """The output policy check, then the answer in the thread or, when it uses sources not
         everyone here can read, privately to the requester with a note in the thread."""
         ctx = await self._context(ref)
-        policy = Policy(self.d.pool, self._scope(ref, u.mode), self._registry(ctx))
+        _, _, policy, executor = await self._tools(ref, ctx, u.mode, RefBook())
         body = render_answer(c, notes)
         sink = await self._sink(ref)
         if ref.channel_type == "im":
@@ -924,9 +994,8 @@ class AgentRunner:
             where = "dm"
         else:
             sources = [Source.from_dict(s) for s in c.sources]
-            decision = await policy.check_output(
-                Destination("thread", ref.channel, None, ctx.channel_name), sources
-            )
+            destination = Destination("thread", ref.channel, None, ctx.channel_name)
+            decision = await policy.check_output(destination, sources, audience=executor.audience)
             if decision.deliver == "as_is":
                 ts = await self.reply(ref, body, "answer")
                 where = "thread"

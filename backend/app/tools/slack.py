@@ -146,7 +146,9 @@ class SlackAdapter:
 
     # ------------------------------------------------------------------ execution
 
-    async def execute(self, ctx: ToolContext, operation: str, args: dict[str, Any]) -> ToolResult:
+    async def execute(
+        self, ctx: ToolContext, operation: str, args: dict[str, Any], credential: Any = None
+    ) -> ToolResult:
         try:
             if operation == "list_channels":
                 return await self._list_channels(ctx)

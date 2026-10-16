@@ -109,10 +109,14 @@ class JiraProvider(OAuthProvider):
 
     def authorize_url(self, state: str, redirect_uri: str, challenge: str | None, scope: str = "org") -> str:
         params = {
-            "audience": "api.atlassian.com", "client_id": self.settings.atlassian_client_id or "",
-            "scope": " ".join(self.scopes), "redirect_uri": redirect_uri, "state": state,
-            "response_type": "code", "prompt": "consent",
-        }  # fmt: skip
+            "audience": "api.atlassian.com",
+            "client_id": self.settings.atlassian_client_id or "",
+            "scope": " ".join(self.scopes),
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "response_type": "code",
+            "prompt": "consent",
+        }
         return f"{self.settings.atlassian_authorize_url}?{urlencode(params)}"
 
     async def _token(self, body: dict[str, Any], previous: str | None = None) -> TokenSet:

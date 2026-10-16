@@ -89,9 +89,14 @@ class VaultClient(Protocol):
     async def delete(self, org_id: UUID | str, connection_id: UUID | str) -> None: ...
 
     async def exchange(
-        self, org_id: UUID | str, connection_id: UUID | str, provider: str, code: str, redirect_uri: str,
+        self,
+        org_id: UUID | str,
+        connection_id: UUID | str,
+        provider: str,
+        code: str,
+        redirect_uri: str,
         verifier: str | None = None,
-    ) -> dict[str, Any]: ...  # fmt: skip
+    ) -> dict[str, Any]: ...
 
     async def register_installation(
         self,
@@ -103,9 +108,12 @@ class VaultClient(Protocol):
     ) -> dict[str, Any]: ...
 
     async def credential(
-        self, org_id: UUID | str, connection_id: UUID | str, task_id: UUID | str | None = None,
+        self,
+        org_id: UUID | str,
+        connection_id: UUID | str,
+        task_id: UUID | str | None = None,
         membership_id: UUID | str | None = None,
-    ) -> Credential: ...  # fmt: skip
+    ) -> Credential: ...
 
     async def revoke(self, org_id: UUID | str, connection_id: UUID | str) -> None: ...
 
@@ -208,9 +216,14 @@ class LocalVault:
     # ------------------------------------------------------------------ connecting
 
     async def exchange(
-        self, org_id: UUID | str, connection_id: UUID | str, provider: str, code: str, redirect_uri: str,
+        self,
+        org_id: UUID | str,
+        connection_id: UUID | str,
+        provider: str,
+        code: str,
+        redirect_uri: str,
         verifier: str | None = None,
-    ) -> dict[str, Any]:  # fmt: skip
+    ) -> dict[str, Any]:
         row = await self._connection(org_id, connection_id)
         if row["status"] != "active" or row["integration"] != provider:
             raise VaultError("not_active", "the connection is not waiting for this provider")
@@ -296,9 +309,12 @@ class LocalVault:
             raise VaultError("forbidden", "a linked account is used only by its owner")
 
     async def credential(
-        self, org_id: UUID | str, connection_id: UUID | str, task_id: UUID | str | None = None,
+        self,
+        org_id: UUID | str,
+        connection_id: UUID | str,
+        task_id: UUID | str | None = None,
         membership_id: UUID | str | None = None,
-    ) -> Credential:  # fmt: skip
+    ) -> Credential:
         row = await self._connection(org_id, connection_id)
         await self._check_use(org_id, row, task_id, membership_id)
         try:

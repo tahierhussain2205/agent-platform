@@ -34,6 +34,15 @@ class PlaybookSpec:
     read: tuple[str, ...]
     write: tuple[str, ...]
 
+    def allows(self, adapter: str, operation: str, tier: str, is_mcp: bool = False) -> bool:
+        """Whether an operation may be loaded: ``adapter.operation``, ``adapter.*`` (every operation of
+        that tier), or ``mcp.*`` (any MCP server's). Reads come from ``read``, writes from ``write``."""
+        for entry in self.read if tier == "read" else self.write:
+            name, _, op = entry.partition(".")
+            if (name == adapter or (name == "mcp" and is_mcp)) and op in ("*", operation):
+                return True
+        return False
+
     def operations(self, adapter: str, kind: str = "read") -> list[str]:
         """Operation names of one adapter the playbook may load (``read`` or ``write``)."""
         wanted = self.read if kind == "read" else self.write

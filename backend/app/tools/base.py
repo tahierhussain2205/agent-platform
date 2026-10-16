@@ -13,7 +13,9 @@ from uuid import UUID
 ActionTier = Literal["read", "reversible_write", "irreversible"]
 CredentialMode = Literal["org", "org_with_check", "user_required"]
 ApproverRule = Literal["requester", "admin", "requester_or_admin"]
-Visibility = Literal["public", "private", "dm"]
+# restricted: visible to some people only (a Jira project, a private repository, someone's Drive);
+# whether a whole channel may see it is asked of the adapter (``audience_ok``).
+Visibility = Literal["public", "private", "dm", "restricted"]
 
 RESULT_CAP = 12_000  # characters of tool output the model sees per call
 
@@ -40,13 +42,15 @@ class Operation:
 class Source:
     """Where content came from. Drives citations (permalinks) and the audience check."""
 
-    ref: str  # stable: slack:<channel>:<ts>
-    channel_external_id: str
-    channel_name: str
+    ref: str  # stable: slack:<channel>:<ts>, jira:<key>, github:<repo>:<path>, mcp:<server>:<tool>
+    channel_external_id: str  # Slack only ("" otherwise)
+    channel_name: str  # a channel, project, repository or server, for labels and refusals
     visibility: Visibility
-    ts: str
+    ts: str  # Slack only
     label: str = ""
     permalink: str | None = None
+    kind: str = "slack"  # slack | jira | github | mcp
+    audience: str = ""  # what decides who may see it (a project key, a repository)
 
     def to_dict(self) -> dict[str, Any]:
         return {k: v for k, v in self.__dict__.items() if v is not None}
@@ -113,6 +117,12 @@ class ToolContext:
     slack: Any
     kv: Any
     refs: RefBook = field(default_factory=RefBook)
+    task_id: UUID | None = None
+    requester_email: str | None = None
+    http: Any = None  # httpx.AsyncClient for non Slack adapters
+    settings: Any = None  # provider and MCP base URLs
+    vault: Any = None
+    cache: dict[str, Any] = field(default_factory=dict)  # per task lookups (identities, permissions)
 
 
 class ToolAdapter(Protocol):
@@ -123,11 +133,18 @@ class ToolAdapter(Protocol):
         self, ctx: ToolContext, operation: str, args: dict[str, Any]
     ) -> Target | None: ...
 
-    async def execute(self, ctx: ToolContext, operation: str, args: dict[str, Any]) -> ToolResult: ...
+    async def execute(
+        self, ctx: ToolContext, operation: str, args: dict[str, Any], credential: Any = None
+    ) -> ToolResult:
+        """``credential`` is the ``Credential`` the policy's credential mode chose (None for Slack,
+        which uses the bot token). With ``org_with_check``, the adapter must verify the requester
+        can access every resource it returns."""
+        ...
 
 
 def tool_name(adapter_key: str, operation: str) -> str:
-    return f"{adapter_key}_{operation}"
+    """The model facing name (the Messages API allows 64 characters)."""
+    return f"{adapter_key}_{operation}"[:64]
 
 
 def definitions(adapter: ToolAdapter, operations: list[str]) -> list[dict[str, Any]]:

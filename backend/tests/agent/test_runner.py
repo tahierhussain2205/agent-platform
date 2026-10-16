@@ -73,7 +73,7 @@ async def test_summarize_todays_discussion_with_sources(agent: Agent) -> None:
     assert u.brief is not None
     assert u.brief["entities"]["channels"] == ["bugs"]
     assert u.brief["entities"]["time_window"]["label"] == "today"
-    assert f.channels_read == ["bugs"]
+    assert f.channels_read == ["#bugs"]
     texts = [p["text"] for p in f.points]
     assert any(f"Checkout 500s again for big carts {t}" in x for x in texts)
     assert all(s["channel_external_id"] == "C0BUGS" for p in f.points for s in p["sources"])

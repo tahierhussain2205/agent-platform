@@ -292,6 +292,18 @@ def build_router(gh: GitHub) -> APIRouter:
         record = user_of(request)
         return (record["login"], None) if record else (None, installation_of(request))
 
+    @router.get("/github/api/repos/{owner}/{repo}")
+    async def repository(request: Request, owner: str, repo: str) -> JSONResponse:
+        login, inst = caller(request)
+        name = f"{owner}/{repo}"
+        if login is None and inst is None:
+            return gh_error(401, "Bad credentials")
+        visible = name in gh.s["repos"] and (
+            (inst is not None and inst["account"] == owner)
+            or (login is not None and gh.permission(login, name) != "none")
+        )
+        return JSONResponse(gh.repo_json(name)) if visible else gh_error(404, "Not Found")
+
     @router.get("/github/api/repos/{owner}/{repo}/contents/{path:path}")
     async def contents(request: Request, owner: str, repo: str, path: str) -> JSONResponse:
         login, inst = caller(request)

@@ -17,7 +17,7 @@ from app.agent.types import TaskRef
 from app.llm.gateway import LLMGateway, Route
 from app.workflows.slack_activities import SlackActivities, SlackDeps
 from app.workflows.slack_types import Requester, SlackRequest
-from tests.stack import FAKES, Env, Stack, fakes_up, seed_slack_token
+from tests.stack import FAKES, PROVIDER_SETTINGS, Env, Stack, fakes_up, seed_slack_token
 
 MODELS = {"fast": "claude-haiku-4-5-20251001", "standard": "claude-sonnet-5", "advanced": "claude-opus-5-5"}
 
@@ -94,14 +94,25 @@ async def agent(stack: Stack, acme_slack: None) -> AsyncIterator[Agent]:
     def capture(team: str, token: str) -> Sink:
         return sink
 
+    http = httpx.AsyncClient(timeout=30.0)
     deps = AgentDeps(
-        stack.pool, stack.vault, stack.slack, stack.kv, gateway, "http://console.test", 24, capture
+        stack.pool,
+        stack.vault,
+        stack.slack,
+        stack.kv,
+        gateway,
+        "http://console.test",
+        24,
+        capture,
+        settings=PROVIDER_SETTINGS,
+        http=http,
     )
     slack_activities = SlackActivities(
         SlackDeps(stack.pool, stack.vault, stack.slack, stack.kv, "http://console.test", agent_enabled=True)
     )
     yield Agent(stack, AgentRunner(deps), sink, slack_activities, gateway)
     await gateway.aclose()
+    await http.aclose()
 
 
 async def ui_post(user: str, channel: str, text: str, thread_ts: str | None = None) -> dict[str, Any]:

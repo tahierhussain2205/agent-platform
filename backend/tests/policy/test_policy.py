@@ -38,7 +38,9 @@ class TicketAdapter:
     async def resolve_target(self, ctx: ToolContext, operation: str, args: dict[str, Any]) -> Target | None:
         return None
 
-    async def execute(self, ctx: ToolContext, operation: str, args: dict[str, Any]) -> ToolResult:
+    async def execute(
+        self, ctx: ToolContext, operation: str, args: dict[str, Any], credential: Any = None
+    ) -> ToolResult:
         return ToolResult("ok")
 
 
@@ -239,7 +241,7 @@ async def test_audience_check(stack: Stack, channels: dict[str, Target]) -> None
     leak = await alice.check_output(
         general, [src("C0BUGS", "bugs"), src("C0LEADS", "leads-private", "private")]
     )
-    assert (leak.deliver, leak.restricted) == ("private", ("leads-private",))
+    assert (leak.deliver, leak.restricted) == ("private", ("#leads-private",))
     # A private source into a private channel whose members can all read it.
     assert (await alice.check_output(leads, [src("C0EXECS", "execs", "private")])).deliver == "as_is"
     # ...but not the other way round: Bob is in #execs and not in #leads-private.

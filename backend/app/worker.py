@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
+import httpx
 from temporalio.client import Client
 from temporalio.worker import Worker
 
@@ -52,6 +53,8 @@ async def build_slack_activities(
     )
     closers.append(slack.aclose)
     gateway = gateway_from_settings(settings, pool, kv_client)
+    integrations_http = httpx.AsyncClient(timeout=30.0)
+    closers.append(integrations_http.aclose)
     tasks = None
     if gateway is None:
         log.warning("no model provider key (ANTHROPIC_API_KEY): the agent only acknowledges requests")
@@ -67,6 +70,8 @@ async def build_slack_activities(
                     gateway=gateway,
                     console_url=settings.console_url,
                     approval_ttl_hours=settings.approval_ttl_hours,
+                    settings=settings,
+                    http=integrations_http,
                 )
             )
         )

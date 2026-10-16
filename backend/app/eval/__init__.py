@@ -207,7 +207,20 @@ async def evaluate(settings: Settings, cases: list[dict[str, Any]]) -> list[Case
     def capture(team: str, token: str) -> Sink:
         return sink
 
-    deps = AgentDeps(pool, vault, slack, kv_client, gateway, settings.console_url, 24, capture)
+    http = httpx.AsyncClient(timeout=30.0)
+    closers.append(http.aclose)
+    deps = AgentDeps(
+        pool,
+        vault,
+        slack,
+        kv_client,
+        gateway,
+        settings.console_url,
+        24,
+        capture,
+        settings=settings,
+        http=http,
+    )
     intake = SlackActivities(
         SlackDeps(pool, vault, slack, kv_client, settings.console_url, agent_enabled=True)
     )

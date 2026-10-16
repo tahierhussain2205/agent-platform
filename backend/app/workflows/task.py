@@ -121,7 +121,7 @@ class TaskWorkflow:
         f: Findings = await self._do(TaskActivities.gather, ref, u, tier, limit=MODEL_STEP)
         if f.stopped:
             raise StopTask(f.stopped, done)
-        done.append(f"read {', '.join('#' + c for c in f.channels_read) or 'the sources'}")
+        done.append(f"read {', '.join(f.channels_read) or 'the sources'}")
         await self._check_budget(ref, done)
         actions: list[PlannedAction] = await self._do(TaskActivities.plan, ref, u, f, tier, limit=MODEL_STEP)
         await self._check_budget(ref, done)
