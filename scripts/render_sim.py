@@ -85,6 +85,7 @@ DASHBOARD_SECRETS = {
     "GOOGLE_CLIENT_ID": "",
     "GOOGLE_CLIENT_SECRET": "",
     "GOOGLE_MCP_URL": "",
+    "ALERT_WEBHOOK_URL": "",  # no alert channel in the simulation: alerts are only logged
 }
 
 # Render's stand-in default database user: owns the database, can create roles, not a superuser.
