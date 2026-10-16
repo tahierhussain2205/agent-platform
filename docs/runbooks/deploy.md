@@ -10,7 +10,10 @@ Everything Render runs is defined in [`render.yaml`](../../render.yaml). The das
 - On a first deploy the vault and worker start before the API's pre-deploy migration has created their login users: their logs show `FATAL: no such user` until it has, then the pools connect. Later deploys do not have this window.
 - Migration 001 logs `skipped, needs a superuser` for the `bypassrls` statements: expected (Render's user has `CREATEROLE`, is not a superuser; B-010).
 - `sync: false` values left empty in the Blueprint form are not stored; enter them later as their blocker is cleared.
-- Checks run as one-off jobs with the service's environment (dashboard, service, Jobs, or the API): `app check vault` and `app check temporal` from `api-staging`; `app check model` from `worker-staging` (once phase 12 is on `main`).
+- Checks run as one-off jobs with the service's environment (dashboard, service, Jobs, or the API): `app check vault` and `app check temporal` from `api-staging`; `app check model` from `worker-staging`; `app check storage` from any service that holds the R2 key pair (API, worker, maintenance); `app check sandbox` from `worker-staging` (one real sandbox at the provider, destroyed after).
+- **`checksPass` and build filters skip changes.** A service redeploys only for a commit that passes CI *and* touches its `buildFilter` paths. When the commits that changed `backend/` fail CI and the next green commit touches only `fakes/` (a test fix), Render skips it and staging keeps the old code. After a red `main`, check each service's deployed commit (dashboard or `GET /v1/services/{id}/deploys`) and deploy the green head by hand: `POST /v1/services/{id}/deploys` with `{"commitId": "<sha>"}`, or without a commit for the cron job (Render refuses a commit id for cron jobs).
+- Environment values set through the API (`PUT /v1/services/{id}/env-vars/{key}`) take effect on the next deploy; the console needs a rebuild for `VITE_*` values.
+- **Sandboxes run at E2B** (B-008): `render.yaml` sets `SANDBOX_PROVIDER=e2b` on `worker-staging` and `maintenance-staging`; enter the E2B API key as `SANDBOX_API_KEY` on both and leave `SANDBOX_URL` empty. The template (`agent-platform-sandbox`) is built once from a workstation with `scripts/e2b_template.py`; rebuild it when what sandboxes need changes.
 
 ## Resources
 
