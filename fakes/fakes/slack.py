@@ -529,7 +529,7 @@ class Slack:
         c = self.channel(team, p.get("channel", ""))
         if c.get("is_im") or (c["is_private"] and bot not in c["members"]):
             raise SlackApiError("channel_not_found")
-        page, meta = self._page([m for m in c["members"] if m != bot], p)
+        page, meta = self._page(list(c["members"]), p)  # like Slack: the bot is listed too
         return {"members": page, **meta}
 
     def _readable(self, team: dict[str, Any], bot: str, channel_id: str) -> dict[str, Any]:

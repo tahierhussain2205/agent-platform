@@ -342,6 +342,11 @@ class SlackActivities:
                     (req.workspace_id, list(seen)),
                 )
             ).fetchall()
+            bot = await (
+                await conn.execute(
+                    "select bot_user_id from app.workspaces where id = %s", (req.workspace_id,)
+                )
+            ).fetchone()
             targets = await (
                 await conn.execute(
                     "select id, external_id from app.channels where workspace_id = %s and is_allowlisted "
@@ -350,12 +355,16 @@ class SlackActivities:
                     (req.workspace_id, req.channel_ids, req.channel_ids),
                 )
             ).fetchall()
+        bot_user_id = bot[0] if bot else None
         for channel_id, external_id in targets:
+            # Slack lists our own bot among a channel's members: it is not an audience (a member the
+            # output check could not identify would send every restricted answer privately).
             members = [
                 m
                 async for m in self.d.slack.paginate(
                     "conversations.members", "members", token, team, channel=external_id
                 )
+                if m != bot_user_id
             ]
             async with tenant_tx(self.d.pool, req.org_id) as conn:
                 await service.set_members(conn, self.d.kv, req.org_id, channel_id, members)
