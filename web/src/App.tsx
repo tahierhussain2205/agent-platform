@@ -4,6 +4,7 @@ import { useAuth } from './auth/context'
 import { AdminOnly, ConsoleGate } from './components/Layout'
 import { Spinner } from './components/ui'
 import { AuditPage } from './pages/Audit'
+import { CatalogPage } from './pages/Catalog'
 import { CreateOrgPage, InvitationsPage, SignInPage, SignUpPage } from './pages/AuthPages'
 import { IntegrationsPage } from './pages/Integrations'
 import { MembersPage } from './pages/Members'
@@ -54,6 +55,7 @@ const router = createBrowserRouter([
       { path: 'roles', element: <RolesPage /> },
       { path: 'slack', element: <SlackPage /> },
       { path: 'integrations', element: <IntegrationsPage /> },
+      { path: 'catalog', element: <CatalogPage /> },
       { path: 'schedules', element: <SchedulesPage /> },
       {
         path: 'settings',

@@ -194,6 +194,51 @@ export interface ScheduleOptions {
 }
 
 /** fetch bound to the current session token. */
+export type OwnerSource = 'manual' | 'codeowners' | 'component_lead'
+
+export interface CatalogOwner {
+  membership_id: string
+  email: string
+  name: string | null
+  source: OwnerSource
+  reason: string | null
+  active: boolean
+}
+
+export interface CatalogService {
+  id: string
+  name: string
+  description: string | null
+  status: 'proposed' | 'active'
+  repository: { id: string; full_name: string } | null
+  jira_project: string | null
+  jira_component: string | null
+  paths: string[]
+  evidence: string[]
+  confirmed_at: string | null
+  confirmed_by: string | null
+  created_at: string
+  owners: CatalogOwner[]
+  channels: { id: string; name: string }[]
+}
+
+export interface CatalogOptions {
+  members: { membership_id: string; email: string; name: string | null }[]
+  channels: { id: string; name: string }[]
+  repositories: { id: string; full_name: string }[]
+}
+
+export interface CatalogProposal {
+  status: 'none' | 'running' | 'completed' | 'failed' | 'unknown'
+  finished_at?: string | null
+  proposed?: number
+  refreshed?: number
+  linked?: number
+  kept?: number
+  skipped?: number
+  notes?: string[]
+}
+
 export function useApi() {
   const { getToken } = useAuth()
   return useCallback(
@@ -304,6 +349,42 @@ export function useScheduleOptions(enabled = true) {
     queryKey: [org, 'schedules', 'options'],
     queryFn: () => api<ScheduleOptions>('/api/schedules/options'),
     enabled,
+  })
+}
+
+export function useCatalog() {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'catalog'],
+    queryFn: () =>
+      api<{
+        services: CatalogService[]
+        can_manage: boolean
+        last_proposal: ({ at: string } & CatalogProposal) | null
+      }>('/api/catalog'),
+  })
+}
+
+export function useCatalogOptions(enabled: boolean) {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'catalog', 'options'],
+    queryFn: () => api<CatalogOptions>('/api/catalog/options'),
+    enabled,
+  })
+}
+
+/** The latest proposal run, polled while it is running. */
+export function useCatalogProposal(enabled: boolean) {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'catalog', 'proposal'],
+    queryFn: () => api<CatalogProposal>('/api/catalog/proposal'),
+    enabled,
+    refetchInterval: (query) => (query.state.data?.status === 'running' ? 1500 : false),
   })
 }
 
