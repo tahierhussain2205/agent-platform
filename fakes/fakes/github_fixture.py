@@ -81,6 +81,7 @@ REPOS: list[tuple[str, bool, dict[str, str], list[tuple[float, str, str, dict[st
             "src/pricing/cart.py": CART_V1,
             "tests/test_cart.py": "from src.pricing.cart import total\n\n\ndef test_total():\n    assert total([]) == 0\n",
             ".env.example": "WEBHOOK_SIGNING_KEY=change-me\n",
+            "deploy/.env": "WEBHOOK_SIGNING_KEY=whsec_committed_by_mistake_42\n",  # a secret file, never read
         }),
         (72, "bob-gh", "Verify webhook signatures with the signing key", {"src/webhooks/verify.py": VERIFY_V1}),
         (36, "alice-gh", "Reload the webhook signing key on rotation", {"src/webhooks/verify.py": VERIFY_V2}),

@@ -40,7 +40,7 @@ def seed() -> dict[str, Any]:
     }
     repos = repositories()
     return {
-        "version": 2,  # phase 11: histories, deployments, archives
+        "version": 3,  # phase 11: histories, deployments, archives (and a committed secret file)
         "users": users,
         "repos": repos,
         "installations": {},

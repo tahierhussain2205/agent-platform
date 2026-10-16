@@ -181,8 +181,58 @@ def schedule_sync_job(settings: Settings) -> Job:
     return ("schedule_sync", run)
 
 
+def sandbox_cleanup_job(settings: Settings) -> Job:
+    """Destroy sandboxes whose time ran out (a task that never finished cleanly, a release that
+    failed) at the provider, then mark them destroyed. A sandbox the provider no longer has is
+    destroyed already."""
+
+    def run(conn: psycopg.Connection) -> str:
+        expired = conn.execute(
+            "select org_id, id, provider_id from app.maintenance_expired_sandboxes(200)"
+        ).fetchall()
+        if not expired:
+            return "no expired sandboxes"
+        if not settings.sandbox_url or settings.sandbox_api_key is None:
+            return f"{len(expired)} expired sandbox(es) left: no sandbox provider is configured"
+
+        async def destroy_all() -> int:
+            import httpx
+
+            from app.sandbox import HttpSandboxProvider, SandboxError
+
+            url, key = settings.sandbox_url, settings.sandbox_api_key
+            assert url is not None
+            assert key is not None
+            done = 0
+            async with httpx.AsyncClient(timeout=20) as http:
+                provider = HttpSandboxProvider(url, key.get_secret_value(), http)
+                for _org, sandbox_row, provider_id in expired:
+                    try:
+                        if provider_id:
+                            await provider.destroy(str(provider_id))
+                    except SandboxError:
+                        log.warning(
+                            "could not destroy an expired sandbox", extra={"sandbox": str(sandbox_row)}
+                        )
+                        continue
+                    conn.execute("select app.maintenance_sandbox_destroyed(%s)", (sandbox_row,))
+                    done += 1
+            return done
+
+        done = asyncio.run(destroy_all())
+        return f"{done} of {len(expired)} expired sandbox(es) destroyed"
+
+    return ("sandbox_cleanup", run)
+
+
 def run_jobs(settings: Settings) -> int:
-    jobs = [*JOBS, slack_reconcile_job(settings), task_reconcile_job(settings), schedule_sync_job(settings)]
+    jobs = [
+        *JOBS,
+        slack_reconcile_job(settings),
+        task_reconcile_job(settings),
+        schedule_sync_job(settings),
+        sandbox_cleanup_job(settings),
+    ]
     results = run_all(settings.component_dsn("maintenance"), jobs)
     for r in results:
         status = "ok" if r.ok else "FAILED"

@@ -15,7 +15,9 @@ import httpx
 from app.db.tenant import tenant_tx
 from app.policy import Member
 from app.policy.redaction import redact
+from app.sandbox import SandboxError, SandboxProvider, provider_from_settings
 from app.tools.base import Operation, Source, Target, ToolContext, ToolResult, cap
+from app.tools.github_code import CODE_OPERATIONS, CodeOperations
 from app.tools.http import request
 from app.vault_service import Credential
 
@@ -49,21 +51,31 @@ OPERATIONS = {
 }
 
 
+OPERATIONS.update(CODE_OPERATIONS)
+
+
 class GitHubAdapter:
     key = "github"
 
     def __init__(self, api_url: str) -> None:
         self.api_url = api_url.rstrip("/")
         self.operations = OPERATIONS
+        self.code = CodeOperations(self)
+
+    def sandbox_provider(self, ctx: ToolContext) -> SandboxProvider:
+        provider = provider_from_settings(ctx.settings, ctx.http)
+        if provider is None:
+            raise SandboxError("no sandbox provider is configured")
+        return provider
 
     async def resolve_target(self, ctx: ToolContext, operation: str, args: dict[str, Any]) -> Target | None:
         return None
 
-    async def _get(self, ctx: ToolContext, token: str, path: str, **params: Any) -> Any:
+    async def _get(self, ctx: ToolContext, token: str, endpoint: str, /, **params: Any) -> Any:
         response = await request(
             ctx.http,
             "GET",
-            f"{self.api_url}/{path}",
+            f"{self.api_url}/{endpoint}",
             params=params or None,
             headers={"authorization": f"Bearer {token}", "accept": "application/vnd.github+json"},
         )
@@ -133,6 +145,18 @@ class GitHubAdapter:
                 return await self._file(
                     ctx, credential, repo, str(args.get("path") or "").lstrip("/"), args.get("ref")
                 )
+            if operation == "search_code":
+                return await self.code.search(ctx, credential, repo, args)
+            if operation == "read_code":
+                return await self.code.read(ctx, credential, repo, args)
+            if operation == "list_files":
+                return await self.code.files(ctx, credential, repo, args)
+            if operation == "list_commits":
+                return await self.code.commits(ctx, credential, repo, args)
+            if operation == "get_commit":
+                return await self.code.commit(ctx, credential, repo, str(args.get("sha") or "").strip())
+            if operation == "list_deployments":
+                return await self.code.deployments(ctx, credential, repo, args)
             if operation == "get_codeowners":
                 for path in CODEOWNERS_PATHS:
                     result = await self._file(ctx, credential, repo, path, None)
@@ -142,6 +166,8 @@ class GitHubAdapter:
                 return ToolResult(f"{repo} has no CODEOWNERS file.", is_error=True)
         except GitHubError as exc:
             return ToolResult(f"GitHub refused the request: {exc}", is_error=True)
+        except SandboxError as exc:
+            return ToolResult(f"Code is not available: {exc}.", is_error=True)
         except httpx.HTTPError as exc:
             return ToolResult(f"GitHub error: {type(exc).__name__}", is_error=True)
         return ToolResult(f"Unknown operation {operation}.", is_error=True)

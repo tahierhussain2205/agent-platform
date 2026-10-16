@@ -45,6 +45,8 @@ from app.llm.gateway import BudgetExceededError, CallContext, Lane, LLMGateway
 from app.llm.models import Tier
 from app.policy import Destination, Policy, TaskScope
 from app.policy.redaction import redact
+from app.sandbox import provider_from_settings
+from app.sandbox.workspaces import Workspaces
 from app.slack import service
 from app.slack.adapter import ApprovalRequest, ChannelAdapter, DirectMessage, Progress, Reply, escape
 from app.slack.client import SlackClient, SlackError
@@ -377,6 +379,20 @@ class AgentRunner:
                     "update app.approvals set status = 'expired' where task_id = %s and status = 'pending'",
                     (ref.task_id,),
                 )
+        await self._release_sandboxes(ref)
+
+    async def _release_sandboxes(self, ref: TaskRef) -> None:
+        """The task's sandboxes go with it (best effort: they expire, and maintenance destroys them)."""
+        provider = provider_from_settings(self.d.settings, self.d.http) if self.d.http else None
+        if provider is None:
+            return
+        try:
+            released = await Workspaces(self.d.pool, provider).release_task(ref.org_id, ref.task_id)
+        except Exception:
+            log.warning("could not release the task's sandboxes", exc_info=True)
+            return
+        if released:
+            log.info("sandboxes released", extra={"count": released})
 
     async def budget(self, ref: TaskRef) -> BudgetCheck:
         status = await self.d.gateway.budget_status(self._call(ref, "budget"))
