@@ -509,11 +509,14 @@ def test_admin_deletes_created_issues_and_resets_the_seed(client: TestClient) ->
     bob = jira_tokens(client, "acc-bob")["access_token"]
     fields = {"project": {"key": "PAY"}, "summary": "Temporary ticket", "issuetype": {"name": "Bug"}}
     key = jira(client, bob, "issue", "POST", json={"fields": fields}).json()["key"]
+    (listed,) = client.get("/_admin/atlassian/issues", params={"contains": "temporary"}).json()
+    assert (listed["key"], listed["reporter"], listed["assignee"]) == (key, "acc-bob", None)
     jira(client, bob, "issue/PAY-101/assignee", "PUT", json={"accountId": "acc-alice"})
     # Seed issues are never deleted, whatever the phrase.
     assert client.post("/_admin/atlassian/issues/delete", json={"contains": ["ticket", "checkout"]}).json() == {
         "deleted": [key]
     }
+    assert client.get("/_admin/atlassian/issues", params={"contains": "temporary"}).json() == []
     assert jira(client, bob, f"issue/{key}").status_code == 404
     assert client.post("/_admin/atlassian/issues/reset").json()["issues"] == 10
     assert jira(client, bob, "issue/PAY-101").json()["fields"]["assignee"]["accountId"] == "acc-bob"

@@ -1,6 +1,6 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Browser, type Page } from '@playwright/test'
 import { signIn, trackErrors, uid } from './helpers'
-import { openChannel, openDm, openSlack, post } from './slack-helpers'
+import { FAKES, join, openChannel, openDm, openSlack, post } from './slack-helpers'
 
 // One story in order: the seed leaves integrations disabled and unconnected, the admin connects,
 // a member links, then the agent uses them.
@@ -228,4 +228,165 @@ test('a custom MCP server needs approval before it can be enabled', async ({ pag
   await dialog.getByRole('button', { name: 'Add server' }).click()
   await card(page, broken).getByRole('button', { name: 'Approve' }).click()
   await expect(card(page, broken).getByText('Broken', { exact: true })).toBeVisible()
+})
+
+// ------------------------------------------------------------------ Example 1: tickets from chat
+
+type Issue = { key: string; summary: string; reporter: string; assignee: string | null }
+
+async function issues(contains: string): Promise<Issue[]> {
+  const r = await fetch(`${FAKES}/_admin/atlassian/issues?contains=${encodeURIComponent(contains)}`)
+  return (await r.json()) as Issue[]
+}
+
+/** A new channel with Bob, Quinn, Alice and the agent, allowed by Alice in the console (its
+ * members synced), so tests do not read each other's reports. */
+async function ticketsChannel(browser: Browser): Promise<string> {
+  const name = `tickets-${uid()}`
+  const created = await fetch(`${FAKES}/_admin/slack/channels`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ team: 'T0ACME', name, members: [] }),
+  })
+  const { id } = (await created.json()) as { id: string }
+  for (const user of ['U0ACMEBOT', 'U0BOB', 'U0QUINN', 'U0ALICE']) await join('T0ACME', id, user)
+  const admin = await (await browser.newContext()).newPage()
+  await signIn(admin, 'alice@acme.test')
+  await admin.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Slack' }).click()
+  const allow = admin.getByLabel(`Allow the agent in ${name}`)
+  await expect(allow).toBeVisible({ timeout: 15_000 })
+  await allow.check()
+  await expect(allow).toBeEnabled()
+  await expect(async () => {
+    await admin.reload()
+    await expect(admin.getByTestId(`channel-${name}`).locator('td').nth(2)).toHaveText('3', {
+      timeout: 1_000,
+    })
+  }).toPass({ timeout: 45_000 })
+  await admin.close()
+  return name
+}
+
+/** Open the thread of a message as soon as it has a reply (the task may still be waiting). */
+async function repliesTo(page: Page, ts: string) {
+  const message = page.locator(`[data-testid="message"][data-ts="${ts}"]`)
+  await expect(message.getByRole('button', { name: /\d+ repl/ })).toBeVisible(AGENT)
+  await message.getByRole('button', { name: /\d+ repl/ }).click()
+  const thread = page.getByTestId('thread')
+  await expect(thread).toBeVisible()
+  return thread
+}
+
+test('an admin proposes the service catalog from GitHub and Jira and confirms it', async ({
+  page,
+}) => {
+  await integrations(page, 'alice@acme.test')
+  // Proposals read CODEOWNERS within the admin's own access: Alice links her GitHub account.
+  const github = card(page, 'GitHub')
+  await github.getByRole('button', { name: 'Link my account' }).click()
+  await consent(page, 'alice-gh (alice@acme.test)')
+  await expect(github.getByTestId('github-link')).toContainText('linked as alice-gh')
+
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('link', { name: 'Catalog' })
+    .click()
+  await expect(page.getByRole('heading', { level: 1, name: 'Service catalog' })).toBeVisible()
+  await page.getByRole('button', { name: 'Propose services' }).click()
+  await expect(page.getByTestId('proposal-status')).toContainText(
+    'Last proposal: 5 proposed',
+    AGENT,
+  )
+  const proposed = page.getByRole('list', { name: 'Proposed services' })
+  const cart = proposed.getByRole('listitem', { name: 'cart-service' })
+  await expect(cart).toContainText('Repository acme/cart-service · Jira PAY / Checkout')
+  await expect(cart).toContainText('CODEOWNERS /src/pricing/ in acme/cart-service')
+  await expect(cart).toContainText('lead of Jira component PAY/Checkout')
+  await cart.getByText('Why this was proposed').click()
+  await expect(cart).toContainText('@acme/platform (no member with this linked GitHub account)')
+  const refunds = proposed.getByRole('listitem', { name: 'Refunds' })
+  await expect(refunds).toContainText('lead of Jira component PAY/Refunds')
+
+  await cart.getByRole('button', { name: 'Confirm' }).click()
+  await refunds.getByRole('button', { name: 'Confirm' }).click()
+  const confirmed = page.getByRole('list', { name: 'Confirmed services' })
+  await expect(confirmed.getByRole('listitem', { name: 'cart-service' })).toBeVisible()
+  await expect(confirmed.getByRole('listitem', { name: 'Refunds' })).toBeVisible()
+  page.once('dialog', (d) => void d.accept())
+  await proposed
+    .getByRole('listitem', { name: 'Webhooks' })
+    .getByRole('button', { name: 'Archive' })
+    .click()
+  await expect(proposed.getByRole('listitem', { name: 'Webhooks' })).toHaveCount(0)
+})
+
+test("Example 1 in Ask mode: tickets are created after approval, in the requester's name", async ({
+  browser,
+  page,
+}) => {
+  const channel = await ticketsChannel(browser)
+  await say(
+    page,
+    'Quinn Tester',
+    channel,
+    'Checkout fails with a 500 for carts over 20 items again',
+  )
+  await say(page, 'Quinn Tester', channel, 'Discount codes fail at checkout')
+  await say(page, 'Alice Admin', channel, 'Refund emails are sent twice')
+  const ts = await say(
+    page,
+    'Bob Builder',
+    channel,
+    `@agent create Jira tickets for the problems reported today in #${channel}`,
+  )
+  const thread = await repliesTo(page, ts)
+  const approvals = thread.getByTestId('message').filter({ hasText: 'Approval needed' })
+  await expect(approvals).toHaveCount(2, AGENT) // requested together
+  await expect(thread).toContainText('Waiting for 2 approvals')
+  const discount = approvals.filter({ hasText: 'Discount codes fail at checkout' })
+  await expect(discount).toContainText(
+    'Assignee: Bob Builder (bob@acme.test), owner of cart-service',
+  )
+  const refunds = approvals.filter({ hasText: 'Refund emails are sent twice' })
+  await expect(refunds).toContainText('Assignee: Alice Admin (alice@acme.test), owner of Refunds')
+  await discount.getByRole('button', { name: 'Approve' }).click()
+  await refunds.getByRole('button', { name: 'Approve' }).click()
+  await expect(thread).toContainText('✅ Done', AGENT)
+  await expect(thread).toContainText('looks like PAY-101') // a duplicate is not filed again
+  const [ticket] = await issues('Discount codes fail at checkout')
+  expect(ticket).toMatchObject({ reporter: 'acc-bob', assignee: 'acc-bob' })
+  await expect(thread.getByRole('link', { name: ticket.key })).toBeVisible()
+  const [refund] = await issues('Refund emails are sent twice')
+  expect(refund).toMatchObject({ reporter: 'acc-bob', assignee: 'acc-alice' })
+})
+
+test('Example 1 in Auto mode: tickets are created right away and linked in the thread', async ({
+  browser,
+  page,
+}) => {
+  // Writes use the requester's own Jira account: Alice links hers.
+  const admin = await (await browser.newContext()).newPage()
+  await integrations(admin, 'alice@acme.test')
+  await card(admin, 'Jira').getByRole('button', { name: 'Link my account' }).click()
+  await consent(admin, /Alice Admin/)
+  await expect(card(admin, 'Jira').getByTestId('jira-link')).toContainText('linked as acc-alice')
+  await admin.close()
+
+  const channel = await ticketsChannel(browser)
+  await say(page, 'Quinn Tester', channel, 'Gift cards fail at checkout')
+  await say(page, 'Bob Builder', channel, 'Refund totals are wrong for partial refunds')
+  const ts = await say(
+    page,
+    'Alice Admin',
+    channel,
+    `@agent create Jira tickets for the problems reported today in #${channel}`,
+  )
+  const thread = await threadOf(page, ts)
+  await expect(thread.getByTestId('message').filter({ hasText: 'Approval needed' })).toHaveCount(0)
+  const [gift] = await issues('Gift cards fail at checkout')
+  expect(gift).toMatchObject({ reporter: 'acc-alice', assignee: 'acc-bob' })
+  const [partial] = await issues('Refund totals are wrong')
+  expect(partial).toMatchObject({ reporter: 'acc-alice', assignee: 'acc-alice' })
+  await expect(thread.getByRole('link', { name: gift.key })).toBeVisible()
+  await expect(thread.getByRole('link', { name: partial.key })).toBeVisible()
 })

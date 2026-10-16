@@ -371,13 +371,22 @@ def gather(messages: list[dict[str, Any]], first_user: str, tools: set[str] | No
                 asked.add(json.dumps(block.get("input"), sort_keys=True))
             elif block.get("type") == "tool_result":
                 results.append(text_of(block.get("content")))
-    calls = [c for c in tool_calls(tools or set(), the_brief) if json.dumps(c["input"], sort_keys=True) not in asked]
-    if "catalog_find_owners" in (tools or set()) and results:  # who owns each reported problem
+    tickets = "catalog_find_owners" in (tools or set())
+    # Tickets: Jira is searched per reported problem below, not for everything at once.
+    generic = [c for c in tool_calls(tools or set(), the_brief) if not (tickets and c["name"] == "jira_search_issues")]
+    calls = [c for c in generic if json.dumps(c["input"], sort_keys=True) not in asked]
+    if tickets and results:  # who owns each reported problem, and whether it has an issue already
         for problem in problems(results)[:5]:
-            args = {"text": problem["text"].split(": ", 1)[-1][:300]}
-            if json.dumps(args, sort_keys=True) not in asked:
-                calls.append(use("catalog_find_owners", args))
-    other_tools = bool(tool_calls(tools or set(), the_brief))
+            said = problem["text"].split(": ", 1)[-1]
+            owners = {"text": said[:300]}
+            longest = sorted(_words(PROBLEM.sub(" ", said)), key=lambda w: (-len(w), w))[:2]
+            wanted = [("catalog_find_owners", owners)]
+            if longest and "jira_search_issues" in (tools or set()):
+                wanted.append(("jira_search_issues", {"text": " ".join(longest)}))
+            for name, args in wanted:
+                if json.dumps(args, sort_keys=True) not in asked:
+                    calls.append(use(name, args))
+    other_tools = bool(generic)
     if channels:
         for name in channels:
             args = {"channel": name, **{k: tw[k] for k in ("start", "end") if tw.get(k)}}

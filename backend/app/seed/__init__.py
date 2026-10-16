@@ -181,6 +181,8 @@ def _seed_org(cur: psycopg.Cursor[Any], org_id: UUID, org: dict[str, Any], user_
         "where org_id = %s and status <> 'deleted'",
         (org_id,),
     )
+    # The service catalog starts empty (owners and channels go with their services).
+    cur.execute("delete from app.services where org_id = %s", (org_id,))
     # Token budgets start unspent (repeated test runs on one day would otherwise exhaust them).
     cur.execute("delete from app.usage_daily where org_id = %s", (org_id,))
     cur.execute("delete from app.usage_events where org_id = %s", (org_id,))

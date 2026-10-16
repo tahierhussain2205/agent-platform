@@ -662,6 +662,16 @@ def build_router(jira: Atlassian) -> APIRouter:
             jira.store.save()
         return {"expired": n}
 
+    @router.get("/_admin/atlassian/issues")
+    def list_issues(contains: str = "") -> list[dict[str, Any]]:
+        """Issues whose summary contains a phrase, with who reported and who is assigned (for tests
+        that check what the agent created)."""
+        return [
+            {k: i.get(k) for k in ("key", "summary", "status", "reporter", "assignee", "components", "labels")}
+            for i in jira.s["issues"].values()
+            if contains.lower() in i["summary"].lower()
+        ]
+
     @router.post("/_admin/atlassian/issues/delete")
     async def delete_issues(request: Request) -> dict[str, list[str]]:
         """Delete issues created since the seed whose summary contains one of the phrases (tests clean
