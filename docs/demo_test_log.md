@@ -49,6 +49,7 @@ undercharged; `total()` takes any discount, so a promotion above 100% makes a to
 | 26 | 3 | note | Run 3's plan has a step "Reconcile with the Jira history: since KAN-6/KAN-7/KAN-8 were marked Done …": the earlier test runs' tickets for the same problems. A fresh Jira project has none. | won't fix (test data) |
 | 27 | 3 | bug | A plan came back empty and was posted that way: "Plan for KAN-11, KAN-12: · confidence low" with no goal, evidence or steps (the model's call carried none of the plan's fields; asked again, it gave a full plan). | fixed: an empty plan is asked for once more, then the agent says it could not write one instead of posting an empty plan; the schema repair also unwraps fields put under a key of the model's own; the shape is logged (names and types only) |
 | 28 | 3 | UX | "Not covered" lines from the investigators carry our refs ("… [L1]") and tool names ("confirmed via catalog_find_owners lookup"). | fixed: refs are stripped from gaps, and the investigators are told points and gaps are read by people |
+| 29 | CI | test | The Slack stand-in's `test_rate_limits` failed on main once: one call a second, and its two calls straddled a second. | fixed: three later calls, at least one limited |
 
 ## Runs
 
