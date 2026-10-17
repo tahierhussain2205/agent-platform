@@ -219,6 +219,7 @@ QUESTION = re.compile(
 
 INVESTIGATE = re.compile(
     r"\b(investigate|look into|dig into|debug|root cause|figure out why|plan (a|the) fix)\b"
+    r"|\bplan (to address|to fix|for (the|these|this|those) (tickets?|issues?|bugs?|problems?))\b"
     r"|\bwhy (is|are|does|do|did)\b.*\b(fail\w*|broken|slow|erroring|crash\w*|down)\b",
     re.IGNORECASE,
 )
@@ -591,8 +592,7 @@ def report(user: str) -> dict[str, Any]:
         refs = [str(n) for n in point.get("sources", [])]
         used += refs
         lines.append(f"• {point['text']} " + " ".join(f"[{n}]" for n in refs))
-    if gaps:
-        lines.append("_Not covered: " + "; ".join(gaps) + "_")
+    # The gaps are listed by the platform below the answer (the prompt says not to repeat them).
     return {"answer": "\n".join(lines), "used_sources": used, "confidence": "high", "not_verified": []}
 
 

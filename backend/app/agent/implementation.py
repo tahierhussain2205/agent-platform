@@ -31,6 +31,7 @@ from psycopg.types.json import Jsonb
 
 from app.agent import prompts, recipes
 from app.agent.changes import TEST_FILE, check_change
+from app.agent.investigation import plan_issue_keys
 from app.agent.types import (
     ActionOutcome,
     ChangeCase,
@@ -92,6 +93,11 @@ def repository_of(plan: dict[str, Any]) -> str | None:
             return str(f["repo"])
     service = (plan.get("case") or {}).get("service") or {}
     return str(service["repository"]) if service.get("repository") else None
+
+
+def issue_keys_of(case: ChangeCase) -> list[str]:
+    """The change's issues (a case from before several issues has only ``issue_key``)."""
+    return list(case.issue_keys) or ([case.issue_key] if case.issue_key else [])
 
 
 def tail(text: str, limit: int = 3000) -> str:
@@ -173,7 +179,8 @@ class Implementation:
         recipe = await recipes.ensure(self.r.d.pool, ref.org_id, self._provider(), ws) if ws else None
         if recipe is None:
             notes.append("No test setup was detected for this repository")
-        issue_key = ((plan.get("case") or {}).get("issue") or {}).get("key")
+        issue_keys = plan_issue_keys(plan)
+        issue_key = issue_keys[0] if issue_keys else None
         goal = str(plan.get("goal") or brief.get("goal") or "the plan")
         if revision:
             goal = f"Address the feedback on {repo}#{revision['number']}: {revision.get('title') or goal}"
@@ -183,7 +190,7 @@ class Implementation:
         await self.r.step(ref, "gather", "completed", f"{repo} at {base[:7]} on {branch}")
         return ChangeCase(
             repo, base, branch, goal[:300], plan_for_model(plan), issue_key, revision, recipe,
-            bool(prepared.data.get("private", True)), notes,
+            bool(prepared.data.get("private", True)), notes, issue_keys=issue_keys,
         )  # fmt: skip
 
     # ------------------------------------------------------------------ implement
@@ -427,8 +434,9 @@ class Implementation:
         repository_id: Any,
     ) -> PlannedAction:
         number = case.revision["number"] if case.revision else None
+        keys = ", ".join(issue_keys_of(case))
         title = (
-            f"{case.issue_key}: {case.plan.get('goal') or case.goal}" if case.issue_key and not number
+            f"{keys}: {case.plan.get('goal') or case.goal}" if keys and not number
             else f"Address review feedback (#{number})" if number else str(case.plan.get("goal") or case.goal)
         )[:120]  # fmt: skip
         link = await self._thread_link(ref)
@@ -441,6 +449,9 @@ class Implementation:
         evidence = [f"{len(exported.files)} files (+{exported.added} -{exported.removed}): {files}",
                     f"Verified: {verification.summary}",
                     *(f"Needs a person: {a}" for a in exported.ask)]  # fmt: skip
+        if keys and not number:  # approving the push approves these too (they follow it)
+            verb = "move" if "," in keys else "moves"
+            evidence.append(f"Then {keys} {verb} to In Review, each with a link to the pull request")
         args = {"repo": case.repo, "change": exported.artifact_id, "base_sha": case.base_sha,
                 "branch": case.branch,
                 "title": title, "body": body, "summary": implemented.summary}  # fmt: skip
@@ -600,8 +611,9 @@ def pr_body(
     links = []
     if thread:
         links.append(f"[Slack thread]({thread})")
-    if case.issue_key:
-        links.append(f"Issue {case.issue_key}")
+    keys = issue_keys_of(case)
+    if keys:
+        links.append(("Issues " if len(keys) > 1 else "Issue ") + ", ".join(keys))
     if links:
         parts.append("### Context\n" + " · ".join(links))
     parts.append("_Opened by the agent on behalf of the person who asked; a person reviews and merges._")

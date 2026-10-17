@@ -73,6 +73,8 @@ LOW_CONFIDENCE = 0.6
 MAX_WINDOW_DAYS = 31
 MAX_PERMALINKS = 25
 MAX_ACTIONS = 5
+MAX_TICKETS = 5  # tickets a change moves along (the plan's issues)
+TICKET_ACTIONS = 100  # action numbers of those updates, apart from the plan's and the push
 AUTO_PLAN_LIMIT = 3  # Auto drops to Ask above this many changes (spec 4.5.3)
 CONVERSATION_LIMIT = 50
 TERMINAL = ("completed", "failed", "cancelled")
@@ -405,6 +407,23 @@ class AgentRunner:
                 )
             ).fetchone()
         return dict(row[0]) if row and isinstance(row[0], dict) else None
+
+    async def _session_tickets(self, ref: TaskRef) -> list[str]:
+        """The Jira issues earlier tasks of this thread created, oldest first: "these tickets" in a
+        follow-up (the agent does not read its own messages back)."""
+        if not ref.session_id:
+            return []
+        async with tenant_tx(self.d.pool, ref.org_id) as conn:
+            rows = await (
+                await conn.execute(
+                    "select a.target_ref from app.external_actions a join app.tasks t on t.id = a.task_id "
+                    "where t.session_id = %s and a.task_id <> %s and a.integration_key = 'jira' "
+                    "and a.operation = 'create_issue' and a.status = 'succeeded' "
+                    "and a.target_ref like 'jira:%%' order by a.performed_at, a.created_at",
+                    (ref.session_id, ref.task_id),
+                )
+            ).fetchall()
+        return list(dict.fromkeys(str(r[0]).removeprefix("jira:") for r in rows))
 
     async def _session_pull(self, ref: TaskRef) -> dict[str, Any] | None:
         """The pull request a task of this thread opened most recently: ``{"repo", "number", "url"}``."""
@@ -903,8 +922,14 @@ class AgentRunner:
             actions.append(PlannedAction(str(raw["tool"]), str(raw["operation"]), dict(args), summary))
         if any(a.tool == "jira" for a in actions):  # checked in code before anything reaches the policy
             _, _, _, executor = await self._tools(ref, ctx, u.mode, RefBook())
+            repositories = [str(r) for r in (brief.get("entities") or {}).get("repositories") or []]
             actions = await tickets.review(
-                executor, actions, f.points[:30], str(brief.get("goal") or ""), partial(self._permalinks, ref)
+                executor,
+                actions,
+                f.points[:30],
+                str(brief.get("goal") or ""),
+                partial(self._permalinks, ref),
+                repositories,
             )
         # Never drop a requested change silently: the answer must not read as if it happened.
         if unknown or unreadable:
@@ -938,6 +963,7 @@ class AgentRunner:
     async def compose(self, ref: TaskRef, u: Understanding, f: Findings, tier: str) -> Composed:
         """Write the answer from the findings, then verify citations in code."""
         spec, brief = playbook_of(u)
+        tickets_only = spec.key == "jira_tickets"  # the outcome is the tickets: a short answer
         ctx = await self._context(ref)
         numbered: list[dict[str, Any]] = []
         index: dict[str, int] = {}
@@ -956,7 +982,9 @@ class AgentRunner:
             result = await self.d.gateway.complete(
                 self._call(ref, "report"),
                 as_tier(tier),
-                system=prompts.system(ctx.org_name, spec, ctx.roles, prompts.REPORT),
+                system=prompts.system(
+                    ctx.org_name, spec, ctx.roles, prompts.REPORT_TICKETS if tickets_only else prompts.REPORT
+                ),
                 messages=[
                     {
                         "role": "user",
@@ -993,8 +1021,16 @@ class AgentRunner:
             answer,
         )
         verified = sum(1 for p in points if p["sources"])
+        # The gaps are listed by code (the model is told not to repeat them); the model's own doubts
+        # only when they say something else. A ticket answer keeps neither: its tickets are the point.
+        gaps = [] if tickets_only else [f"Not covered: {g}"[:200] for g in f.gaps[:5]]
+        doubts = (
+            []
+            if tickets_only
+            else [d for d in model_unverified if not any(tickets.similar(d, g) for g in f.gaps)]
+        )
         not_verified = [
-            escape(t) for t in [p["text"][:120] for p in points if not p["sources"]] + model_unverified
+            escape(t) for t in [*gaps, *(p["text"][:120] for p in points if not p["sources"]), *doubts]
         ]
         if points and not order:
             not_verified.append("The answer does not cite its sources.")
@@ -1281,6 +1317,52 @@ class AgentRunner:
             )
             return ActionOutcome("done", done, result=result.data)
         return ActionOutcome("done", f"Done: {action.summary}", result=result.data)
+
+    async def move_tickets(
+        self,
+        ref: TaskRef,
+        u: Understanding,
+        keys: list[str],
+        status: str,
+        link: str | None = None,
+        approved: bool = False,
+    ) -> list[str]:
+        """A change's tickets follow it: each moves to ``status`` and, with ``link`` (its pull
+        request), gets a comment linking it; each update is an external write with its own key.
+        ``approved``: a person approved the work these updates are part of (the push, whose request
+        listed them). Otherwise they are made only where the policy allows them without asking
+        (Auto) and skipped in Ask. Returns the notes for the thread."""
+        keys = [k for k in dict.fromkeys(keys) if k][:MAX_TICKETS]
+        if not keys:
+            return []
+        ctx = await self._context(ref)
+        _, registry, policy, _ = await self._tools(ref, ctx, u.mode, RefBook())
+        if registry.lookup(tool_name("jira", "transition_issue")) is None:
+            return []
+        if not approved and (await policy.check_tool("jira", "transition_issue", None)).outcome != "allowed":
+            return []
+        base = TICKET_ACTIONS + (TICKET_ACTIONS // 2 if link else 0)  # the push is action 1
+        moved: list[str] = []
+        notes: list[str] = []
+        for i, key in enumerate(keys):
+            move = PlannedAction(
+                "jira", "transition_issue", {"key": key, "status": status}, f"Move {key} to {status}"
+            )
+            outcome = await self.execute(ref, u, move, base + i, "")
+            if outcome.status != "done":
+                notes.append(f"⚠️ {key} stayed where it was: {outcome.message[:200]}")
+                continue
+            moved.append(key)
+            if link:
+                text = f"The agent opened a pull request for this issue: {link}"
+                comment = PlannedAction(
+                    "jira", "add_comment", {"key": key, "text": text}, f"Link {link} on {key}"
+                )
+                await self.execute(ref, u, comment, base + MAX_TICKETS + i, "")
+        if moved:
+            linked = " with a link to the pull request" if link else ""
+            notes.insert(0, f"🎫 {', '.join(moved)} moved to {status}{linked}.")
+        return notes
 
     # ------------------------------------------------------------------ deliver
 

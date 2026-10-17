@@ -75,6 +75,7 @@ async def test_writes_are_reversible_user_required_and_not_offered_when_internal
         "create_issue": ("reversible_write", "user_required"),
         "assign_issue": ("reversible_write", "user_required"),
         "add_comment": ("reversible_write", "user_required"),
+        "transition_issue": ("reversible_write", "user_required"),
     }
     names = [d["name"] for d in definitions(JiraAdapter("http://x"), list(ops))]
     assert "jira_match_accounts" not in names
@@ -151,6 +152,40 @@ async def test_the_issue_type_is_one_the_project_has(setup: Setup) -> None:
         assert (await as_quinn(f"issue/{created.data['key']}"))["fields"]["issuetype"] == {"name": "Story"}
     finally:
         sql(stack, "update app.connections set status = 'revoked' where id = %s", (link,))
+
+
+async def test_a_status_change_moves_once_and_is_a_write(setup: Setup) -> None:
+    """The demo's tickets follow the change (In Progress, In Review): a reversible write with the
+    requester's account, never offered to a model, done once however often it is asked."""
+    ops = JiraAdapter("http://x").operations
+    assert ops["transition_issue"].internal
+    assert ops["transition_issue"].tier == "reversible_write"
+    names = [d["name"] for d in definitions(JiraAdapter("http://x"), list(ops))]
+    assert "jira_transition_issue" not in names
+    bob = await setup.executor("bob", mode="auto")
+    made = await bob.run("jira_create_issue", {**ticket(summary=f"Saved carts lose coupons {RUN}"),
+                                               "_idempotency_key": f"task:t11-{RUN}:action:1"})  # fmt: skip
+    key = made.data["key"]
+    asked = await (await setup.executor("bob", mode="ask")).run(
+        "jira_transition_issue", {"key": key, "status": "In Review"}
+    )
+    assert asked.decision is not None
+    assert asked.decision.outcome == "needs_approval"
+    assert (await as_quinn(f"issue/{key}"))["fields"]["status"]["name"] == "To Do"  # nothing moved
+    moved = await bob.run("jira_transition_issue", {"key": key, "status": "in review"})
+    assert moved.text == f"Moved {key} to In Review"
+    assert (moved.data["status"], moved.data["from"], moved.data["target_ref"]) == (
+        "In Review",
+        "To Do",
+        f"jira:{key}",
+    )
+    again = await bob.run("jira_transition_issue", {"key": key, "status": "In Review"})
+    assert again.text == f"{key} is already In Review"
+    assert (await as_quinn(f"issue/{key}"))["fields"]["status"]["name"] == "In Review"
+    nowhere = await bob.run("jira_transition_issue", {"key": key, "status": "Shipped"})
+    assert nowhere.is_error
+    assert "no way from In Review to Shipped" in nowhere.text
+    assert (await bob.run("jira_transition_issue", {"key": "nope", "status": "Done"})).is_error
 
 
 async def test_without_a_linked_account_there_is_no_write(setup: Setup) -> None:

@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9]{1,9}-\d+$")
+MAX_ISSUES = 3  # issues one plan covers
 LEAD = timedelta(hours=2)  # a window starts this long before the issue was created
 LOOKBACK = timedelta(hours=24)
 MIN_BRIEF_WINDOW = timedelta(hours=1)  # shorter is "now", not a window (a request in the present tense)
@@ -144,11 +145,25 @@ def facts_of(kind: str, seen: list[tuple[str, ExecResult]]) -> dict[str, Any]:
     return out
 
 
+def plan_issue_keys(plan: dict[str, Any]) -> list[str]:
+    """The issues a stored plan is about (plans before several issues kept one, as ``issue``)."""
+    case = plan.get("case") or {}
+    found = [str(i.get("key")) for i in case.get("issues") or [] if isinstance(i, dict) and i.get("key")]
+    single = (case.get("issue") or {}).get("key")
+    return found or ([str(single)] if single else [])
+
+
 def case_for_model(case: CaseFile) -> dict[str, Any]:
     out: dict[str, Any] = {"goal": case.goal, "window": {"start": case.window[0], "end": case.window[1]}}
-    if case.issue:
-        out["issue"] = {k: case.issue.get(k) for k in ("key", "summary", "status", "created", "components")}
-        out["issue"]["description"] = str(case.issue.get("description") or "")[:1500]
+    issues = case.issues or ([case.issue] if case.issue else [])
+    if issues:
+        out["issues"] = [
+            {
+                **{k: i.get(k) for k in ("key", "summary", "status", "created", "components", "url")},
+                "description": str(i.get("description") or "")[: 1500 // len(issues)],
+            }
+            for i in issues
+        ]
     if case.service:
         out["service"] = case.service
     if case.prior_plan:
@@ -290,7 +305,12 @@ def render(plan: dict[str, Any]) -> str:
     def cites(numbers: list[int]) -> str:
         return "".join(f" [{n}]" for n in numbers)
 
-    lines = [f"*Plan: {escape(plan['goal'])}* · confidence {plan['confidence']}"]
+    keys = [
+        f"<{i['url']}|{i['key']}>" if i.get("url") else str(i["key"])  # our links: kept as they are
+        for i in plan.get("issues") or []
+    ]
+    subject = f"Plan for {', '.join(keys)}" if keys else "Plan"
+    lines = [f"*{subject}: {escape(plan['goal'])}* · confidence {plan['confidence']}"]
     if plan["summary"]:
         lines.append(escape(plan["summary"]))
     if plan["revision"]["changed"] and plan["revision"]["what_changed"]:
@@ -358,29 +378,35 @@ class Investigation:
         entities = brief.get("entities") or {}
         notes: list[str] = []
         points: list[dict[str, Any]] = []
-        issue: dict[str, Any] | None = None
+        issues: list[dict[str, Any]] = []
         prior = await self.r._prior_plan(ref)
-        keys = [k for k in entities.get("ids") or [] if KEY_RE.match(str(k))][:3]
-        if not keys and prior:  # a follow-up in the thread: the issue the current plan is about
-            previous = ((prior.get("case") or {}).get("issue") or {}).get("key")
-            keys = [previous] if previous else []
-        for key in keys:
+        keys = [str(k).upper() for k in entities.get("ids") or [] if KEY_RE.match(str(k))]
+        if not keys and prior:  # a follow-up in the thread: the issues the current plan is about
+            keys = plan_issue_keys(prior)
+        if not keys:  # "these tickets": the ones the agent created earlier in this thread
+            keys = await self.r._session_tickets(ref)
+        for key in list(dict.fromkeys(keys))[:MAX_ISSUES]:
             if "jira" not in registry.adapters:
                 notes.append(f"{key}: Jira is not connected")
                 break
             before = set(refs.by_ref)
             found = await executor.run(tool_name("jira", "get_issue"), {"key": key})
             if not found.is_error and found.data.get("key"):
-                issue = found.data
-                points += self._points(refs, before, f"{key} ({issue.get('status')}): {issue.get('summary')}")
-                break
+                issues.append(found.data)
+                points += self._points(
+                    refs, before, f"{key} ({found.data.get('status')}): {found.data.get('summary')}"
+                )
+                continue
             notes.append(f"{key}: {found.text[:200]}")
+        issue = issues[0] if issues else None
         text = " ".join(
             str(x)
             for x in (
                 brief.get("goal"),
-                (issue or {}).get("summary"),
-                str((issue or {}).get("description") or "")[:600],
+                *(
+                    f"{i.get('summary')} {str(i.get('description') or '')[: 600 // len(issues)]}"
+                    for i in issues
+                ),
             )
             if x
         )
@@ -420,7 +446,8 @@ class Investigation:
             ref,
             "gather",
             "completed",
-            f"{(issue or {}).get('key') or 'No issue'}, {(service or {}).get('name') or 'no service'}",
+            f"{', '.join(str(i['key']) for i in issues) or 'No issue'}, "
+            f"{(service or {}).get('name') or 'no service'}",
         )
         return CaseFile(
             str(brief.get("goal") or ""),
@@ -431,6 +458,7 @@ class Investigation:
             points,
             notes,
             window[0] if past else None,
+            issues,
         )
 
     @staticmethod
@@ -571,6 +599,10 @@ class Investigation:
             sources = await self.r._permalinks(ref, [numbered[n - 1] for n in order])
             return Composed(text, sources, "low", 0, len(model_points), [], stopped=str(exc))
         plan, not_verified = check_plan(raw, len(numbered), kinds, seen_files)
+        plan["issues"] = [
+            {"key": str(i["key"]), "url": i.get("url")}
+            for i in case.issues or ([case.issue] if case.issue else [])
+        ]
         not_verified = [*(f"Not covered: {g}" for g in gaps[:5]), *not_verified]
         text, order = renumber(render(plan), len(numbered))
         sources = await self.r._permalinks(ref, [numbered[n - 1] for n in order])

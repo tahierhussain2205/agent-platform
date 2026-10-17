@@ -160,7 +160,8 @@ async def choose_assignee(
         return Choice(wanted, str(c["name"]), "; ".join(c["reasons"]))
     if wanted:
         name = await _member(executor, wanted)
-        if named_in(goal, wanted, name):
+        requester = (executor.ctx.requester_email or "").lower()
+        if named_in(goal, wanted, name) and wanted != requester:  # who asks is in every request
             return Choice(wanted, name or wanted, "named in the request")
     notes = [f"Not assigned to {wanted}: the service catalog has no evidence they own this"] if wanted else []
     if candidates and (len(candidates) == 1 or candidates[0]["score"] > candidates[1]["score"]):
@@ -178,6 +179,7 @@ async def review(
     points: list[dict[str, Any]],
     goal: str,
     permalinks: Permalinks,
+    repositories: list[str] | None = None,
 ) -> list[PlannedAction]:
     """The actions as they will be offered to the policy; dropped ones carry ``skip``."""
     out: list[PlannedAction] = []
@@ -205,7 +207,9 @@ async def review(
         if action.operation != "create_issue":
             out.append(action)
             continue
-        out.append(await _ticket(executor, action, args, points, goal, permalinks, planned))
+        out.append(
+            await _ticket(executor, action, args, points, goal, permalinks, planned, repositories or [])
+        )
     return out
 
 
@@ -217,6 +221,7 @@ async def _ticket(
     goal: str,
     permalinks: Permalinks,
     planned: list[tuple[str, str]],
+    repositories: list[str],
 ) -> PlannedAction:
     summary = redact(" ".join(str(args.get("summary") or "").split()))[0][:255]
     description = redact(str(args.get("description") or "").strip())[0][:20000]
@@ -226,10 +231,14 @@ async def _ticket(
     shown = escape(summary)  # for Slack
     if not summary:
         return replace(action, skip="A proposed ticket had no summary, so it was not created.")
-    owners = await executor.run(
-        tool_name("catalog", "find_owners"),
-        {"text": f"{summary}\n{description}"[:2000], "project": project, "component": component},
-    )
+    match: dict[str, Any] = {
+        "text": f"{summary}\n{description}"[:2000],
+        "project": project,
+        "component": component,
+    }
+    if repositories:  # named in the request: the service is the one of that repository
+        match["repository"] = repositories[0]
+    owners = await executor.run(tool_name("catalog", "find_owners"), match)
     services = owners.data.get("services") or []
     best = services[0] if services else {}
     if not project and best.get("jira_project"):
@@ -237,7 +246,10 @@ async def _ticket(
     if not component and best.get("jira_component") and best.get("jira_project") == project:
         component = str(best["jira_component"])
     if not PROJECT_RE.match(project):
-        return replace(action, skip=f'No Jira project for "{shown}": name the project and ask again.')
+        project, choices = await _only_project(executor)
+        if not project:
+            named = f" ({choices})" if choices else ""
+            return replace(action, skip=f'No Jira project for "{shown}": name one{named} and ask again.')
     earlier = next((s for p, s in planned if p == project and similar(summary, s)), None)
     if earlier:
         return replace(
@@ -255,7 +267,7 @@ async def _ticket(
     evidence: list[str] = []
     if component:
         component, missing = await _component_of(executor, project, component)
-        if missing:
+        if missing and missing_was_asked(missing, goal):  # one the model made up is just left out
             evidence.append(missing)
     ask = action.ask
     if failed:
@@ -297,6 +309,23 @@ async def _ticket(
         evidence=evidence,
         ask=ask,
     )
+
+
+async def _only_project(executor: ToolExecutor) -> tuple[str, str]:
+    """The one Jira project the requester can browse, or nothing and the ones there are."""
+    listed = await executor.run(tool_name("jira", "list_projects"), {})
+    keys = [
+        str(p.get("key")) for p in listed.data.get("projects") or [] if PROJECT_RE.match(str(p.get("key")))
+    ]
+    if listed.is_error or not keys:
+        return "", ""
+    return (keys[0], "") if len(keys) == 1 else ("", ", ".join(keys[:8]))
+
+
+def missing_was_asked(missing: str, goal: str) -> bool:
+    """Whether the request named the component the project lacks (``missing`` names it)."""
+    named = re.search(r"has no component (.+?), so", missing)
+    return named is not None and named.group(1).lower() in goal.lower()
 
 
 async def _component_of(executor: ToolExecutor, project: str, component: str) -> tuple[str, str]:

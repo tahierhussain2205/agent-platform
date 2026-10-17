@@ -165,8 +165,11 @@ class JqlError(ValueError):
 CATEGORIES = {
     "To Do": {"key": "new", "name": "To Do"},
     "In Progress": {"key": "indeterminate", "name": "In Progress"},
+    "In Review": {"key": "indeterminate", "name": "In Progress"},
     "Done": {"key": "done", "name": "Done"},
 }
+# Every status is reachable from every other, as in a new team-managed project's workflow.
+TRANSITIONS = {"11": "To Do", "21": "In Progress", "31": "In Review", "41": "Done"}
 TIME = "%Y-%m-%dT%H:%M:%S.000+0000"
 
 
@@ -473,6 +476,43 @@ def build_router(jira: Atlassian) -> APIRouter:
             return error(404, "Issue does not exist or you do not have permission to see it.")
         fields = request.query_params.get("fields")
         return JSONResponse(jira.issue_json(found, fields.split(",") if fields else None))
+
+    @router.get(base + "/issue/{key}/transitions")
+    async def transitions(request: Request, cloudid: str, key: str) -> JSONResponse:
+        account, err = context(request, cloudid)
+        if err:
+            return err
+        assert account is not None
+        if visible_issue(account, cloudid, key) is None:
+            return error(404, "Issue does not exist or you do not have permission to see it.")
+        return JSONResponse({"transitions": [
+            {"id": tid, "name": name, "to": {"name": name, "statusCategory": CATEGORIES[name]}}
+            for tid, name in TRANSITIONS.items()
+        ]})  # fmt: skip
+
+    @router.post(base + "/issue/{key}/transitions")
+    async def transition(request: Request, cloudid: str, key: str) -> Response:
+        """Move an issue; the stand-in remembers who moved it last (``moved_by``) for tests."""
+        account, err = context(request, cloudid)
+        if err:
+            return err
+        assert account is not None
+        found = visible_issue(account, cloudid, key)
+        if found is None:
+            return error(404, "Issue does not exist or you do not have permission to see it.")
+        wanted = str(((await request.json()) or {}).get("transition", {}).get("id") or "")
+        if wanted not in TRANSITIONS:
+            return JSONResponse(
+                {"errorMessages": ["Transition id is not valid for this issue."], "errors": {}}, status_code=400
+            )
+        with jira.store.lock:
+            now = datetime.now(UTC).strftime(TIME)
+            found["status"] = TRANSITIONS[wanted]
+            found["updated"] = now
+            found["resolved"] = now if found["status"] == "Done" else None
+            found["moved_by"] = account["accountId"]
+            jira.store.save()
+        return Response(status_code=204)
 
     def visible_issue(account: dict[str, Any], cloudid: str, key: str) -> dict[str, Any] | None:
         found = jira.s["issues"].get(key.upper())

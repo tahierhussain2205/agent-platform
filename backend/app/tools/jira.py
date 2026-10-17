@@ -145,6 +145,20 @@ OPERATIONS.update(
             kind="write",
             credential_mode="user_required",
         ),
+        # The status follows the work (In Progress when a change starts, In Review when its pull
+        # request opens): moved by code as part of that work, never offered to a model.
+        "transition_issue": Operation(
+            "transition_issue",
+            "Move a Jira issue to a status by its name, with the requester's own Jira account.",
+            {
+                "type": "object",
+                "properties": {"key": {"type": "string"}, "status": {"type": "string", "maxLength": 60}},
+                "required": ["key", "status"],
+            },
+            kind="write",
+            credential_mode="user_required",
+            internal=True,
+        ),
     }
 )
 LABEL_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -307,6 +321,8 @@ class JiraAdapter:
                 return await self._assign(ctx, credential, args)
             if operation == "add_comment":
                 return await self._comment(ctx, credential, args)
+            if operation == "transition_issue":
+                return await self._transition(ctx, credential, args)
         except JiraError as exc:
             return ToolResult(f"Jira refused the request: {exc}", is_error=True)
         except (ValueError, httpx.HTTPError) as exc:
@@ -574,6 +590,42 @@ class JiraAdapter:
         return ToolResult(
             f"Assigned {key} to {email}", data={"target_ref": f"jira:{key}", "key": key, "url": url}
         )
+
+    async def _transition(self, ctx: ToolContext, credential: Credential, args: dict[str, Any]) -> ToolResult:
+        """Move ``key`` to the status named ``status`` (any case). Already there is done: a retry
+        never moves it twice."""
+        key = str(args.get("key") or "").strip().upper()
+        wanted = " ".join(str(args.get("status") or "").split())
+        if not KEY_RE.match(key):
+            return ToolResult(f"{key or 'That'} is not an issue key like PAY-101.", is_error=True)
+        if not wanted:
+            raise ValueError("a status to move the issue to is required")
+        url = self._issue_link(credential, key)
+        data: dict[str, Any] = {"target_ref": f"jira:{key}", "key": key, "url": url}
+        issue = await self._call(ctx, credential, "GET", f"issue/{key}", params={"fields": "status"})
+        if issue is None:
+            return ToolResult(f"{key} does not exist or is not visible.", is_error=True)
+        current = str(((issue.get("fields") or {}).get("status") or {}).get("name") or "")
+        if current.lower() == wanted.lower():
+            return ToolResult(
+                f"{key} is already {current}", data={**data, "status": current, "from": current}
+            )
+        found = await self._call(ctx, credential, "GET", f"issue/{key}/transitions") or {}
+        move = next(
+            (
+                t
+                for t in found.get("transitions") or []
+                if str((t.get("to") or {}).get("name") or "").lower() == wanted.lower()
+            ),
+            None,
+        )
+        if move is None:
+            return ToolResult(f"{key} has no way from {current} to {wanted}.", is_error=True, data=data)
+        await self._call(
+            ctx, credential, "POST", f"issue/{key}/transitions", json={"transition": {"id": str(move["id"])}}
+        )
+        status = str(move["to"]["name"])
+        return ToolResult(f"Moved {key} to {status}", data={**data, "status": status, "from": current})
 
     async def _comment(self, ctx: ToolContext, credential: Credential, args: dict[str, Any]) -> ToolResult:
         key = str(args.get("key") or "").strip().upper()
