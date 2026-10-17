@@ -98,6 +98,46 @@ test('revoking a pending invitation', async ({ browser }) => {
   await admin.context.close()
 })
 
+test('roles: a profile and limits, previewed before saving', async ({ page }) => {
+  const errors = trackErrors(page)
+  const title = `Support ${uid()}`
+  await signIn(page, 'alice@acme.test')
+  await page.getByRole('link', { name: 'Roles' }).click()
+  await page.getByRole('button', { name: 'New role' }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByLabel('Title').fill(title)
+  await dialog.getByText('Brief', { exact: true }).click()
+  await dialog.getByText('Plain language', { exact: true }).click()
+  await dialog.getByText('Risks', { exact: true }).click()
+  await dialog.getByRole('checkbox', { name: 'All playbooks' }).uncheck()
+  for (const playbook of [
+    'Jira tickets from chat',
+    'Investigate an issue and plan the fix',
+    'Implement the plan and open a pull request',
+    'Schedule a report',
+  ])
+    await dialog.getByRole('checkbox', { name: playbook }).uncheck()
+  await dialog.getByRole('checkbox', { name: 'Never: GitHub: push changes' }).check()
+  // The preview runs on the worker: the stand-in model keeps a brief role to two points.
+  await dialog.getByRole('button', { name: 'Preview', exact: true }).click()
+  const answer = dialog.getByTestId('preview-with-role')
+  await expect(answer).toContainText(`As ${title}`, { timeout: 30_000 })
+  await expect(answer).toContainText('Also: risks.')
+  await dialog.getByRole('button', { name: 'Create role' }).click()
+  const card = page.getByTestId(`role-${title}`)
+  for (const label of [
+    'Brief',
+    'Plain language',
+    'Calls out risks',
+    'Only: Questions and summaries',
+    'Never: GitHub: push changes',
+  ])
+    await expect(card.getByText(label, { exact: true })).toBeVisible()
+  await card.getByRole('button', { name: 'Archive' }).click()
+  await expect(card).toHaveCount(0)
+  expect(errors).toEqual([])
+})
+
 test('roles: assign several with one primary, change it, archive', async ({ page }) => {
   const errors = trackErrors(page)
   const lead = `Lead ${uid()}`
@@ -107,7 +147,7 @@ test('roles: assign several with one primary, change it, archive', async ({ page
   for (const title of [lead, reviewer]) {
     await page.getByRole('button', { name: 'New role' }).click()
     await page.getByLabel('Title').fill(title)
-    await page.getByLabel('How should the agent respond').fill(`Respond as a ${title}.`)
+    await page.getByLabel('Anything else').fill(`Respond as a ${title}.`)
     await page.getByRole('button', { name: 'Create role' }).click()
     await expect(page.getByTestId(`role-${title}`)).toBeVisible()
   }

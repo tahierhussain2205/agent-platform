@@ -315,6 +315,7 @@ class SlackActivities:
             team_id=team, channel=req.channel, channel_type=req.channel_type,
             channel_id=str(channel_id) if channel_id else None, thread_ts=thread_ts, message_ts=req.ts,
             membership_id=requester.membership_id, slack_user_id=req.user, trigger="dm" if im else "mention",
+            intent=req.intent,
         )  # fmt: skip
 
     @activity.defn(name="slack_sync_workspace")

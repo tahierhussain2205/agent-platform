@@ -27,6 +27,7 @@ class TaskRef:
     slack_user_id: str
     trigger: str = "mention"
     lane: str = "interactive"
+    intent: str | None = None  # a quick action's key: the request is ours, the click is the requester's
 
 
 @dataclass
@@ -47,6 +48,7 @@ class Understanding:
     mode_note: str | None = None
     brief: dict[str, Any] | None = None
     stopped: str | None = None
+    refused: bool = False  # the question is why the requester's roles do not include the playbook
 
 
 @dataclass

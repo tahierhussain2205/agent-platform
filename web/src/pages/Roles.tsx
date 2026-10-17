@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { useApiMutation, useRoles, type Role } from '../api/hooks'
+import { useApiMutation, useRoleOptions, useRoles, type Role } from '../api/hooks'
 import { useMember } from '../components/member'
 import { RoleForm } from '../components/RoleEditor'
-import { profileLabels } from '../components/roleProfile'
+import { limitLabels, profileLabels } from '../components/roleProfile'
 import {
   Badge,
   Button,
@@ -19,6 +19,7 @@ export function RolesPage() {
   const isAdmin = me.membership.privilege === 'admin'
   const [showArchived, setShowArchived] = useState(false)
   const roles = useRoles(showArchived)
+  const options = useRoleOptions()
   const [editing, setEditing] = useState<Role | 'new' | null>(null)
   const archive = useApiMutation(
     (api, id: string) => api(`/api/roles/${id}/archive`, { method: 'POST' }),
@@ -28,7 +29,7 @@ export function RolesPage() {
     <>
       <PageHeader
         title="Roles"
-        description="Roles tell the agent how to answer the people who hold them. A person can hold several; one is primary."
+        description="Roles tell the agent how to answer the people who hold them, and can narrow what it does for them. A person can hold several; one is primary."
         actions={isAdmin ? <Button onClick={() => setEditing('new')}>New role</Button> : undefined}
       />
       <ErrorNotice error={archive.error} onDismiss={() => archive.reset()} />
@@ -67,6 +68,15 @@ export function RolesPage() {
                     <div className="mt-1 flex flex-wrap gap-1">
                       {profileLabels(role.profile).map((label) => (
                         <Badge key={label}>{label}</Badge>
+                      ))}
+                    </div>
+                  )}
+                  {limitLabels(role, options.data).length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {limitLabels(role, options.data).map((label) => (
+                        <Badge key={label} tone="amber">
+                          {label}
+                        </Badge>
                       ))}
                     </div>
                   )}

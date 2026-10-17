@@ -117,8 +117,9 @@ class TaskWorkflow:
         if u.question:
             await self._do(TaskActivities.reply, ref, u.question, "question")
             await self._do(TaskActivities.finish, ref, "completed", None)
-            await self._status(ref, "❓ I asked a question above.", running=False)
-            return "asked"
+            closing = "🚫 Not something your role includes." if u.refused else "❓ I asked a question above."
+            await self._status(ref, closing, running=False)
+            return "refused" if u.refused else "asked"
         if u.playbook_key == "schedule_create":  # a proposal the requester confirms with a button
             proposal: str = await self._do(TaskActivities.propose_schedule, ref, u, limit=MODEL_STEP)
             await self._do(TaskActivities.finish, ref, "completed", None)

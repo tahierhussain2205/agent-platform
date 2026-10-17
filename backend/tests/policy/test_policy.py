@@ -205,6 +205,65 @@ async def test_action_tiers_against_the_mode(stack: Stack, channels: dict[str, T
     assert (await auto.check_tool("slack", "post_message", channels["leads-private"])).code == "not_a_member"
 
 
+async def test_roles_narrow_what_the_agent_does_and_route_approvals(
+    stack: Stack, channels: dict[str, Target]
+) -> None:
+    """A role blocks operations for its holders, makes writes ask even in Auto, and an approver role
+    takes over who decides (D-203, D-204). Bob holds "Support"; nobody has to hold "Tech Lead"."""
+    acme = stack.env.world.acme
+    support = q(
+        stack,
+        "insert into app.custom_roles (org_id, title, blocked_operations, ask_operations) "
+        "values (%s, 'Support', '{jira.search}', '{jira.create_issue}') returning id",
+        (acme.id,),
+    )[0]
+    q(
+        stack,
+        "insert into app.membership_roles (org_id, membership_id, role_id, is_primary) values (%s, %s, %s, "
+        "not exists (select 1 from app.membership_roles where membership_id = %s))",
+        (acme.id, acme.user, support, acme.user),
+    )
+    lead = q(
+        stack,
+        "insert into app.custom_roles (org_id, title, approves_operations) values (%s, 'Tech Lead', "
+        "'{jira.create_issue,jira.delete_issue}') returning id",
+        (acme.id,),
+    )[0]
+    try:
+        bob_auto = policy(stack, mode="auto")
+        blocked = await bob_auto.check_tool("jira", "search", None)
+        assert (blocked.outcome, blocked.code) == ("denied", "role_blocked")
+        assert blocked.reason == "Your role (Support) does not include jira search."
+        asks = await bob_auto.check_tool("jira", "create_issue", None)
+        assert (asks.outcome, asks.code) == ("needs_approval", "role_ask")
+        assert asks.reason == "Your role (Support) asks before jira create_issue."
+        assert (asks.approver_rule, asks.approver_role_id, asks.approver_role) == (
+            "role_or_admin",
+            lead,
+            "Tech Lead",
+        )
+        irreversible = await bob_auto.check_tool("jira", "delete_issue", None)
+        assert (irreversible.code, irreversible.approver_role) == ("approval_required", "Tech Lead")
+        # Alice holds no role: nothing is blocked and Auto stays Auto; routing is the org's.
+        alice_auto = policy(stack, who="alice", mode="auto")
+        assert (await alice_auto.check_tool("jira", "search", None)).outcome == "allowed"
+        routed = await alice_auto.check_tool("jira", "delete_issue", None)  # (create needs a linked account)
+        assert (routed.outcome, routed.approver_rule, routed.approver_role) == (
+            "needs_approval", "role_or_admin", "Tech Lead",
+        )  # fmt: skip
+        audited = q(
+            stack,
+            "select reason, metadata->>'code' from app.audit_log where task_id = %s and action = 'policy.tool' "
+            "and target = 'jira.search'",
+            (bob_auto.scope.task_id,),
+        )
+        assert audited == ("Your role (Support) does not include jira search.", "role_blocked")
+    finally:
+        q(stack, "delete from app.membership_roles where role_id = %s", (support,))
+        q(stack, "update app.custom_roles set status = 'archived' where id in (%s, %s)", (support, lead))
+    assert (await policy(stack, mode="auto").check_tool("jira", "search", None)).outcome == "allowed"
+
+
 async def test_shadow_mode_reads_and_plans_but_never_writes(
     stack: Stack, channels: dict[str, Target]
 ) -> None:

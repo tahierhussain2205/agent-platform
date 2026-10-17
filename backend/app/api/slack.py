@@ -22,6 +22,8 @@ from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app import kv
+from app.agent.quick_actions import ACTION_ID
+from app.agent.quick_actions import parse as parse_quick
 from app.alerts import record_ingress_latency
 from app.api import slack_schedules
 from app.api.temporal_client import temporal_client
@@ -31,7 +33,7 @@ from app.identity.invite import InviteError, invite_member
 from app.schedules.temporal import start_sync
 from app.settings import get_settings
 from app.slack import service, signature
-from app.slack.adapter import ChannelAdapter, DirectMessage, Ephemeral, Intent
+from app.slack.adapter import ChannelAdapter, DirectMessage, Ephemeral, Intent, escape
 from app.slack.client import SlackClient, SlackError
 from app.temporal import connect_temporal
 from app.vault_service import VaultClient
@@ -294,6 +296,10 @@ async def _interactions(request: Request) -> Response:
             await _decide_approval(
                 request, org_id, workspace_id, user, action_id, str(action.get("value", "")), payload
             )
+        elif action_id == ACTION_ID:
+            await _quick_action(
+                request, org_id, workspace_id, team_id, user, str(action.get("value", "")), payload
+            )
         elif action_id == "task_cancel":
             await _cancel_task(request, org_id, workspace_id, user, str(action.get("value", "")), payload)
         elif action_id.startswith("schedule_"):
@@ -470,6 +476,75 @@ async def _tell_clicker(
             log.info("private reply not delivered: %s", exc.error)
 
 
+QUICK_TTL = 7 * 24 * 3600  # a button starts its request once
+
+
+async def _quick_action(
+    request: Request, org_id: UUID, workspace_id: UUID, team_id: str, user: str, value: str,
+    payload: dict[str, Any],
+) -> None:  # fmt: skip
+    """A button on an answer (D-205): its request starts once, in the answer's thread, as the person
+    who clicked; the intake workflow checks them like any requester. The answer then says who chose
+    what, in place of its buttons."""
+    parsed = parse_quick(value)
+    if parsed is None:
+        return
+    quick, channel, thread_ts = parsed
+    pool, vault, slack = _required(request)
+    async with tenant_tx(pool, org_id) as conn:
+        member = await _member(conn, workspace_id, user)
+
+    async def tell(text: str) -> None:
+        await _tell_clicker(request, org_id, user, payload, text)
+
+    if member is None or member[2] != "active":
+        await tell("Only members of this organization can use these buttons. Mention me to ask for access.")
+        return
+    message = payload.get("message") or {}
+    answer_ts = str((payload.get("container") or {}).get("message_ts") or message.get("ts") or "")
+    res = resources(request)
+    claim = kv.tenant_key(org_id, "quick-action", answer_ts, quick.key)
+    if res.kv is not None and not await kv.claim(res.kv, claim, QUICK_TTL, user):
+        await tell(f"*{quick.label}* was already started from this message.")
+        return
+    event_id = f"qa-{answer_ts.replace('.', '')}-{quick.key}"
+    kind = "im" if channel.startswith("D") else ("group" if channel.startswith("G") else "channel")
+    ref = SlackRequest(
+        str(org_id), str(workspace_id), team_id, channel, kind, user, answer_ts or str(time.time()),
+        thread_ts, event_id, "quick_action", quick.key,
+    )  # fmt: skip
+    try:
+        await start(request, "AgentRequestWorkflow", ref, f"slack-{event_id}")
+    except Exception:
+        if res.kv is not None:
+            await kv.release(res.kv, claim)
+        raise
+    where = (payload.get("container") or {}).get("channel_id") or (payload.get("channel") or {}).get("id")
+    if not where or not answer_ts or not message.get("blocks"):
+        return
+    chose = {
+        "type": "context",
+        "elements": [{"type": "mrkdwn", "text": f"▶️ <@{user}> chose *{quick.chose}*"}],
+    }
+    blocks = [b for b in message["blocks"] if b.get("type") != "actions"] + [chose]
+    team, token = await service.bot_token(pool, vault, org_id)
+    try:
+        await slack.call(
+            "chat.update", token, team, channel=where, ts=answer_ts, text=message.get("text") or quick.chose,
+            blocks=blocks,
+        )  # fmt: skip
+    except SlackError as exc:  # the request has started; the buttons stay
+        log.warning("could not update the answer's buttons: %s", exc.error)
+
+
+DECIDERS = {
+    "requester": "the person who asked",
+    "admin": "an admin",
+    "requester_or_admin": "the person who asked or an admin",
+    "role_or_admin": "a {role} or an admin",
+}
+
+
 async def _decide_approval(
     request: Request, org_id: UUID, workspace_id: UUID, user: str, action_id: str, value: str,
     payload: dict[str, Any],
@@ -487,7 +562,9 @@ async def _decide_approval(
         row = await (
             await conn.execute(
                 "select a.status, a.message_ref, a.action_summary, t.workflow_id, a.expires_at <= now(), "
-                "a.task_id from app.approvals a join app.tasks t on t.id = a.task_id where a.id = %s",
+                "a.task_id, a.approver_rule, r.title from app.approvals a "
+                "join app.tasks t on t.id = a.task_id "
+                "left join app.custom_roles r on r.id = a.approver_role_id where a.id = %s",
                 (approval_id,),
             )
         ).fetchone()
@@ -498,7 +575,7 @@ async def _decide_approval(
     if row is None:  # unknown, or another org's (row level security)
         await tell("This approval request no longer exists.")
         return
-    status, message_ref, summary, workflow_id, expired, task_id = row
+    status, message_ref, summary, workflow_id, expired, task_id, rule, role = row
     if status != "pending" or expired:
         state = "expired" if expired and status == "pending" else status
         await tell(f"This request was already {state}. Decisions are final.")
@@ -519,7 +596,10 @@ async def _decide_approval(
                  "allowed" if decision == "approved" else "denied"),
             )  # fmt: skip
     except psycopg.errors.InsufficientPrivilege:
-        await tell("Only the person who asked or an admin can decide this.")
+        who = DECIDERS.get(rule, DECIDERS["requester_or_admin"]).format(
+            role=escape(role or "designated approver")
+        )
+        await tell(f"Only {who} can decide this.")
         return
     except psycopg.errors.CheckViolation:
         await tell("This request was already decided or has expired.")

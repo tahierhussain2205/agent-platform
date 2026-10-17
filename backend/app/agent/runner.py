@@ -29,7 +29,8 @@ from app.agent.implementation import Implementation
 from app.agent.investigation import Investigation
 from app.agent.outbox import Sink, SlackSink, post_once
 from app.agent.playbooks import BUILTIN, PlaybookSpec, keys, latest
-from app.agent.roles import profile_of
+from app.agent.quick_actions import QUICK_ACTIONS, button
+from app.agent.roles import limits_for, names, profile_of
 from app.agent.types import (
     ActionOutcome,
     ApprovalState,
@@ -359,7 +360,14 @@ class AgentRunner:
             log.warning("status update failed", extra={"error": exc.error})
         return ts
 
-    async def reply(self, ref: TaskRef, text: str, key: str) -> str | None:
+    async def reply(
+        self,
+        ref: TaskRef,
+        text: str,
+        key: str,
+        actions: list[tuple[str, str, str]] | None = None,
+        links: list[tuple[str, str]] | None = None,
+    ) -> str | None:
         sink = await self._sink(ref)
         body, _ = redact(text)
         return await post_once(
@@ -368,7 +376,7 @@ class AgentRunner:
             ref.org_id,
             ref.task_id,
             f"task:{ref.task_id}:{key}",
-            Reply(ref.channel, body, ref.thread_ts),
+            Reply(ref.channel, body, ref.thread_ts, actions or [], links or []),
             channel=ref.channel,
             thread_ts=ref.thread_ts,
         )
@@ -494,6 +502,10 @@ class AgentRunner:
         if len(messages) > CONVERSATION_LIMIT:  # the parent and the latest replies
             messages = [messages[0], *messages[-(CONVERSATION_LIMIT - 1) :]]
         lines = await adapter.transcript(tctx, self._here(ref, ctx), messages)
+        quick = QUICK_ACTIONS.get(ref.intent or "")
+        if quick is not None:  # a button: the request is ours, said by the person who clicked
+            clicked = {"ts": ref.message_ts, "user": ref.slack_user_id, "text": quick.request}
+            lines += await adapter.transcript(tctx, self._here(ref, ctx), [clicked])
         request_ref = refs.by_key.get(f"slack:{ref.channel}:{ref.message_ts}")
         request_line = next(
             (line for line in lines if request_ref and line.startswith(f"[{request_ref}]")), ""
@@ -519,7 +531,10 @@ class AgentRunner:
         if pull:
             opened = json.dumps({"repo": pull["repo"], "number": pull["number"]})
             current_plan += f"\n<pull_request>{opened}</pull_request>"
+        quick = QUICK_ACTIONS.get(ref.intent or "")
         try:
+            if quick is not None:  # a button chose the playbook: no classification
+                return await self._brief(ref, ctx, refs, lines, request_ref, quick.playbook, 1.0, mode)
             result = await self.d.gateway.complete(
                 self._call(ref, "classify"),
                 "fast",
@@ -548,39 +563,69 @@ class AgentRunner:
                 )
                 await self.step(ref, "gather", "completed", "Asked a clarifying question")
                 return Understanding(None, None, confidence, question[:500], mode)
-            spec = latest(key)
-            note = None
-            if mode == "auto" and confidence < LOW_CONFIDENCE:
-                mode, note = "ask", "I'm not fully sure what you meant, so I'll ask before changing anything."
-            playbook_id = await self._pin(ref, spec)
-            now = self.d.now()
-            local_now = now.astimezone(self._zone(ctx.timezone))
-            result = await self.d.gateway.complete(
-                self._call(ref, "brief"),
-                "fast",
-                system=prompts.system(ctx.org_name, spec, ctx.roles, prompts.BRIEF),
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "<thread>\n" + "\n".join(lines) + "\n</thread>\n"
-                        f"<request_ref>{request_ref or ''}</request_ref>\n"
-                        f"<now>{local_now.isoformat()}</now>\n<timezone>{ctx.timezone}</timezone>",
-                    }
-                ],
-                tools=[prompts.submit_tool("submit_brief", "Submit the brief.")],
-                tool_choice={"type": "tool", "name": "submit_brief"},
-                max_tokens=1500,
-            )
-            brief = clean_brief(result.tool_input("submit_brief"), refs, now)
-            await self._artifact(ref, "brief", brief, [s["ref"] for s in brief_sources(brief)])
-            log.info(
-                "brief ready",
-                extra={"playbook": key, "playbook_id": str(playbook_id), "confidence": confidence},
-            )
-            return Understanding(spec.key, spec.version, confidence, None, mode, note, brief)
+            return await self._brief(ref, ctx, refs, lines, request_ref, key, confidence, mode)
         except BudgetExceededError as exc:
             await self.step(ref, "gather", "failed", f"Stopped: {exc}")
             return Understanding(None, None, 0, None, mode, stopped=str(exc))
+
+    async def _brief(
+        self,
+        ref: TaskRef,
+        ctx: Context,
+        refs: RefBook,
+        lines: list[str],
+        request_ref: str | None,
+        key: str,
+        confidence: float,
+        mode: str,
+    ) -> Understanding:
+        """The playbook is chosen: check the roles allow it, pin it, and write the brief."""
+        spec = latest(key)
+        refusal = await self._role_refusal(ref, spec)
+        if refusal:
+            await self.step(ref, "gather", "completed", "Not done: outside the requester's role")
+            return Understanding(None, None, confidence, refusal, mode, refused=True)
+        note = None
+        if mode == "auto" and confidence < LOW_CONFIDENCE:
+            mode, note = "ask", "I'm not fully sure what you meant, so I'll ask before changing anything."
+        playbook_id = await self._pin(ref, spec)
+        now = self.d.now()
+        local_now = now.astimezone(self._zone(ctx.timezone))
+        result = await self.d.gateway.complete(
+            self._call(ref, "brief"),
+            "fast",
+            system=prompts.system(ctx.org_name, spec, ctx.roles, prompts.BRIEF),
+            messages=[
+                {
+                    "role": "user",
+                    "content": "<thread>\n" + "\n".join(lines) + "\n</thread>\n"
+                    f"<request_ref>{request_ref or ''}</request_ref>\n"
+                    f"<now>{local_now.isoformat()}</now>\n<timezone>{ctx.timezone}</timezone>",
+                }
+            ],
+            tools=[prompts.submit_tool("submit_brief", "Submit the brief.")],
+            tool_choice={"type": "tool", "name": "submit_brief"},
+            max_tokens=1500,
+        )
+        brief = clean_brief(result.tool_input("submit_brief"), refs, now)
+        await self._artifact(ref, "brief", brief, [s["ref"] for s in brief_sources(brief)])
+        log.info(
+            "brief ready",
+            extra={"playbook": key, "playbook_id": str(playbook_id), "confidence": confidence},
+        )
+        return Understanding(spec.key, spec.version, confidence, None, mode, note, brief)
+
+    async def _role_refusal(self, ref: TaskRef, spec: PlaybookSpec) -> str | None:
+        """Why the requester's roles do not include this playbook, or None: roles narrow what the
+        agent does for their holders, decided here in code (D-203)."""
+        async with tenant_tx(self.d.pool, ref.org_id) as conn:
+            limits = await limits_for(conn, ref.membership_id)
+        if limits.allows(spec.key):
+            return None
+        return (
+            f"Your role ({escape(names(limits.playbooks_by))}) doesn't include _{spec.title.lower()}_, so I "
+            "haven't started on it. An admin can change what a role includes on the console's Roles page."
+        )
 
     @staticmethod
     def _zone(name: str) -> ZoneInfo:
@@ -1117,14 +1162,15 @@ class AgentRunner:
                 row = await (
                     await conn.execute(
                         "insert into app.approvals "
-                        "(org_id, task_id, action_summary, action_tier, approver_rule, "
-                        "expires_at) values (%s, %s, %s, %s, %s, %s) returning id, expires_at",
+                        "(org_id, task_id, action_summary, action_tier, approver_rule, approver_role_id, "
+                        "expires_at) values (%s, %s, %s, %s, %s, %s, %s) returning id, expires_at",
                         (
                             ref.org_id,
                             ref.task_id,
                             preview[:2000],
                             decision.tier,
                             decision.approver_rule,
+                            decision.approver_role_id,
                             expires,
                         ),
                     )
@@ -1144,7 +1190,8 @@ class AgentRunner:
                 preview,
                 approval_id,
                 str(decision.tier),
-                f"Expires {expires_at:%Y-%m-%d %H:%M} UTC · {approver_text(decision.approver_rule)}",
+                f"Expires {expires_at:%Y-%m-%d %H:%M} UTC · "
+                + approver_text(decision.approver_rule, decision.approver_role),
             ),
             channel=ref.channel,
             thread_ts=ref.thread_ts,
@@ -1378,15 +1425,16 @@ class AgentRunner:
         _, _, policy, executor = await self._tools(ref, ctx, u.mode, RefBook())
         body = render_answer(c, notes)
         sink = await self._sink(ref)
+        actions, links = await self._next_steps(ref, u, c)
         if ref.channel_type == "im":
-            ts = await self.reply(ref, body, "answer")
+            ts = await self.reply(ref, body, "answer", actions, links)
             where = "dm"
         else:
             sources = [Source.from_dict(s) for s in c.sources]
             destination = Destination("thread", ref.channel, None, ctx.channel_name)
             decision = await policy.check_output(destination, sources, audience=executor.audience)
             if decision.deliver == "as_is":
-                ts = await self.reply(ref, body, "answer")
+                ts = await self.reply(ref, body, "answer", actions, links)
                 where = "thread"
             else:
                 ts = await post_once(
@@ -1395,7 +1443,9 @@ class AgentRunner:
                     ref.org_id,
                     ref.task_id,
                     f"task:{ref.task_id}:answer-dm",
-                    DirectMessage(ref.slack_user_id, f"Your answer from #{ctx.channel_name}:\n\n{body}", []),
+                    DirectMessage(
+                        ref.slack_user_id, f"Your answer from #{ctx.channel_name}:\n\n{body}", actions
+                    ),
                     channel=ref.slack_user_id,
                     thread_ts=None,
                 )
@@ -1415,6 +1465,40 @@ class AgentRunner:
         )
         await self.step(ref, "report", "completed", f"Answer delivered ({where})")
         return Delivered(where, ts)
+
+    async def _next_steps(
+        self, ref: TaskRef, u: Understanding, c: Composed
+    ) -> tuple[list[tuple[str, str, str]], list[tuple[str, str]]]:
+        """Buttons for the demo's next step (D-205): plan a fix once tickets exist, implement a plan,
+        open the pull request. Only what the requester's roles include is offered; whoever clicks is
+        checked again as the requester of what the click starts."""
+        if c.stopped or u.playbook_key not in ("jira_tickets", "investigate_issue", "implement_change"):
+            return [], []
+        async with tenant_tx(self.d.pool, ref.org_id) as conn:
+            limits = await limits_for(conn, ref.membership_id)
+            row = await (
+                await conn.execute(
+                    "select (select count(*) from app.external_actions where task_id = %(t)s "
+                    "and integration_key = 'jira' and operation = 'create_issue' and status = 'succeeded'), "
+                    "exists (select 1 from app.artifacts where task_id = %(t)s and kind = 'plan'), "
+                    "(select url from app.task_links where task_id = %(t)s and kind = 'pull_request' "
+                    "and url is not null order by created_at desc limit 1)",
+                    {"t": ref.task_id},
+                )
+            ).fetchone()
+        created, planned, pull = row if row else (0, False, None)
+        offer = {
+            "jira_tickets": "investigate" if created else None,
+            "investigate_issue": "implement" if planned else None,
+        }
+        key = offer.get(u.playbook_key)
+        actions = (
+            [button(key, ref.channel, ref.thread_ts)]
+            if key and limits.allows(QUICK_ACTIONS[key].playbook)
+            else []
+        )
+        links = [("View pull request", str(pull))] if u.playbook_key == "implement_change" and pull else []
+        return actions, links
 
 
 # ------------------------------------------------------------------ helpers
@@ -1459,11 +1543,12 @@ def playbook_of(u: Understanding) -> tuple[PlaybookSpec, dict[str, Any]]:
     return BUILTIN[(u.playbook_key, u.playbook_version)], u.brief
 
 
-def approver_text(rule: str | None) -> str:
+def approver_text(rule: str | None, role: str | None = None) -> str:
     return {
         "requester": "the requester decides",
         "admin": "an admin decides",
         "requester_or_admin": "the requester or an admin decides",
+        "role_or_admin": f"a {escape(role or 'designated approver')} or an admin decides",
     }.get(rule or "", "")
 
 

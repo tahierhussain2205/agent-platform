@@ -8,6 +8,7 @@ are posted in the thread).
 Each test reads a channel of its own. The Jira stand-in keeps issues between runs (an open one would
 be a duplicate): the seed's issues are put back first and every test deletes what it created."""
 
+import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -672,3 +673,79 @@ async def test_auto_creates_the_tickets_and_posts_the_links(tickets: Agent, live
     finally:
         set_mode(tickets, "ask")
         await delete_ours()
+
+
+def _button(message: dict[str, Any], label: str) -> dict[str, Any] | None:
+    for block in message.get("blocks") or []:
+        for element in block.get("elements") or [] if block.get("type") == "actions" else []:
+            if element.get("text", {}).get("text") == label:
+                return dict(element)
+    return None
+
+
+async def test_the_answer_offers_the_next_step_and_a_click_runs_it_once(
+    tickets: Agent, live: Live, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Tickets, then "Plan a fix" on the answer: the click starts the plan in the same thread as the
+    person who clicked, once, and the answer says who chose it; the plan offers the next step (D-205)."""
+    from app.settings import get_settings
+
+    monkeypatch.setenv("TEMPORAL_TASK_QUEUE", live.settings.temporal_task_queue)  # not the dev stack's worker
+    get_settings.cache_clear()
+    set_mode(tickets, "auto")
+    try:
+        name, external = await channel(tickets)
+        await ui_post("U0QUINN", external, "Discount codes fail at checkout")
+        event_id, ts = await live.request(
+            f"create Jira tickets for the problems reported today in #{name}", channel=external
+        )
+        assert await live.result(event_id) == "completed"
+        answer_message = next(
+            m for m in thread_of(await channel_messages(external), ts) if _button(m, "Plan a fix")
+        )
+        button = _button(answer_message, "Plan a fix")
+        assert button is not None
+        assert button["style"] == "primary"
+        assert json.loads(button["value"]) == {"i": "investigate", "c": external, "t": ts}
+
+        clicked = await live.click(
+            "U0QUINN", "quick_action", button["value"], channel=external, ts=answer_message["ts"],
+            message=answer_message,
+        )  # fmt: skip
+        assert clicked.status_code == 200
+        quick_event = f"qa-{answer_message['ts'].replace('.', '')}-investigate"
+        intake = live.client.get_workflow_handle(f"slack-{quick_event}")
+        assert await asyncio.wait_for(intake.result(), 60) == "task_started"  # identity and channel checked
+        assert await live.result(quick_event) == "completed"
+        again = await live.click(
+            "U0BOB", "quick_action", button["value"], channel=external, ts=answer_message["ts"],
+            message=answer_message,
+        )  # fmt: skip
+        assert again.status_code == 200
+        assert await wait_for(lambda: _ephemeral_text("U0BOB", "*Plan a fix* was already started"))
+
+        task = tickets.sql(
+            "select p.key, u.email, t.session_id = (select session_id from app.tasks where workflow_id = %s) "
+            "from app.tasks t join app.playbooks p on p.id = t.playbook_id "
+            "join app.org_memberships m on m.id = t.requested_by join app.users u on u.id = m.user_id "
+            "where t.workflow_id = %s",
+            (f"task-{event_id}", f"task-{quick_event}"),
+        )
+        assert task == [("investigate_issue", "quinn@acme.test", True)]  # the clicker, in the same thread
+        thread = thread_of(await channel_messages(external), ts)
+        updated = next(m for m in thread if m["ts"] == answer_message["ts"])
+        assert "chose *Plan a fix*" in json.dumps(updated["blocks"])
+        assert not _button(updated, "Plan a fix")
+        assert any(_button(m, "Implement this plan") for m in thread)
+    finally:
+        set_mode(tickets, "ask")
+        await delete_ours()
+        get_settings.cache_clear()
+
+
+async def _ephemeral_text(user: str, text: str) -> bool:
+    async with httpx.AsyncClient() as client:
+        sent = (
+            await client.get(f"{FAKES}/_admin/slack/ephemeral", params={"team": "T0ACME", "user": user})
+        ).json()
+    return any(text in (m.get("text") or "") for m in sent)

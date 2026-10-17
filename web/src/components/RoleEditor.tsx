@@ -2,13 +2,15 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import {
   json,
   useApiMutation,
+  useRoleOptions,
   useRolePreview,
   type PreviewSample,
   type Role,
   type RoleFocus,
+  type RoleLimits,
   type RoleProfile,
 } from '../api/hooks'
-import { DETAIL, FOCUS, FORMAT, STYLE } from './roleProfile'
+import { DETAIL, FOCUS, FORMAT, operationLabel, STYLE } from './roleProfile'
 import { Button, ErrorNotice, Field, Input, Select, Spinner, TextArea } from './ui'
 
 const SAMPLES: Record<PreviewSample, string> = {
@@ -222,6 +224,145 @@ function RolePreviewPanel({
   )
 }
 
+type LimitList = 'blocked_operations' | 'ask_operations' | 'approves_operations'
+
+const LIMIT_COLUMNS: { list: LimitList; label: string; hint: string }[] = [
+  { list: 'blocked_operations', label: 'Never', hint: 'The agent never does this for them' },
+  { list: 'ask_operations', label: 'Always ask', hint: 'Asks first, even in Auto' },
+  { list: 'approves_operations', label: 'Approves', hint: 'They decide everyone’s requests' },
+]
+
+/** What the agent may do for the role's holders, and whose requests they approve. */
+function LimitsEditor({
+  limits,
+  onChange,
+}: {
+  limits: RoleLimits
+  onChange: (limits: RoleLimits) => void
+}) {
+  const options = useRoleOptions()
+  if (options.isPending) return <Spinner />
+  if (options.error) return <ErrorNotice error={options.error} />
+  const writes = options.data.operations.filter((o) => o.tier !== 'read')
+  const reads = options.data.operations.filter((o) => o.tier === 'read')
+  const toggle = (list: LimitList, key: string, on: boolean) =>
+    onChange({
+      ...limits,
+      [list]: on ? [...limits[list], key] : limits[list].filter((k) => k !== key),
+    })
+  const playbooks = limits.allowed_playbooks
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-fg">What the agent may do for them</h3>
+        <p className="text-xs text-fg-3">
+          Limits only narrow: a role never lets anyone do more than their own access allows.
+        </p>
+      </div>
+      <fieldset className="space-y-1.5">
+        <legend className="mb-1 text-sm font-medium text-fg">Playbooks</legend>
+        <label className="flex items-center gap-2 text-sm text-fg-2">
+          <input
+            type="checkbox"
+            checked={playbooks === null}
+            onChange={(e) =>
+              onChange({
+                ...limits,
+                allowed_playbooks: e.target.checked
+                  ? null
+                  : options.data.playbooks.map((p) => p.key),
+              })
+            }
+          />
+          All playbooks
+        </label>
+        {playbooks !== null && (
+          <div className="ml-6 grid gap-1 sm:grid-cols-2">
+            {options.data.playbooks.map((p) => (
+              <label key={p.key} className="flex items-center gap-2 text-sm text-fg-2">
+                <input
+                  type="checkbox"
+                  checked={playbooks.includes(p.key)}
+                  onChange={(e) =>
+                    onChange({
+                      ...limits,
+                      allowed_playbooks: e.target.checked
+                        ? [...playbooks, p.key]
+                        : playbooks.filter((k) => k !== p.key),
+                    })
+                  }
+                />
+                {p.title}
+              </label>
+            ))}
+          </div>
+        )}
+      </fieldset>
+      <label className="flex items-center gap-2 text-sm text-fg-2">
+        <input
+          type="checkbox"
+          checked={limits.max_mode === 'ask'}
+          onChange={(e) => onChange({ ...limits, max_mode: e.target.checked ? 'ask' : null })}
+        />
+        Always work in Ask mode (approve every change), whatever they choose in Slack
+      </label>
+      <div className="relative overflow-x-auto">
+        <table className="w-full text-left text-sm" aria-label="Changes">
+          <thead className="text-xs text-fg-3">
+            <tr>
+              <th className="pb-1.5 pr-3 font-medium">Changes</th>
+              {LIMIT_COLUMNS.map((c) => (
+                <th key={c.list} className="pb-1.5 pr-3 text-center font-medium" title={c.hint}>
+                  {c.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {writes.map((op) => (
+              <tr key={op.key}>
+                <td className="py-1.5 pr-3 text-fg-2">{operationLabel(op.key)}</td>
+                {LIMIT_COLUMNS.map((c) => (
+                  <td key={c.list} className="py-1.5 pr-3 text-center">
+                    <input
+                      type="checkbox"
+                      aria-label={`${c.label}: ${operationLabel(op.key)}`}
+                      checked={limits[c.list].includes(op.key)}
+                      onChange={(e) => toggle(c.list, op.key, e.target.checked)}
+                    />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mt-1 text-xs text-fg-3">
+          Never: the agent refuses it for them. Always ask: an approval even in Auto. Approves:
+          approval requests for it, from anyone, go to holders of this role (or an admin).
+        </p>
+      </div>
+      <details className="text-sm">
+        <summary className="text-fg-2">
+          Block reads (
+          {limits.blocked_operations.filter((k) => reads.some((r) => r.key === k)).length})
+        </summary>
+        <div className="mt-2 grid gap-1 sm:grid-cols-2">
+          {reads.map((op) => (
+            <label key={op.key} className="flex items-center gap-2 text-fg-2">
+              <input
+                type="checkbox"
+                checked={limits.blocked_operations.includes(op.key)}
+                onChange={(e) => toggle('blocked_operations', op.key, e.target.checked)}
+              />
+              {operationLabel(op.key)}
+            </label>
+          ))}
+        </div>
+      </details>
+    </div>
+  )
+}
+
 export function RoleForm({
   role,
   onClose,
@@ -239,8 +380,15 @@ export function RoleForm({
     format: role?.profile?.format ?? null,
     focus: role?.profile?.focus ?? [],
   })
+  const [limits, setLimits] = useState<RoleLimits>({
+    allowed_playbooks: role?.allowed_playbooks ?? null,
+    blocked_operations: role?.blocked_operations ?? [],
+    ask_operations: role?.ask_operations ?? [],
+    approves_operations: role?.approves_operations ?? [],
+    max_mode: role?.max_mode ?? null,
+  })
   const save = useApiMutation(
-    (api, body: { title: string; description: string; profile: RoleProfile }) =>
+    (api, body: { title: string; description: string; profile: RoleProfile } & RoleLimits) =>
       role
         ? api(`/api/roles/${role.id}`, { method: 'PATCH', ...json(body) })
         : api('/api/roles', { method: 'POST', ...json(body) }),
@@ -249,7 +397,7 @@ export function RoleForm({
   const set = (change: Partial<RoleProfile>) => setProfile({ ...profile, ...change })
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    save.mutate({ title, description, profile }, { onSuccess: onClose })
+    save.mutate({ title, description, profile, ...limits }, { onSuccess: onClose })
   }
   return (
     <form onSubmit={submit} className="space-y-5">
@@ -311,6 +459,9 @@ export function RoleForm({
                 onChange={(e) => setDescription(e.target.value)}
               />
             </Field>
+          </div>
+          <div className="border-t border-line pt-5">
+            <LimitsEditor limits={limits} onChange={setLimits} />
           </div>
         </div>
         {isAdmin && (

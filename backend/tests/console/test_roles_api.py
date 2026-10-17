@@ -89,3 +89,50 @@ async def test_previews_run_on_the_worker_for_admins_of_the_org(
         assert (await console.post("/api/roles/preview", json=body, headers=alice)).status_code == 503
     finally:
         temporal.fail = False
+
+
+async def test_limits_name_known_playbooks_and_operations(
+    console: httpx.AsyncClient, signing_key: SigningKey, module_world: World
+) -> None:
+    alice = auth(signing_key, *ALICE)
+    options = (await console.get("/api/roles/options", headers=auth(signing_key, *BOB))).json()
+    assert {"jira_tickets", "implement_change"} <= {p["key"] for p in options["playbooks"]}
+    ops = {o["key"]: o for o in options["operations"]}
+    assert ops["github.push_changes"]["tier"] == "reversible_write"
+    assert ops["jira.search_issues"]["tier"] == "read"
+    assert "jira.transition_issue" not in ops  # internal: follows the change, not asked for
+
+    limits = {
+        "title": "Support",
+        "allowed_playbooks": ["slack_qa", "jira_tickets", "slack_qa"],
+        "blocked_operations": ["github.push_changes"],
+        "ask_operations": ["jira.create_issue"],
+        "max_mode": "ask",
+    }
+    created = (await console.post("/api/roles", json=limits, headers=alice)).json()
+    assert created["allowed_playbooks"] == ["jira_tickets", "slack_qa"]
+    assert created["blocked_operations"] == ["github.push_changes"]
+    assert created["max_mode"] == "ask"
+
+    for bad in (
+        {"allowed_playbooks": ["write_poetry"]},
+        {"blocked_operations": ["jira.delete_everything"]},
+        {"ask_operations": ["jira.search_issues"]},  # reads never ask
+        {"approves_operations": ["slack.read_channel"]},
+        {"max_mode": "auto"},
+        {"title": None},
+    ):
+        refused = await console.patch(f"/api/roles/{created['id']}", json=bad, headers=alice)
+        assert refused.status_code == 422, bad
+    cleared = await console.patch(
+        f"/api/roles/{created['id']}", json={"allowed_playbooks": None, "max_mode": None}, headers=alice
+    )
+    assert cleared.json()["allowed_playbooks"] is None
+    assert cleared.json()["max_mode"] is None
+    assert cleared.json()["blocked_operations"] == ["github.push_changes"]  # untouched
+    lead = await console.post(
+        "/api/roles",
+        json={"title": "Tech Lead", "approves_operations": ["github.push_changes"]},
+        headers=alice,
+    )
+    assert lead.json()["approves_operations"] == ["github.push_changes"]

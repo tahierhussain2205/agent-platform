@@ -12,7 +12,7 @@ from uuid import UUID
 
 ActionTier = Literal["read", "reversible_write", "irreversible"]
 CredentialMode = Literal["org", "org_with_check", "user_required"]
-ApproverRule = Literal["requester", "admin", "requester_or_admin"]
+ApproverRule = Literal["requester", "admin", "requester_or_admin", "role_or_admin"]
 # restricted: visible to some people only (a Jira project, a private repository, someone's Drive);
 # whether a whole channel may see it is asked of the adapter (``audience_ok``).
 Visibility = Literal["public", "private", "dm", "restricted"]

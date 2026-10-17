@@ -88,8 +88,9 @@ class Live:
         channel: str = "C0GENERAL",
         ts: str = "",
         team: str = "T0ACME",
+        message: dict[str, Any] | None = None,
     ) -> httpx.Response:
-        payload = {
+        payload: dict[str, Any] = {
             "type": "block_actions",
             "team": {"id": team},
             "user": {"id": user},
@@ -97,6 +98,8 @@ class Live:
             "channel": {"id": channel},
             "actions": [{"action_id": action_id, "value": value, "action_ts": str(time.time())}],
         }
+        if message is not None:  # Slack sends the clicked message along
+            payload["message"] = message
         body = urlencode({"payload": json.dumps(payload)}).encode()
         stamp = int(time.time())
         return await self.api.post(

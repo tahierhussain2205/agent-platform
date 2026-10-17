@@ -16,6 +16,7 @@ class SlackRequest:
     thread_ts: str | None
     event_id: str
     event_type: str
+    intent: str | None = None  # a quick action's key (a button on an answer), never text
 
 
 @dataclass

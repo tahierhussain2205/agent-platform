@@ -18,6 +18,7 @@ from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
+from app.agent import roles
 from app.db.tenant import tenant_tx
 from app.tools.base import ActionTier, ApproverRule, CredentialMode, Source, Target
 from app.tools.registry import Registry
@@ -31,6 +32,7 @@ AUDIT_DECISION = {"allowed": "allowed", "denied": "denied", "needs_approval": "i
 
 # Built in tools over our own data and infrastructure: the service catalog, the task's working copies.
 ALWAYS_ON = {"catalog", "sandbox"}
+IRREVERSIBLE_REASON = "Actions that reach people outside this conversation or cannot be undone need approval."
 SHADOW_REASON = (
     "Shadow mode: I read, plan and answer, but make no changes until an admin turns shadow mode off "
     "in the console."
@@ -57,6 +59,8 @@ class Decision:
     tier: ActionTier | None = None
     credential_mode: CredentialMode | None = None
     approver_rule: ApproverRule | None = None
+    approver_role_id: UUID | None = None  # with approver_rule "role_or_admin": whose holders decide
+    approver_role: str | None = None
 
     @property
     def allowed(self) -> bool:
@@ -148,6 +152,15 @@ class Policy:
                     "denied", "operation_disabled", f"An admin turned off {adapter_key} {operation}."
                 )
             mode: CredentialMode = override[0] if override else op.credential_mode
+            name = f"{adapter_key}.{operation}"
+            limits = await roles.limits_for(conn, self.scope.membership_id)
+            if name in limits.blocked:  # roles narrow what the agent does for their holders
+                return Decision(
+                    "denied", "role_blocked",
+                    f"Your role ({limits.blocked[name]}) does not include {adapter_key} {operation}.",
+                    op.tier, mode,
+                )  # fmt: skip
+            approver = await roles.approver_for(conn, name) if op.tier != "read" else None
             shadow = await (await conn.execute("select shadow_mode from app.org_settings")).fetchone()
             needs_channel = "channel" in op.input_schema.get("required", [])
             if needs_channel:
@@ -174,16 +187,21 @@ class Policy:
             return Decision("allowed", "ok", "Read access.", tier, mode)
         if shadow is not None and shadow[0]:  # spec 15: plans and answers, never acts, until trusted
             return Decision("denied", "shadow_mode", SHADOW_REASON, tier, mode)
-        if tier == "reversible_write" and self.scope.mode == "auto":
+        asks = limits.ask.get(name)
+        if tier == "reversible_write" and self.scope.mode == "auto" and not asks:
             return Decision(
                 "allowed", "ok", "Auto mode allows reversible writes.", tier, mode, op.approver_rule
             )
-        reason = (
-            "Ask mode: reversible writes need approval."
-            if tier == "reversible_write"
-            else "Actions that reach people outside this conversation or cannot be undone need approval."
-        )
-        return Decision("needs_approval", "approval_required", reason, tier, mode, op.approver_rule)
+        code, reason = "approval_required", IRREVERSIBLE_REASON
+        if tier == "reversible_write":
+            reason = "Ask mode: reversible writes need approval."
+            if asks and self.scope.mode == "auto":
+                code, reason = "role_ask", f"Your role ({asks}) asks before {adapter_key} {operation}."
+        if approver is not None:  # an admin routed this operation's approvals to a role
+            return Decision(
+                "needs_approval", code, reason, tier, mode, "role_or_admin", approver[0], approver[1]
+            )
+        return Decision("needs_approval", code, reason, tier, mode, op.approver_rule)
 
     async def _channel_rule(self, conn: Any, target: Target) -> Decision | None:
         row = await (

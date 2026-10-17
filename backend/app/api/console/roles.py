@@ -1,5 +1,6 @@
 """Console: custom roles. A role's profile shapes how the agent answers its holders (spec 4.2, D-202);
-roles never grant access. A preview shows the difference a profile makes before it is saved."""
+its limits narrow what the agent does for them and route approvals to them (D-203, D-204). Roles never
+grant access. A preview shows the difference a profile makes before it is saved."""
 
 import secrets
 from typing import Any, Literal
@@ -11,19 +12,23 @@ from pydantic import BaseModel, Field, field_validator
 from temporalio.client import WorkflowExecutionStatus
 from temporalio.service import RPCError
 
+from app.agent.playbooks import BUILTIN, keys, latest
 from app.agent.roles import Profile
 from app.api.console.common import audit, fetch_all, fetch_one
+from app.api.console.integrations import operations
 from app.api.errors import ApiError
 from app.api.temporal_client import temporal_client
 from app.auth.console import ConsoleIdentity, console_identity, require_admin
 from app.db.uow import UnitOfWork, get_uow
 from app.settings import get_settings
+from app.tools.base import Operation
 from app.workflows.roles import SAMPLE_REQUESTS, PreviewRequest
 
 router = APIRouter(prefix="/api/roles")
 
 ROLES_SQL = """
-select r.id, r.title, r.description, r.profile, r.status, r.created_at, r.updated_at,
+select r.id, r.title, r.description, r.profile, r.allowed_playbooks, r.blocked_operations, r.ask_operations,
+       r.approves_operations, r.max_mode::text as max_mode, r.status, r.created_at, r.updated_at,
        count(mr.membership_id) filter (where m.status = 'active') as members,
        count(mr.membership_id) filter (where m.status = 'active' and mr.is_primary) as primary_for
   from app.custom_roles r
@@ -35,7 +40,28 @@ select r.id, r.title, r.description, r.profile, r.status, r.created_at, r.update
 """
 
 
-class RoleIn(BaseModel):
+OperationList = list[str]
+LIMIT_FIELDS = (
+    "allowed_playbooks",
+    "blocked_operations",
+    "ask_operations",
+    "approves_operations",
+    "max_mode",
+)
+
+
+class Limits(BaseModel):
+    """What the agent may do for the role's holders (D-203): only ever narrower than without the role.
+    ``allowed_playbooks`` None means every playbook; ``max_mode`` "ask" keeps holders in Ask."""
+
+    allowed_playbooks: list[str] | None = Field(default=None, max_length=50)
+    blocked_operations: OperationList = Field(default_factory=list, max_length=200)
+    ask_operations: OperationList = Field(default_factory=list, max_length=200)
+    approves_operations: OperationList = Field(default_factory=list, max_length=200)
+    max_mode: Literal["ask"] | None = None
+
+
+class RoleIn(Limits):
     title: str = Field(min_length=1, max_length=80)
     description: str = Field(default="", max_length=4000)
     profile: Profile = Field(default_factory=Profile)
@@ -48,7 +74,9 @@ class RoleIn(BaseModel):
         return value.strip()
 
 
-class RolePatch(BaseModel):
+class RolePatch(Limits):
+    """Only the fields sent change (a limit sent as null is cleared)."""
+
     title: str | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = Field(default=None, max_length=4000)
     profile: Profile | None = None
@@ -59,6 +87,36 @@ class RolePatch(BaseModel):
         if value is not None and not value.strip():
             raise ValueError("title must not be blank")
         return value.strip() if value else value
+
+
+def operation_catalog() -> dict[str, Operation]:
+    """The operations a role can name: the native integrations' operations people can ask for
+    (internal ones, such as moving a ticket when its change ships, follow from those)."""
+    return {f"{key}.{op.name}": op for key in NATIVE for op in operations(key, {})}
+
+
+def _check_limits(fields: dict[str, Any]) -> dict[str, Any]:
+    """Known playbooks and operations only; only writes can ask or be approved. Sorted, without repeats."""
+    catalog = operation_catalog()
+    known_playbooks = set(keys(BUILTIN))
+    out = dict(fields)
+    if fields.get("allowed_playbooks") is not None:
+        unknown = sorted(set(fields["allowed_playbooks"]) - known_playbooks)
+        if unknown:
+            raise ApiError(422, "invalid", f"Unknown playbook: {', '.join(unknown)}.")
+        out["allowed_playbooks"] = sorted(set(fields["allowed_playbooks"]))
+    for name in ("blocked_operations", "ask_operations", "approves_operations"):
+        if name not in fields:
+            continue
+        values = sorted(set(fields[name] or []))
+        unknown = [v for v in values if v not in catalog]
+        if unknown:
+            raise ApiError(422, "invalid", f"Unknown operation: {', '.join(unknown)}.")
+        reads = [v for v in values if name != "blocked_operations" and catalog[v].tier == "read"]
+        if reads:
+            raise ApiError(422, "invalid", f"Only writes can ask or be approved: {', '.join(reads)}.")
+        out[name] = values
+    return out
 
 
 async def _role(conn: Any, role_id: UUID) -> dict[str, Any]:
@@ -83,11 +141,20 @@ async def list_roles(
 async def create_role(
     body: RoleIn, identity: ConsoleIdentity = Depends(require_admin), uow: UnitOfWork = Depends(get_uow)
 ) -> dict[str, Any]:
+    limits = _check_limits(body.model_dump(include=set(LIMIT_FIELDS)))
     row = await fetch_one(
         uow.connection,
-        "insert into app.custom_roles (org_id, title, description, profile) values (%s, %s, %s, %s) "
-        "returning id",
-        (identity.org_id, body.title, body.description, Jsonb(body.profile.model_dump(exclude_none=True))),
+        "insert into app.custom_roles (org_id, title, description, profile, allowed_playbooks, "
+        "blocked_operations, ask_operations, approves_operations, max_mode) "
+        "values (%(org)s, %(title)s, %(description)s, %(profile)s, %(allowed_playbooks)s, "
+        "%(blocked_operations)s, %(ask_operations)s, %(approves_operations)s, %(max_mode)s) returning id",
+        {
+            "org": identity.org_id,
+            "title": body.title,
+            "description": body.description,
+            "profile": Jsonb(body.profile.model_dump(exclude_none=True)),
+            **limits,
+        },
     )
     assert row is not None
     await audit(uow.connection, identity, "role.created", body.title)
@@ -101,9 +168,14 @@ async def update_role(
     identity: ConsoleIdentity = Depends(require_admin),
     uow: UnitOfWork = Depends(get_uow),
 ) -> dict[str, Any]:
-    changes = body.model_dump(exclude_none=True)
+    changes = body.model_dump(exclude_unset=True)
+    if any(changes.get(k, "") is None for k in ("title", "description", "profile")):
+        raise ApiError(422, "invalid", "Title, description and profile cannot be null.")
     if not changes:
         raise ApiError(422, "invalid", "Nothing to change.")
+    changes = _check_limits(changes)
+    if "profile" in changes:
+        changes["profile"] = Profile.model_validate(changes["profile"]).model_dump(exclude_none=True)
     current = await _role(uow.connection, role_id)
     if current["status"] != "active":
         raise ApiError(409, "archived", "Archived roles cannot be edited.")
@@ -137,6 +209,26 @@ async def archive_role(
     return await _role(uow.connection, role_id)
 
 
+@router.get("/options")
+async def role_options(identity: ConsoleIdentity = Depends(console_identity)) -> dict[str, Any]:
+    """What a role's limits can name: playbooks, and operations grouped by integration."""
+    return {
+        "playbooks": [
+            {"key": k, "title": latest(k).title, "description": latest(k).description} for k in keys(BUILTIN)
+        ],
+        "operations": [
+            {
+                "key": name,
+                "integration": name.split(".", 1)[0],
+                "operation": op.name,
+                "tier": op.tier,
+                "description": op.description,
+            }
+            for name, op in operation_catalog().items()
+        ],
+    }
+
+
 # ------------------------------------------------------------------ preview
 
 
@@ -151,6 +243,7 @@ class PreviewIn(BaseModel):
 
 
 PREVIEW_PREFIX = "role-preview-"
+NATIVE = ("slack", "jira", "github", "google_cloud_logging")
 UNAVAILABLE = "Previews are not available right now. Try again in a moment."
 
 

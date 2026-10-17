@@ -30,9 +30,12 @@ In #agent-test (staging), as a member whose Jira and GitHub accounts are linked 
    > - Orders with more than 19 items are undercharged: only the first 19 lines count toward the total.
    > - A 150% promo code made an order total go negative (-$43.20). Discounts above 100% must be refused.
 2. In its thread: `@agent create Jira tickets for these issues` (about a minute; in Ask, approve the two requests).
-3. In the same thread: `@agent come up with a detailed plan to address these tickets` (about 70 s; the plan names the tickets).
-4. Then: `@agent implement the changes, commit and push them to a new branch, and raise a PR` (about a minute; in Ask, approve the push).
+3. In the same thread: `@agent come up with a detailed plan to address these tickets` (about 70 s; the plan names the tickets), or click **Plan a fix** on the tickets answer.
+4. Then: `@agent implement the changes, commit and push them to a new branch, and raise a PR` (about a minute; in Ask, approve the push), or click **Implement this plan** on the plan. The final answer has a **View pull request** button.
 5. Watch the KAN board: To Do when created; In Progress as the change starts (Auto); In Review with a link to the pull request when it opens.
+6. In the console, **Tasks** shows each step's timeline: what was read, what the policy decided, who approved, what was written and each model call.
+
+**Roles.** On the console's Roles page, a role's profile (detail, language, format, what to call out) changes how the agent answers its holders; **Preview** shows the same sample answered without the role and with it. Limits narrow what the agent does for them (playbooks, operations it never does or always asks before, Ask only), and a role can approve an operation for everyone (for example a Tech Lead approving pushes): the approval message then says "a Tech Lead or an admin decides". Assign roles on the Members page.
 
 **Ask or Auto.** In Ask the agent asks before each change: two ticket approvals, then the push (the tickets go from To Do to In Review when the push is approved). In Auto it acts within the requester's access without asking, and the tickets show In Progress while the change is made. To use Auto: the console's Settings, Autonomy, "Let people choose Auto", then in Slack the agent's Home tab, "How should I act?", "Auto: act within my access".
 

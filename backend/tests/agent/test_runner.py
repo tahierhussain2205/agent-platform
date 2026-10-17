@@ -270,6 +270,87 @@ async def test_sharing_needs_approval_then_posts_once(agent: Agent) -> None:
     assert len(posted) == 1  # executed once, whatever the retries
 
 
+def _hold(agent: Agent, user: str, title: str, **limits: Any) -> Any:
+    """A role for ``user`` (a Slack id) with the given limits; returns its id."""
+    acme = agent.world.acme
+    member = agent.sql(
+        "select membership_id from app.platform_identities where external_user_id = %s", (user,)
+    )[0][0]
+    columns = ", ".join(["org_id", "title", *limits])
+    marks = ", ".join(["%s"] * (2 + len(limits)))
+    role = agent.sql(
+        f"insert into app.custom_roles ({columns}) values ({marks}) returning id",
+        (acme.id, title, *limits.values()),
+    )[0][0]
+    agent.sql(
+        "insert into app.membership_roles (org_id, membership_id, role_id, is_primary) values (%s, %s, %s, "
+        "not exists (select 1 from app.membership_roles where membership_id = %s))",
+        (acme.id, member, role, member),
+    )
+    return role
+
+
+def _drop(agent: Agent, role: Any) -> None:
+    agent.sql("delete from app.membership_roles where role_id = %s", (role,))
+    agent.sql("update app.custom_roles set status = 'archived' where id = %s", (role,))
+
+
+async def test_a_role_without_the_playbook_is_told_so_in_code(agent: Agent) -> None:
+    """Roles narrow what the agent does for their holders: the playbook is refused before any brief,
+    with the role named (D-203)."""
+    role = _hold(agent, "U0BOB", f"Support {tag()}", allowed_playbooks=["slack_qa"])
+    try:
+        ref = await ask(agent, "create Jira tickets for the problems reported today in #bugs")
+        u = await agent.runner.understand(ref, "auto")
+    finally:
+        _drop(agent, role)
+    assert u.refused
+    assert u.playbook_key is None
+    assert u.question is not None
+    assert "doesn't include _jira tickets from chat_" in u.question
+    assert "Your role (Support " in u.question
+    assert agent.sql("select count(*) from app.artifacts where task_id = %s", (ref.task_id,)) == [(0,)]
+
+
+async def test_a_button_chooses_the_playbook_and_says_the_request(agent: Agent) -> None:
+    """A quick action (D-205): no classification; the brief reads our words as the clicker's request."""
+    from dataclasses import replace
+
+    await reset_model()
+    ref = replace(await ask(agent, "thanks, looks good"), intent="implement")
+    u = await agent.runner.understand(ref, "ask")
+    assert u.playbook_key == "implement_change"
+    assert u.confidence == 1.0
+    requests = await model_requests()
+    tools = [r["tool_choice"]["name"] for r in requests if r.get("tool_choice")]
+    assert "submit_classification" not in tools
+    brief = next(r for r in requests if (r.get("tool_choice") or {}).get("name") == "submit_brief")
+    content = json.dumps(brief["messages"])
+    assert "Implement the plan in this thread: make the change" in content
+    assert "<request_ref>B" in content  # the request has a ref, like any message
+
+
+async def test_approvals_go_to_the_role_that_approves_the_operation(agent: Agent) -> None:
+    """An approver role takes over who decides; the approval message says so (D-204)."""
+    title = f"Comms {tag()}"
+    role = _hold(agent, "U0QUINN", title, approves_operations=["slack.post_message"])
+    try:
+        ref = await ask(agent, "summarize today's discussion in #bugs and share it in #general")
+        u, f, c = await run_read(agent, ref)
+        (action,) = await agent.runner.plan(ref, u, f, "standard")
+        mark = len(agent.sink.sent)
+        outcome = await agent.runner.act(ref, u, action, 1, c.answer, c.sources)
+    finally:
+        _drop(agent, role)
+    assert outcome.status == "awaiting_approval"
+    (request,) = sent_since(agent, mark)
+    assert isinstance(request, ApprovalRequest)
+    assert request.expires_text.endswith(f"a {title} or an admin decides")
+    assert agent.sql(
+        "select approver_rule, approver_role_id from app.approvals where id = %s", (outcome.approval_id,)
+    ) == [("role_or_admin", role)]
+
+
 async def test_private_content_is_not_shared_in_a_public_channel(agent: Agent) -> None:
     t = tag()
     await ui_post("U0ALICE", "C0LEADS", f"Hiring freeze {t}")

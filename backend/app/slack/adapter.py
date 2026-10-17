@@ -27,6 +27,8 @@ class Reply:
     channel: str
     text: str
     thread_ts: str | None = None
+    actions: list[tuple[str, str, str]] = field(default_factory=list)  # (action_id, label, value)
+    links: list[tuple[str, str]] = field(default_factory=list)  # (label, url): buttons that open a page
 
 
 @dataclass(frozen=True)
@@ -123,6 +125,8 @@ def render(intent: Intent) -> list[tuple[str, dict[str, Any]]]:
     """Slack API calls (method, params) for an intent. Usually one; long reports use several."""
     if isinstance(intent, Reply):
         blocks = text_blocks(intent.text)
+        if intent.actions or intent.links:
+            blocks.append(buttons(intent.actions, intent.links))
         return [
             (
                 "chat.postMessage",
@@ -278,6 +282,29 @@ def render(intent: Intent) -> list[tuple[str, dict[str, Any]]]:
         )
         for part in _batches(blocks)
     ]
+
+
+def buttons(
+    actions: list[tuple[str, str, str]], links: list[tuple[str, str]] | None = None
+) -> dict[str, Any]:
+    """An actions block: buttons our code handles (the first one primary), then link buttons."""
+    elements: list[dict[str, Any]] = []
+    for index, (action_id, label, value) in enumerate(actions):
+        button: dict[str, Any] = {
+            "type": "button",
+            "action_id": action_id,
+            "text": {"type": "plain_text", "text": label[:75]},
+            "value": value[:2000],
+        }
+        if index == 0:
+            button["style"] = "primary"
+        elements.append(button)
+    for n, (label, url) in enumerate(links or []):
+        elements.append(
+            {"type": "button", "action_id": f"link_{n}", "text": {"type": "plain_text", "text": label[:75]},
+             "url": url[:3000]}
+        )  # fmt: skip
+    return {"type": "actions", "elements": elements[:25]}
 
 
 def _batches(blocks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:

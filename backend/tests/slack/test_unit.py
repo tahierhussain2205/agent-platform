@@ -86,6 +86,32 @@ def test_reply_renders_sections_in_the_thread() -> None:
     assert params["blocks"] == [{"type": "section", "text": {"type": "mrkdwn", "text": "hello *world*"}}]
 
 
+def test_reply_buttons_follow_the_text() -> None:
+    from app.agent.quick_actions import QUICK_ACTIONS, button, parse
+
+    action = button("investigate", "C1", "111.2")
+    ((_, params),) = render(
+        Reply("C1", "Created KAN-7", "111.2", [action], [("View pull request", "https://x/pr/4")])
+    )
+    *text, actions = params["blocks"]
+    assert text == [{"type": "section", "text": {"type": "mrkdwn", "text": "Created KAN-7"}}]
+    plan, link = actions["elements"]
+    assert (plan["action_id"], plan["text"]["text"], plan["style"]) == (
+        "quick_action",
+        "Plan a fix",
+        "primary",
+    )
+    assert link == {"type": "button", "action_id": "link_0", "text": {"type": "plain_text", "text": "View pull request"},
+                    "url": "https://x/pr/4"}  # fmt: skip
+    # A value reads back to the action and where it runs; anything else is not ours.
+    assert parse(plan["value"]) == (QUICK_ACTIONS["investigate"], "C1", "111.2")
+    for value in ("", "nope", '{"i": "delete_everything", "c": "C1"}', '{"i": "implement"}', "[1]"):
+        assert parse(value) is None
+    assert render(Reply("C1", "plain"))[0][1]["blocks"] == [
+        {"type": "section", "text": {"type": "mrkdwn", "text": "plain"}}
+    ]
+
+
 def test_long_reports_split_across_messages() -> None:
     report = Report(
         "C1",

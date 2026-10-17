@@ -72,7 +72,17 @@ export interface RoleProfile {
   focus?: RoleFocus[]
 }
 
-export interface Role {
+/** What the agent may do for a role's holders: only ever narrower than without the role. */
+export interface RoleLimits {
+  /** null: every playbook. */
+  allowed_playbooks: string[] | null
+  blocked_operations: string[]
+  ask_operations: string[]
+  approves_operations: string[]
+  max_mode: 'ask' | null
+}
+
+export interface Role extends RoleLimits {
   id: string
   title: string
   description: string
@@ -643,5 +653,26 @@ export function useRolePreview(id: string | null) {
     queryFn: () => api<RolePreview>(`/api/roles/preview/${encodeURIComponent(id ?? '')}`),
     enabled: id !== null,
     refetchInterval: (query) => (query.state.data?.status === 'running' ? 1500 : false),
+  })
+}
+
+export interface RoleOptions {
+  playbooks: { key: string; title: string; description: string }[]
+  operations: {
+    key: string
+    integration: string
+    operation: string
+    tier: 'read' | 'reversible_write' | 'irreversible'
+    description: string
+  }[]
+}
+
+export function useRoleOptions() {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'role-options'],
+    queryFn: () => api<RoleOptions>('/api/roles/options'),
+    staleTime: 5 * 60_000,
   })
 }
