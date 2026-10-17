@@ -223,8 +223,8 @@ async def _ticket(
     planned: list[tuple[str, str]],
     repositories: list[str],
 ) -> PlannedAction:
-    summary = redact(" ".join(str(args.get("summary") or "").split()))[0][:255]
-    description = redact(str(args.get("description") or "").strip())[0][:20000]
+    summary = redact(" ".join(without_refs(str(args.get("summary") or "")).split()))[0][:255]
+    description = redact(without_refs(str(args.get("description") or "")).strip())[0][:20000]
     project = str(args.get("project") or "").strip().upper()
     component = str(args.get("component") or "").strip()
     finding = finding_for(args.pop("finding", None), summary, points)
@@ -323,9 +323,19 @@ async def _only_project(executor: ToolExecutor) -> tuple[str, str]:
 
 
 def missing_was_asked(missing: str, goal: str) -> bool:
-    """Whether the request named the component the project lacks (``missing`` names it)."""
+    """Whether the request asked for the component the project lacks (``missing`` names it): its name
+    and the word "component" (a service's or repository's name alone is not a component)."""
     named = re.search(r"has no component (.+?), so", missing)
-    return named is not None and named.group(1).lower() in goal.lower()
+    lowered = goal.lower()
+    return named is not None and "component" in lowered and named.group(1).lower() in lowered
+
+
+REF = re.compile(r"\s+\[(?:[A-Z]{1,2})?\d{1,3}\](?=[\s.,;:)]|$)")  # after a space: not code like a[1]
+
+
+def without_refs(text: str) -> str:
+    """Model text without our citation refs ([S1], [C2], [3]): they mean nothing in Jira."""
+    return REF.sub("", text)
 
 
 async def _component_of(executor: ToolExecutor, project: str, component: str) -> tuple[str, str]:

@@ -35,6 +35,16 @@ undercharged; `total()` takes any discount, so a promotion above 100% makes a to
 | 12 | 3 | UX | The plan's title is the request echoed: "Plan: Create a detailed plan to address two checkout issues…". | fixed: "Plan for KAN-6, KAN-7: <what the change achieves>" (linked keys; the prompt asks for the outcome, not the request) |
 | 13 | 3 | bug | The plan's step 6 is "Create the two Jira tickets … capture the resulting Jira keys": they exist already (KAN-6, KAN-7), see #3. | fixed: the plan sees the tickets and is told they exist |
 | 14 | 4 | bug | "No sandbox is configured, so I can't change or test code safely" on staging: `build_registry` offers the sandbox tools only when `SANDBOX_URL` is set, and E2B has no URL. `app check sandbox` passed because it uses the provider directly. Blocks step 4. | fixed: `sandbox_configured` decides (E2B needs only its key); `app check sandbox` now fails when the agent would not offer the tools |
+| 15 | 2 | bug | Only one ticket was made: the model saw KAN-7 (Done) for the discount bug and proposed none, and the answer said "no new ticket was needed". A closed ticket does not cover a problem reported again. (Run 2's data made this likely: run 1's tickets had been moved to Done.) | open |
+| 16 | 2 | bug | Our citation refs leak into Jira: the ticket description ends with "[S1]". | open |
+| 17 | 2 | bug | "KAN has no component cart-service" is still shown: the request names the repository `tahier-agent-lab/cart-service`, which my check took as asking for that component. | open |
+| 18 | 2 | UX | The short ticket answer still ends with "Not verified: No existing Jira issue found for … in project KAN" (a finding without a source). | open |
+| 19 | 2 | test | The first click on Approve, right as the request appeared, never reached Slack (no interaction arrived); the second did. The harness now waits and checks that the status changed. Not a platform issue. | won't fix (harness) |
+| 20 | 4 | UX | The change's report lists under "Not verified" what was verified ("Confirmed all three new tests fail before the fix … pass after it") and "Did not create or update any Jira ticket (e.g. KAN-8)" right below "KAN-8 moved to In Review". | open |
+| 21 | 3,4 | UX | The plan echoes my prompt: "(tickets are not to be created by this plan)", and the pull request's plan section repeats it. | open |
+| 22 | 4 | UX | The push request says "Then KAN-8 moves to In Review, each with a link to the pull request" for one ticket. | open |
+| 23 | 5 | UX | The Jira comment reads "The agent opened a pull request for this issue: <link> via the agent · agent-…". | open |
+| 24 | 5 | note | In Ask mode the tickets go from To Do straight to In Review when the push is approved (In Progress is skipped: moving it then would need an approval of its own, D-198). In Auto they show In Progress as the work starts. | by design (choose the mode for the demo) |
 
 ## Runs
 
@@ -46,3 +56,12 @@ undercharged; `total()` takes any discount, so a promotion above 100% makes a to
 - Step 3: "@agent come up with a detailed plan to address these tickets": a plan in 69 s ("Understanding", "Investigating logs, code and recent changes", "Writing the plan"). It found both bugs in `src/pricing/cart.py` from the code and history, with tests to write first, fixes, verification and rollback; but it does not know KAN-6 and KAN-7 (#2, #3, #12, #13).
 - Step 4: "@agent implement the changes, commit and push them to a new branch, and raise a PR": "Nothing was changed. No sandbox is configured" within 9 s (#14). Stopped here.
 - Step 5: KAN-6 and KAN-7 stayed To Do (#1).
+
+### Run 2 (2026-10-17, staging at 56543ae, Ask mode)
+
+- Step 1: posted the two bugs in #agent-test.
+- Step 2: an approval in 39 s, for one ticket only (#15, #16, #17); approved (the harness's first click was lost, #19); KAN-8 created; the answer is two sentences now (#6 fixed), with a stray "Not verified" (#18).
+- Step 3: "Plan for KAN-8: Count every cart line and refuse discounts over 100%" in 67 s (#2, #3, #12 fixed): it found the thread's ticket by itself and covers both bugs (#21).
+- Step 4: Preparing, Implementing, Reviewing; the push request in 54 s: 2 files (+25 −4), "Verified: All tests pass", "Then KAN-8 moves to In Review" (#22). Approved: pull request tahier-agent-lab/cart-service#1 "KAN-8: Count every cart line and refuse discounts over 100%" in 13 s, on `agent/kan-8-count-every-cart-line-and-refuse-423278`; the new tests fail without the fix and pass with it; the reviewer approved (#20).
+- Step 5: KAN-8 moved to In Review with a comment linking the pull request (#1 fixed; #23, #24).
+

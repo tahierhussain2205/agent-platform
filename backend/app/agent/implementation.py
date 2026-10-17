@@ -95,6 +95,14 @@ def repository_of(plan: dict[str, Any]) -> str | None:
     return str(service["repository"]) if service.get("repository") else None
 
 
+# Implementer notes about what the platform does (tickets, the push) or about what it did check.
+PLATFORM_NOTE = re.compile(
+    r"\b(jira|tickets?|pull request|PR|push(ed|ing)?)\b|\b[A-Z][A-Z0-9]{1,9}-\d+\b"
+    r"|^\s*(confirmed|verified)\b",
+    re.IGNORECASE,
+)
+
+
 def issue_keys_of(case: ChangeCase) -> list[str]:
     """The change's issues (a case from before several issues has only ``issue_key``)."""
     return list(case.issue_keys) or ([case.issue_key] if case.issue_key else [])
@@ -450,8 +458,11 @@ class Implementation:
                     f"Verified: {verification.summary}",
                     *(f"Needs a person: {a}" for a in exported.ask)]  # fmt: skip
         if keys and not number:  # approving the push approves these too (they follow it)
-            verb = "move" if "," in keys else "moves"
-            evidence.append(f"Then {keys} {verb} to In Review, each with a link to the pull request")
+            several = "," in keys
+            evidence.append(
+                f"Then {keys} {'move' if several else 'moves'} to In Review, "
+                f"{'each with a link' if several else 'with a link'} to the pull request"
+            )
         args = {"repo": case.repo, "change": exported.artifact_id, "base_sha": case.base_sha,
                 "branch": case.branch,
                 "title": title, "body": body, "summary": implemented.summary}  # fmt: skip
@@ -553,8 +564,8 @@ class Implementation:
             )  # fmt: skip
         if exported is not None and exported.ask and not exported.blocked:
             lines.append("*Needed a person's approval*: " + "; ".join(escape(a) for a in exported.ask))
-        for a in attempts:
-            not_verified += [escape(n) for n in a.notes][:3]
+        for a in attempts:  # what the implementer could not do; tickets and the push are ours to report
+            not_verified += [escape(n) for n in a.notes if not PLATFORM_NOTE.search(n)][:3]
         sources = [self._source(case, pr_url)]
         return Composed("\n".join(lines), sources, "high" if verification and verification.ok else "medium",
                         1 if verification and verification.ok else 0, 1, not_verified[:6])  # fmt: skip
