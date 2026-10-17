@@ -452,3 +452,15 @@ export function useApiMutation<TInput, TOutput = unknown>(
 }
 
 export const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) })
+
+export interface Autonomy {
+  /** The most the org lets its people work in: "ask" for everyone, or "auto" for those who choose it. */
+  org: 'ask' | 'auto'
+  set: boolean
+}
+
+export function useAutonomy() {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({ queryKey: [org, 'autonomy'], queryFn: () => api<Autonomy>('/api/autonomy') })
+}
