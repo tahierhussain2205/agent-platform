@@ -173,7 +173,7 @@ def test_plan_and_report(client: TestClient) -> None:
         )
     )
     assert "• Checkout fails [1]" in report["answer"]
-    assert "Not covered: Access denied: #x" in report["answer"]
+    assert "Not covered" not in report["answer"]  # the platform lists the gaps below the answer
     empty = tool_input(
         call(
             client,
