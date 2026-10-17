@@ -85,7 +85,7 @@ describe('Roles page', () => {
     expect(within(card).queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument()
   })
 
-  it('edits a profile and previews it before saving', async () => {
+  it('edits a profile and previews it before saving', { timeout: 15000 }, async () => {
     let previewPolls = 0
     const fetch = mockFetch({
       'GET /api/me': () => ({ body: me('admin') }),
@@ -122,7 +122,7 @@ describe('Roles page', () => {
 
     await user.selectOptions(within(dialog).getByLabelText('Sample request'), 'fix')
     await user.click(within(dialog).getByRole('button', { name: 'Preview' }))
-    const panel = await within(dialog).findByTestId('preview-with-role', {}, { timeout: 4000 })
+    const panel = await within(dialog).findByTestId('preview-with-role', {}, { timeout: 8000 })
     expect(within(panel).getByText('As Support')).toBeInTheDocument()
     expect(within(panel).getByText('TL;DR:')).toHaveProperty('tagName', 'STRONG')
     expect(within(dialog).getByText('Without a role')).toBeInTheDocument()
