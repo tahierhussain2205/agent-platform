@@ -291,10 +291,12 @@ def test_failed_event_deliveries_are_retried_with_retry_headers(client: TestClie
 def test_rate_limits(client: TestClient) -> None:
     client.post("/_admin/slack/rate-limits", json={"chat.postMessage": 1})
     first = api(client, "chat.postMessage", channel="C0BUGS", text="1")
-    second = api(client, "chat.postMessage", channel="C0BUGS", text="2")
     assert first.json()["ok"]
-    assert second.status_code == 429
-    assert second.headers["retry-after"] == "1"
+    # One call a second: two calls can straddle a second (CI did once), three cannot all pass.
+    later = [api(client, "chat.postMessage", channel="C0BUGS", text=str(n)) for n in (2, 3, 4)]
+    limited = [r for r in later if r.status_code == 429]
+    assert limited
+    assert limited[0].headers["retry-after"] == "1"
 
 
 def test_uninstall_revokes_tokens(client: TestClient, receiver: Receiver) -> None:
