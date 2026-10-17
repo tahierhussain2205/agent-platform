@@ -15,6 +15,7 @@ import { RolesPage } from './pages/Roles'
 import { SchedulesPage } from './pages/Schedules'
 import { SettingsPage } from './pages/Settings'
 import { SlackPage } from './pages/Slack'
+import { TaskDetailPage, TasksPage } from './pages/Tasks'
 import { UsagePage } from './pages/Usage'
 
 const clerkPages = () => import('./auth/ClerkPages')
@@ -62,6 +63,8 @@ const router = createBrowserRouter([
     element: <ConsoleGate />,
     children: [
       { index: true, element: <OverviewPage /> },
+      { path: 'tasks', element: <TasksPage /> },
+      { path: 'tasks/:taskId', element: <TaskDetailPage /> },
       { path: 'members', element: <MembersPage /> },
       { path: 'roles', element: <RolesPage /> },
       { path: 'slack', element: <SlackPage /> },

@@ -131,6 +131,7 @@ function Shell() {
   const isAdmin = me.membership.privilege === 'admin'
   const nav = [
     { to: '/', label: 'Overview', end: true },
+    { to: '/tasks', label: 'Tasks' },
     { to: '/members', label: 'Members' },
     { to: '/roles', label: 'Roles' },
     { to: '/slack', label: 'Slack' },

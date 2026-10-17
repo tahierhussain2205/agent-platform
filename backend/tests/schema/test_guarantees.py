@@ -540,6 +540,112 @@ def test_expired_approval_cannot_be_decided(world: World) -> None:
             _decide(conn, approval, world.acme.admin)
 
 
+def _role(conn: psycopg.Connection[Any], org: UUID, title: str, *holders: UUID) -> UUID:
+    role: UUID = scalar(
+        conn, "insert into app.custom_roles (org_id, title) values (%s, %s) returning id", (org, title)
+    )
+    for member in holders:
+        conn.execute(
+            "insert into app.membership_roles (org_id, membership_id, role_id, is_primary) "
+            "values (%s, %s, %s, not exists (select 1 from app.membership_roles where membership_id = %s))",
+            (org, member, role, member),
+        )
+    return role
+
+
+def _routed(conn: psycopg.Connection[Any], w: World, role: UUID | None, rule: str = "role_or_admin") -> UUID:
+    return scalar(  # type: ignore[no-any-return]
+        conn,
+        "insert into app.approvals (org_id, task_id, action_summary, action_tier, approver_rule, "
+        "approver_role_id, expires_at) values (%s, %s, 'Push', 'reversible_write', %s, %s, now() + interval '1 hour') "
+        "returning id",
+        (w.acme.id, w.acme.ids["tasks"], rule, role),
+    )
+
+
+@pytest.mark.parametrize(
+    ("decider", "allowed"),
+    [("holder", True), ("admin", True), ("requester", False), ("other", False)],
+)
+def test_approvals_routed_to_a_role(world: World, decider: str, allowed: bool) -> None:
+    """A holder of the approver role or an active admin decides; the requester does not, unless they
+    hold the role (D-204)."""
+    with tx(world.url, APP_USER, world.acme.id) as conn:
+        holder = membership(conn, world.acme.id, "quinn@acme.test")
+        other = membership(conn, world.acme.id, "frank@both.test")
+        role = _role(conn, world.acme.id, "Tech Lead", holder)
+        approval = _routed(conn, world, role)
+        who = {"holder": holder, "admin": world.acme.admin, "requester": world.acme.user, "other": other}
+        if allowed:
+            _decide(conn, approval, who[decider])
+            assert scalar(conn, "select decided_at is not null from app.approvals where id = %s", (approval,))
+        else:
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                _decide(conn, approval, who[decider])
+
+
+def test_archived_approver_role_leaves_admins(world: World) -> None:
+    with tx(world.url, APP_USER, world.acme.id) as conn:
+        holder = membership(conn, world.acme.id, "quinn@acme.test")
+        role = _role(conn, world.acme.id, "Tech Lead", holder)
+        approval = _routed(conn, world, role)
+        conn.execute("update app.custom_roles set status = 'archived' where id = %s", (role,))
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            _decide(conn, approval, holder)
+    with tx(world.url, APP_USER, world.acme.id) as conn:
+        _decide(conn, approval, world.acme.admin)
+
+
+@pytest.mark.parametrize("case", ["rule_without_role", "role_without_rule"])
+def test_role_routing_needs_rule_and_role_together(world: World, case: str) -> None:
+    with tx(world.url, APP_USER, world.acme.id) as conn:
+        role = _role(conn, world.acme.id, "Tech Lead")
+        given, rule = (None, "role_or_admin") if case == "rule_without_role" else (role, "requester_or_admin")
+        with pytest.raises(psycopg.errors.CheckViolation):
+            _routed(conn, world, given, rule)
+
+
+def test_approver_role_from_another_org_cannot_be_linked(world: World) -> None:
+    with tx(world.url) as conn:
+        theirs = _role(conn, world.globex.id, "Tech Lead")
+    with tx(world.url, APP_USER, world.acme.id) as conn, pytest.raises(psycopg.errors.ForeignKeyViolation):
+        _routed(conn, world, theirs)
+
+
+def test_who_decides_is_fixed(world: World) -> None:
+    with tx(world.url, APP_USER, world.acme.id) as conn:
+        role = _role(conn, world.acme.id, "Tech Lead")
+        approval = _approval(conn, world, "requester")
+        with pytest.raises(psycopg.errors.CheckViolation, match="fixed"):
+            conn.execute(
+                "update app.approvals set approver_rule = 'role_or_admin', approver_role_id = %s where id = %s",
+                (role, approval),
+            )
+
+
+def test_role_caps_the_effective_mode(world: World) -> None:
+    """A role capped at Ask keeps its holders in Ask whatever they and the org choose (D-203)."""
+    with tx(world.url, APP_USER, world.acme.id) as conn:
+        conn.execute(
+            "insert into app.autonomy_policies (org_id, scope_type, max_mode) values (%s, 'org', 'auto') "
+            "on conflict do nothing",
+            (world.acme.id,),
+        )
+        conn.execute("update app.autonomy_policies set max_mode = 'auto' where scope_type = 'org'")
+        conn.execute(
+            "insert into app.user_preferences (membership_id, org_id, mode) values (%s, %s, 'auto') "
+            "on conflict (membership_id) do update set mode = 'auto'",
+            (world.acme.user, world.acme.id),
+        )
+        mode = "select app.effective_mode(%s)::text"
+        assert scalar(conn, mode, (world.acme.user,)) == "auto"
+        role = _role(conn, world.acme.id, "Support", world.acme.user)
+        conn.execute("update app.custom_roles set max_mode = 'ask' where id = %s", (role,))
+        assert scalar(conn, mode, (world.acme.user,)) == "ask"
+        conn.execute("update app.custom_roles set status = 'archived' where id = %s", (role,))
+        assert scalar(conn, mode, (world.acme.user,)) == "auto"  # archived roles no longer count
+
+
 def test_decisions_are_final_and_need_a_decider(world: World) -> None:
     with tx(world.url, APP_USER, world.acme.id) as conn:
         approval = _approval(conn, world, "requester_or_admin")

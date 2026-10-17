@@ -30,6 +30,8 @@ declare -a MUTATIONS=(
   "alter table app.orgs drop constraint orgs_plan_known"
   "grant update (plan) on app.orgs to app_user"
   "grant execute on function app.maintenance_alert_figures() to app_user"
+  "alter table app.approvals drop constraint approver_role_with_rule"
+  "alter table app.approvals drop constraint approvals_approver_role_fk"
 )
 
 failed=0

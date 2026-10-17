@@ -4,6 +4,7 @@ import { signIn } from './helpers'
 // Every console page an admin sees.
 const PAGES = [
   '/',
+  '/tasks',
   '/members',
   '/roles',
   '/slack',

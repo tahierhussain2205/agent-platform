@@ -198,11 +198,19 @@ async def test_request_shape_caching_and_metering(stack: Stack, org: Any) -> Non
     assert result.cost == expected_cost
     event = sql(
         stack,
-        "select membership_id, model, input_tokens, output_tokens, cached_tokens, cost from app.usage_events "
-        "where task_id = %s",
+        "select membership_id, purpose, model, input_tokens, output_tokens, cached_tokens, cost "
+        "from app.usage_events where task_id = %s",
         (task,),
     )
-    assert event == (org.user, "claude-sonnet-5", 150, 20, 400, expected_cost)
+    assert event == (
+        org.user,
+        "test",
+        "claude-sonnet-5",
+        150,
+        20,
+        400,
+        expected_cost,
+    )  # purpose: the timeline
     assert sql(stack, "select tokens_used, cost from app.tasks where id = %s", (task,)) == (
         170,
         expected_cost,

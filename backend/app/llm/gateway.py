@@ -389,12 +389,14 @@ class LLMGateway:
         u = result.usage
         async with tenant_tx(self.pool, call.org_id) as conn:
             await conn.execute(
-                "insert into app.usage_events (org_id, membership_id, task_id, kind, model, input_tokens, "
-                "output_tokens, cached_tokens, cost) values (%s, %s, %s, 'llm', %s, %s, %s, %s, %s)",
+                "insert into app.usage_events (org_id, membership_id, task_id, kind, purpose, model, "
+                "input_tokens, output_tokens, cached_tokens, cost) "
+                "values (%s, %s, %s, 'llm', %s, %s, %s, %s, %s, %s)",
                 (
                     call.org_id,
                     call.membership_id,
                     call.task_id,
+                    call.purpose[:64] or None,
                     result.model,
                     u.billable_input,
                     u.output_tokens,

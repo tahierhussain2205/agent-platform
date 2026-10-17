@@ -513,3 +513,99 @@ export function useAutonomy() {
   const org = useOrgKey()
   return useQuery({ queryKey: [org, 'autonomy'], queryFn: () => api<Autonomy>('/api/autonomy') })
 }
+
+export type TaskStatus =
+  'queued' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled'
+
+export interface TaskSummary {
+  id: string
+  status: TaskStatus
+  trigger: 'mention' | 'dm' | 'schedule' | 'webhook'
+  mode: 'ask' | 'auto' | null
+  tier: Tier | null
+  tokens_used: number
+  cost: string
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  playbook: string | null
+  playbook_title: string | null
+  requester: string | null
+  requester_name: string | null
+  channel: string | null
+  dm: boolean
+  title: string | null
+  pending_approvals: number
+  error: string | null
+}
+
+export type EventTone = 'neutral' | 'green' | 'amber' | 'red'
+
+export interface TaskEvent {
+  at: string
+  kind: 'step' | 'policy' | 'approval' | 'action' | 'model' | 'artifact'
+  title: string
+  detail: string | null
+  tone: EventTone
+  input_tokens?: number
+  output_tokens?: number
+  decides?: string
+  status?: string
+  /** A read the policy allowed: the console folds runs of them into one line. */
+  read?: boolean
+  target?: string
+}
+
+export interface TaskDetail {
+  task: TaskSummary & { slack_url: string | null }
+  steps: {
+    kind: string
+    status: string
+    summary: string | null
+    started_at: string | null
+    finished_at: string | null
+  }[]
+  approvals: {
+    id: string
+    created_at: string
+    action_summary: string
+    status: 'pending' | 'approved' | 'rejected' | 'expired'
+    decided_by: string | null
+    decided_at: string | null
+    expires_at: string
+    decides: string
+  }[]
+  links: { kind: 'pull_request' | 'jira_issue'; label: string; url: string | null }[]
+  usage: { calls: number; input_tokens: number; output_tokens: number }
+  events: TaskEvent[]
+}
+
+const ACTIVE_TASK: TaskStatus[] = ['queued', 'running', 'awaiting_approval']
+export const isActiveTask = (status: TaskStatus) => ACTIVE_TASK.includes(status)
+
+export function useTasks(filters: { status?: string; before?: string }) {
+  const api = useApi()
+  const org = useOrgKey()
+  const params = new URLSearchParams({ limit: '25' })
+  if (filters.status) params.set('status', filters.status)
+  if (filters.before) params.set('before', filters.before)
+  return useQuery({
+    queryKey: [org, 'tasks', params.toString()],
+    queryFn: () =>
+      api<{ items: TaskSummary[]; next_before: string | null }>(`/api/tasks?${params.toString()}`),
+    // While something runs, the list follows it.
+    refetchInterval: (query) =>
+      query.state.data?.items.some((t) => isActiveTask(t.status)) ? 5000 : false,
+  })
+}
+
+export function useTask(id: string) {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'tasks', 'detail', id],
+    queryFn: () => api<TaskDetail>(`/api/tasks/${encodeURIComponent(id)}`),
+    refetchInterval: (query) =>
+      query.state.data && isActiveTask(query.state.data.task.status) ? 3000 : false,
+  })
+}
