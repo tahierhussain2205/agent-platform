@@ -10,12 +10,33 @@ KAN on tahierhussain2205.atlassian.net; repository `tahier-agent-lab/cart-servic
 5. The tickets' statuses follow the work as it happens.
 
 Each run is recorded below with what was seen; every gap, bug, improvement and UI/UX issue gets an
-entry in the issue list, which is kept up to date (status **open**, **fixed** with the commit, or
-**won't fix** with the reason).
+entry in the issue list, which is kept up to date (status **open**, **fixed**, or **won't fix** with
+the reason).
+
+**Status (2026-10-17, after run 5): no open issues.** Run 3 (Ask) and run 5 (Auto) went through all
+five steps on staging without a problem; the last found issues (#27, #28, #29) were fixed and
+deployed before run 5.
 
 Demo data: the two issues are real bugs in `cart-service`:
 `src/pricing/cart.py` keeps only the first 19 lines (`MAX_LINES = 19`), so large carts are
 undercharged; `total()` takes any discount, so a promotion above 100% makes a total negative.
+
+## How to run the demo
+
+In #agent-test (staging), as a member whose Jira and GitHub accounts are linked in the console:
+
+1. Post the problems, for example:
+   > Support escalated two pricing problems in tahier-agent-lab/cart-service:
+   > - Orders with more than 19 items are undercharged: only the first 19 lines count toward the total.
+   > - A 150% promo code made an order total go negative (-$43.20). Discounts above 100% must be refused.
+2. In its thread: `@agent create Jira tickets for these issues` (about a minute; in Ask, approve the two requests).
+3. In the same thread: `@agent come up with a detailed plan to address these tickets` (about 70 s; the plan names the tickets).
+4. Then: `@agent implement the changes, commit and push them to a new branch, and raise a PR` (about a minute; in Ask, approve the push).
+5. Watch the KAN board: To Do when created; In Progress as the change starts (Auto); In Review with a link to the pull request when it opens.
+
+**Ask or Auto.** In Ask the agent asks before each change: two ticket approvals, then the push (the tickets go from To Do to In Review when the push is approved). In Auto it acts within the requester's access without asking, and the tickets show In Progress while the change is made. To use Auto: the console's Settings, Autonomy, "Let people choose Auto", then in Slack the agent's Home tab, "How should I act?", "Auto: act within my access".
+
+**Before a rerun.** The board must not still have open tickets for the same problems (they would be duplicates, and the agent says so), and `cart-service`'s main branch must still have both bugs: move the previous run's tickets to Done and close (do not merge) its pull request.
 
 ## Issues
 
@@ -87,4 +108,13 @@ Settings, Autonomy, "Let people choose Auto" in the console (#25: saved and kept
 - Step 3: the plan came back empty (#27, #28); asked again: "Plan for KAN-11, KAN-12: Count every cart line and refuse discounts over 100%" in 71 s.
 - Step 4: "KAN-11, KAN-12 moved to In Progress." in the thread at 18 s (Jira said In Progress then); Implementing, Reviewing, Checking; no approval; pull request tahier-agent-lab/cart-service#3 at 67 s.
 - Step 5: KAN-11 and KAN-12 In Review, each with "Pull request opened: <link>". To Do, In Progress, In Review, as the work happened.
+
+### Run 5 (2026-10-17, staging at 8130848, Auto mode)
+
+- Step 1: posted the two bugs in #agent-test.
+- Step 2: KAN-13 and KAN-14 created in 48 s, no approval needed.
+- Step 3: "Plan for KAN-13, KAN-14: Count every cart line toward the order total and refuse discounts over 100% · confidence high" in 75 s.
+- Step 4: "KAN-13, KAN-14 moved to In Progress." early in the change (Jira: In Progress); Preparing, Implementing, Running the tests, Reviewing, Checking; pull request tahier-agent-lab/cart-service#4 at 67 s, no approval needed.
+- Step 5: KAN-13 and KAN-14 In Review, each with "Pull request opened: <link>".
+- No new issues. Afterwards: the run's tickets moved to Done and its pull request closed (not merged), so the next demo starts from a clean board with both bugs still in `main`; the requester's mode set back to Ask (the org ceiling stays at "Let people choose Auto").
 
