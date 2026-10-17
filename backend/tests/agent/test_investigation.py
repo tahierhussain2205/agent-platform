@@ -279,6 +279,38 @@ async def test_a_plan_for_these_tickets_covers_the_ones_made_in_the_thread(world
     assert await world.runner._session_tickets(other) == []
 
 
+async def test_an_empty_plan_is_asked_for_again_and_never_posted_empty(world: Agent) -> None:
+    """Demo run 4: the plan came back with nothing in it, and "Plan for KAN-11, KAN-12:" was posted
+    with no goal, evidence or steps."""
+    from tests.agent.conftest import script_model
+
+    ref = await ask(world, "investigate PAY-101 and plan a fix")
+    u = await world.runner.understand(ref, "ask")
+    case = await world.runner.orient(ref, u)
+    found = [await world.runner.investigate(ref, u, case, k, "standard") for k in ("logs", "code", "changes")]
+    await script_model([{"type": "tool_use", "name": "submit_investigation_plan", "input": {"notes": "x"}}])
+    composed = await world.runner.plan_investigation(ref, u, case, found, "standard")
+    assert composed.answer.startswith("*Plan for ")  # the second answer was a plan
+    assert "Write a failing test" in composed.answer
+    await world.runner.finish(ref, "completed")
+
+    again = await ask(world, "investigate PAY-101 and plan a fix")
+    u2 = await world.runner.understand(again, "ask")
+    case2 = await world.runner.orient(again, u2)
+    found2 = [
+        await world.runner.investigate(again, u2, case2, k, "standard") for k in ("logs", "code", "changes")
+    ]
+    empty = {"type": "tool_use", "name": "submit_investigation_plan", "input": {}}
+    await script_model([empty], [empty])
+    composed2 = await world.runner.plan_investigation(again, u2, case2, found2, "standard")
+    assert composed2.answer == (
+        "I couldn't write a plan this time: the answer I got had no plan in it. Ask me again."
+    )
+    assert world.sql(
+        "select count(*) from app.artifacts where task_id = %s and kind = 'plan'", (again.task_id,)
+    ) == [(0,)]
+
+
 async def test_what_could_not_be_read_is_said_and_lowers_confidence(world: Agent) -> None:
     acme = world.world.acme
     world.sql("update app.services set log_source = '{}' where org_id = %s and name = 'web-app'", (acme.id,))

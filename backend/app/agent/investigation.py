@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from app.agent import prompts
+from app.agent.tickets import without_refs
 from app.agent.types import CaseFile, Composed, Findings, TaskRef, Understanding
 from app.db.tenant import tenant_tx
 from app.llm.gateway import BudgetExceededError
@@ -563,7 +564,8 @@ class Investigation:
                         kinds[len(numbered)] = kind if kind != "case" else str(source.get("kind") or "case")
                     numbers.append(index[source["ref"]])
                 model_points.append({"text": p["text"], "sources": numbers, "from": kind})
-        gaps = [*case.notes, *(g for f in findings for g in f.gaps)]
+        # Said to people: without our refs (demo run 4: "… [L1]" in a "Not covered" line).
+        gaps = [without_refs(g) for g in (*case.notes, *(g for f in findings for g in f.gaps))]
         facts: dict[str, Any] = {}
         for f in findings:
             for key, values in f.facts.items():
@@ -581,16 +583,21 @@ class Investigation:
             prior = {k: case.prior_plan.get(k) for k in ("goal", "summary", "hypotheses", "steps", "files")}
             content += f"\n<prior_plan>{json.dumps(prior)}</prior_plan>"
         try:
-            result = await self.r.d.gateway.complete(
-                self.r._call(ref, "plan"),
-                as_tier(tier),
-                system=prompts.system(ctx.org_name, spec, ctx.roles, prompts.INVESTIGATION_PLAN),
-                messages=[{"role": "user", "content": content}],
-                tools=[prompts.submit_tool("submit_investigation_plan", "Submit the plan.")],
-                tool_choice={"type": "tool", "name": "submit_investigation_plan"},
-                max_tokens=16000,  # a whole plan, and the model's thinking before it
-            )
-            raw = result.tool_input("submit_investigation_plan")
+            for attempt in (1, 2):  # a plan with nothing in it is asked for once more (demo run 4)
+                result = await self.r.d.gateway.complete(
+                    self.r._call(ref, "plan"),
+                    as_tier(tier),
+                    system=prompts.system(ctx.org_name, spec, ctx.roles, prompts.INVESTIGATION_PLAN),
+                    messages=[{"role": "user", "content": content}],
+                    tools=[prompts.submit_tool("submit_investigation_plan", "Submit the plan.")],
+                    tool_choice={"type": "tool", "name": "submit_investigation_plan"},
+                    max_tokens=16000,  # a whole plan, and the model's thinking before it
+                )
+                raw = result.tool_input("submit_investigation_plan")
+                if any(raw.get(k) for k in ("evidence", "hypotheses", "steps")):
+                    break
+                shape = {k: type(v).__name__ for k, v in raw.items()}  # names and types, never content
+                log.warning("the plan came back empty", extra={"attempt": attempt, "shape": shape})
         except BudgetExceededError as exc:
             listed = "\n".join(
                 f"• {escape(p['text'])}" + "".join(f" [{n}]" for n in p["sources"]) for p in model_points
@@ -599,6 +606,15 @@ class Investigation:
             sources = await self.r._permalinks(ref, [numbered[n - 1] for n in order])
             return Composed(text, sources, "low", 0, len(model_points), [], stopped=str(exc))
         plan, not_verified = check_plan(raw, len(numbered), kinds, seen_files)
+        if not (plan["evidence"] or plan["hypotheses"] or plan["steps"]):
+            return Composed(
+                "I couldn't write a plan this time: the answer I got had no plan in it. Ask me again.",
+                [],
+                "low",
+                0,
+                len(model_points),
+                [f"Not covered: {g}" for g in gaps[:5]],
+            )
         plan["issues"] = [
             {"key": str(i["key"]), "url": i.get("url")}
             for i in case.issues or ([case.issue] if case.issue else [])

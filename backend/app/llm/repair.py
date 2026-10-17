@@ -23,9 +23,26 @@ def repair_content(
     for block in content:
         name = block.get("name")
         if block.get("type") == "tool_use" and name in schemas and isinstance(block.get("input"), dict):
-            block = {**block, "input": _repair(block["input"], schemas[name], "", fixed, str(name))}
+            unwrapped = _unwrap(block["input"], schemas[name], fixed, str(name))
+            block = {**block, "input": _repair(unwrapped, schemas[name], "", fixed, str(name))}
         out.append(block)
     return out, fixed
+
+
+def _unwrap(value: dict[str, Any], schema: dict[str, Any], fixed: list[str], path: str) -> dict[str, Any]:
+    """The input when the model put the fields under one key of its own ({"plan": {...}}, or that
+    as JSON text): the inner object, with any fields the schema knows from outside it."""
+    props = schema.get("properties") or {}
+    extra = [k for k in value if k not in props]
+    if len(extra) != 1 or not props:
+        return value
+    inner = value[extra[0]]
+    if isinstance(inner, str):
+        inner = _decode(inner, "object")
+    if not isinstance(inner, dict) or not any(k in props for k in inner):
+        return value
+    fixed.append(f"{path}.{extra[0]}")
+    return {**inner, **{k: v for k, v in value.items() if k in props}}
 
 
 def cut_markup(text: str, field: str = "") -> str:
