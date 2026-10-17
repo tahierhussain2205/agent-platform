@@ -145,6 +145,8 @@ Valkey `localhost:56379`, S3 (SeaweedFS) http://localhost:8333.
 
 ## Gotchas
 
+- While CI is paused (D-200), `main` is the working branch's twin and staging deploys every push: push each change to both (`git push origin HEAD:main HEAD:phase-13-production`) after the local checks.
+
 - A stray `VIRTUAL_ENV` in the shell makes `uv` warn; the Makefile unexports it. Run uv commands from `backend/`.
 - Starlette's test client wants `httpx2` installed (it is a dev dependency).
 - The Vite template now ships oxlint; this repo uses ESLint + Prettier per the plan.

@@ -80,7 +80,7 @@ projects:
             region: oregon
             plan: starter
             branch: main
-            autoDeployTrigger: checksPass
+            autoDeployTrigger: commit  # checksPass while CI runs on every push (D-200)
             dockerContext: ./backend
             dockerfilePath: ./backend/Dockerfile
             dockerCommand: app api
@@ -189,7 +189,7 @@ projects:
             region: oregon
             plan: starter
             branch: main
-            autoDeployTrigger: checksPass
+            autoDeployTrigger: commit  # checksPass while CI runs on every push (D-200)
             dockerContext: ./backend
             dockerfilePath: ./backend/Dockerfile
             dockerCommand: app worker
@@ -262,7 +262,7 @@ projects:
             region: oregon
             plan: starter
             branch: main
-            autoDeployTrigger: checksPass
+            autoDeployTrigger: commit  # checksPass while CI runs on every push (D-200)
             dockerContext: ./backend
             dockerfilePath: ./backend/Dockerfile
             dockerCommand: app vault
@@ -315,7 +315,7 @@ projects:
             region: oregon
             plan: starter
             branch: main
-            autoDeployTrigger: checksPass
+            autoDeployTrigger: commit  # checksPass while CI runs on every push (D-200)
             schedule: "*/15 * * * *"
             dockerContext: ./backend
             dockerfilePath: ./backend/Dockerfile
@@ -364,7 +364,7 @@ projects:
             name: web-staging
             runtime: static
             branch: main
-            autoDeployTrigger: checksPass
+            autoDeployTrigger: commit  # checksPass while CI runs on every push (D-200)
             buildCommand: cd web && corepack pnpm install --frozen-lockfile && corepack pnpm build
             staticPublishPath: ./web/dist
             buildFilter:

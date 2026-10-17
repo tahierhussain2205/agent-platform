@@ -1,8 +1,10 @@
 name: CI
 
+# Paused for speed while the main development goes on (2026-10-17, D-200): run it by hand from the
+# Actions tab or `gh workflow run CI`. To bring it back, restore `push:` and `pull_request:` here
+# and `autoDeployTrigger: checksPass` in render.yaml.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
