@@ -322,7 +322,12 @@ async def test_the_workflow_runs_the_investigators_in_parallel(world: Agent, liv
         opened = await client.post(f"{FAKES}/slack/api/conversations.open", data={"users": "U0BOB"},
                                    headers={"authorization": "Bearer xoxb-local-T0ACME"})  # fmt: skip
     dm = opened.json()["channel"]["id"]
-    plans = [m for m in await channel_messages(dm) if "*Plan: Checkout returns 500" in json.dumps(m)]
+    plans = [
+        m
+        for m in await channel_messages(dm)
+        if "*Plan for <https://acme.atlassian.net/browse/PAY-101|PAY-101>: Checkout returns 500"
+        in json.dumps(m)
+    ]
     assert plans
     assert "IndexError" in json.dumps(plans[-1])
 
