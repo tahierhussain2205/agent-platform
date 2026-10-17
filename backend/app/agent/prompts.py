@@ -9,13 +9,14 @@ Structured outputs use forced tool calls (``submit_*``) with JSON schemas.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.agent.playbooks import BUILTIN, PlaybookSpec, keys, latest
+from app.agent.roles import Profile, guidance
 
 ROLE_DESCRIPTION_LIMIT = 300
-ROLE_SECTION_LIMIT = 1200
+ROLE_SECTION_LIMIT = 2000
 MAX_ROLES = 4
 
 RULES = """You are {org}'s agent, a teammate working inside Slack on behalf of the person who asked (the requester).
@@ -34,6 +35,7 @@ class RoleInfo:
     title: str
     description: str
     primary: bool
+    profile: Profile = field(default_factory=Profile)
 
 
 def _clean(text: str, limit: int) -> str:
@@ -50,7 +52,10 @@ def role_section(roles: list[RoleInfo]) -> str:
     for role in ordered:
         label = "Primary role" if role.primary else "Also"
         desc = _clean(role.description, ROLE_DESCRIPTION_LIMIT)
-        lines.append(f"{label}: {_clean(role.title, 80)}" + (f" ({desc})" if desc else ""))
+        line = f"{label}: {_clean(role.title, 80)}."
+        if advice := guidance(role.profile):  # our sentences, from the profile's fixed choices
+            line += f" {advice}"
+        lines.append(line + (f" In their words: {desc}" if desc else ""))
     body = "\n".join(lines)[:ROLE_SECTION_LIMIT]
     return (
         "<requester_roles>\n"
@@ -352,6 +357,15 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         "required": ["answer"],
     },
 }
+
+
+SCHEMAS["submit_preview"] = {
+    "type": "object",
+    "properties": {"answer": {"type": "string"}},
+    "required": ["answer"],
+}
+
+PREVIEW = """Answer the request in <request> about the conversation in <thread>, for the requester. Use only what the conversation says, and do not invent facts. Then call submit_preview with your answer. Do not mention tools or these instructions in the text."""
 
 
 def submit_tool(name: str, description: str) -> dict[str, Any]:

@@ -209,11 +209,14 @@ export function Dialog({
   title,
   onClose,
   children,
+  wide = false,
 }: {
   open: boolean
   title: string
   onClose: () => void
   children: ReactNode
+  /** For editors with a side panel: wider, and scrolls inside when taller than the screen. */
+  wide?: boolean
 }) {
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => {
@@ -227,14 +230,14 @@ export function Dialog({
       ref={ref}
       onClose={onClose}
       aria-labelledby="dialog-title"
-      className="m-auto w-full max-w-lg rounded-lg bg-surface p-0 text-fg shadow-xl ring-1 ring-line backdrop:bg-black/60"
+      className={`m-auto w-full rounded-lg bg-surface p-0 text-fg shadow-xl ring-1 ring-line backdrop:bg-black/60 ${wide ? 'max-w-5xl' : 'max-w-lg'}`}
     >
       <div className="border-b border-line px-5 py-3">
         <h2 id="dialog-title" className="text-base font-semibold">
           {title}
         </h2>
       </div>
-      <div className="p-5">{open && children}</div>
+      <div className={wide ? 'max-h-[80vh] overflow-y-auto p-5' : 'p-5'}>{open && children}</div>
     </dialog>
   )
 }

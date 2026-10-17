@@ -1,6 +1,8 @@
-import { useState, type FormEvent } from 'react'
-import { json, useApiMutation, useRoles, type Role } from '../api/hooks'
+import { useState } from 'react'
+import { useApiMutation, useRoles, type Role } from '../api/hooks'
 import { useMember } from '../components/member'
+import { RoleForm } from '../components/RoleEditor'
+import { profileLabels } from '../components/roleProfile'
 import {
   Badge,
   Button,
@@ -8,63 +10,9 @@ import {
   Dialog,
   EmptyState,
   ErrorNotice,
-  Field,
-  Input,
   PageHeader,
   Spinner,
-  TextArea,
 } from '../components/ui'
-
-function RoleForm({ role, onClose }: { role: Role | null; onClose: () => void }) {
-  const [title, setTitle] = useState(role?.title ?? '')
-  const [description, setDescription] = useState(role?.description ?? '')
-  const save = useApiMutation(
-    (api, body: { title: string; description: string }) =>
-      role
-        ? api(`/api/roles/${role.id}`, { method: 'PATCH', ...json(body) })
-        : api('/api/roles', { method: 'POST', ...json(body) }),
-    ['roles', 'members', 'org'],
-  )
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    save.mutate({ title, description }, { onSuccess: onClose })
-  }
-  return (
-    <form onSubmit={submit} className="space-y-4">
-      <ErrorNotice error={save.error} />
-      <Field label="Title" htmlFor="role-title">
-        <Input
-          id="role-title"
-          required
-          maxLength={80}
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-      </Field>
-      <Field
-        label="How should the agent respond to people in this role?"
-        htmlFor="role-description"
-        hint="Tone, depth and format only. Roles never grant or restrict access."
-      >
-        <TextArea
-          id="role-description"
-          rows={4}
-          maxLength={4000}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-      </Field>
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button type="submit" busy={save.isPending}>
-          {role ? 'Save role' : 'Create role'}
-        </Button>
-      </div>
-    </form>
-  )
-}
 
 export function RolesPage() {
   const me = useMember()
@@ -80,7 +28,7 @@ export function RolesPage() {
     <>
       <PageHeader
         title="Roles"
-        description="Custom roles tell the agent how to tailor its responses. A person can hold several; one is primary."
+        description="Roles tell the agent how to answer the people who hold them. A person can hold several; one is primary."
         actions={isAdmin ? <Button onClick={() => setEditing('new')}>New role</Button> : undefined}
       />
       <ErrorNotice error={archive.error} onDismiss={() => archive.reset()} />
@@ -115,9 +63,17 @@ export function RolesPage() {
                   <p className="text-sm font-medium">
                     {role.title} {role.status === 'archived' && <Badge>Archived</Badge>}
                   </p>
-                  <p className="mt-0.5 text-sm text-fg-2">
-                    {role.description || <span className="text-fg-4">No description</span>}
-                  </p>
+                  {profileLabels(role.profile).length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {profileLabels(role.profile).map((label) => (
+                        <Badge key={label}>{label}</Badge>
+                      ))}
+                    </div>
+                  )}
+                  {role.description && <p className="mt-1 text-sm text-fg-2">{role.description}</p>}
+                  {!role.description && profileLabels(role.profile).length === 0 && (
+                    <p className="mt-0.5 text-sm text-fg-4">No preferences yet</p>
+                  )}
                   <p className="mt-1 text-xs text-fg-3">
                     {role.members} member{role.members === 1 ? '' : 's'} · primary for{' '}
                     {role.primary_for}
@@ -145,11 +101,16 @@ export function RolesPage() {
       </Card>
       <Dialog
         open={editing !== null}
-        title={editing === 'new' ? 'New role' : 'Edit role'}
+        title={editing === 'new' ? 'New role' : `Edit ${editing?.title ?? 'role'}`}
         onClose={() => setEditing(null)}
+        wide
       >
         {editing && (
-          <RoleForm role={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />
+          <RoleForm
+            role={editing === 'new' ? null : editing}
+            onClose={() => setEditing(null)}
+            isAdmin={isAdmin}
+          />
         )}
       </Dialog>
     </>

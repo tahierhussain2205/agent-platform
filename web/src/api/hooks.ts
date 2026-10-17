@@ -58,10 +58,25 @@ export interface Member {
   roles: RoleRef[]
 }
 
+export type RoleDetail = 'brief' | 'balanced' | 'thorough'
+export type RoleStyle = 'plain' | 'technical' | 'business'
+export type RoleFormat = 'bullets' | 'paragraphs' | 'summary_first'
+export type RoleFocus =
+  'risks' | 'next_steps' | 'owners' | 'dates' | 'code' | 'customer_impact' | 'metrics'
+
+/** How the agent answers a role's holders. Unset choices mean no preference. */
+export interface RoleProfile {
+  detail?: RoleDetail | null
+  style?: RoleStyle | null
+  format?: RoleFormat | null
+  focus?: RoleFocus[]
+}
+
 export interface Role {
   id: string
   title: string
   description: string
+  profile: RoleProfile
   status: 'active' | 'archived'
   members: number
   primary_for: number
@@ -607,5 +622,26 @@ export function useTask(id: string) {
     queryFn: () => api<TaskDetail>(`/api/tasks/${encodeURIComponent(id)}`),
     refetchInterval: (query) =>
       query.state.data && isActiveTask(query.state.data.task.status) ? 3000 : false,
+  })
+}
+
+export type PreviewSample = 'summary' | 'status' | 'fix'
+
+export interface RolePreview {
+  status: 'running' | 'done' | 'failed'
+  without?: string
+  with_role?: string
+  message?: string
+}
+
+/** A preview's answers, polled while the worker writes them. */
+export function useRolePreview(id: string | null) {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'role-preview', id],
+    queryFn: () => api<RolePreview>(`/api/roles/preview/${encodeURIComponent(id ?? '')}`),
+    enabled: id !== null,
+    refetchInterval: (query) => (query.state.data?.status === 'running' ? 1500 : false),
   })
 }

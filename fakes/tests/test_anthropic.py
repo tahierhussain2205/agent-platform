@@ -86,6 +86,25 @@ def test_classification(client: TestClient) -> None:
     assert classify("maybe summarize #bugs?")["confidence"] < 0.6
 
 
+def test_role_preview_follows_the_role_section(client: TestClient) -> None:
+    thread = "<thread>\nA: one.\nB: two.\nC: three.\nD: four.\n</thread>\n<request>Summarize</request>"
+
+    def answer(roles: str) -> str:
+        system = [
+            {"type": "text", "text": "rules"},
+            {"type": "text", "text": f"<requester_roles>\n{roles}\n</requester_roles>"},
+        ]
+        body = call(client, system=system, messages=[{"role": "user", "content": thread}], **forced("submit_preview"))
+        return str(tool_input(body)["answer"])
+
+    plain = answer("No roles are set for the requester.")
+    assert plain.count("•") == 3
+    brief = answer("Primary role: Support. Keep answers short: the essentials. Call out risks and next steps.")
+    assert brief.count("•") == 2
+    assert brief.endswith("*Also:* risks and next steps.")
+    assert answer("Primary role: Lead. Start with a one line summary, then the details.").startswith("*TL;DR:* one.")
+
+
 def test_brief_extracts_channels_window_and_ids(client: TestClient) -> None:
     now = datetime(2026, 10, 16, 15, 30, tzinfo=UTC)
     user = (

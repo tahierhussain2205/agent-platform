@@ -185,6 +185,8 @@ class Anthropic:
             return [use(forced, schedule(last_user))]
         if forced == "submit_review":
             return [use(forced, implementer.review(last_user))]
+        if forced == "submit_preview":
+            return [use(forced, {"answer": preview(body.get("system"), last_user)})]
         if "submit_implementation" in tool_names:
             return implementer.implement(body["messages"], first_user, forced == "submit_implementation")
         if "submit_findings" in tool_names and "<case>" in first_user:
@@ -201,6 +203,25 @@ def asked_for(system: Any) -> str | None:
     blocks = system if isinstance(system, list) else [{"text": system or ""}]
     m = re.search(r"Answer by calling the (\w+) tool\.", " ".join(str(b.get("text", "")) for b in blocks))
     return m.group(1) if m else None
+
+
+def preview(system: Any, user: str) -> str:
+    """A role preview's answer (``submit_preview``): the thread's lines, shaped by the role section the
+    way a model would be, so tests can see that a profile changes the answer."""
+    blocks = system if isinstance(system, list) else [{"text": system or ""}]
+    roles = next((str(b.get("text", "")) for b in blocks if "<requester_roles>" in str(b.get("text", ""))), "")
+    thread = user.split("<thread>", 1)[-1].split("</thread>", 1)[0].strip()
+    lines = [line.split(": ", 1)[-1] for line in thread.splitlines() if line.strip()]
+    count = 2 if "Keep answers short" in roles else len(lines) if "Be thorough" in roles else 3
+    points = lines[:count]
+    paragraphs = "Prefer short paragraphs" in roles
+    body = " ".join(points) if paragraphs else "\n".join(f"• {p}" for p in points)
+    extras = re.search(r"Call out ([^.]+)\.", roles)
+    if extras:
+        body += f"\n*Also:* {extras.group(1)}."
+    if "Start with a one line summary" in roles:
+        body = f"*TL;DR:* {lines[0] if lines else 'Nothing to report.'}\n{body}"
+    return body
 
 
 def use(name: str, payload: dict[str, Any]) -> dict[str, Any]:

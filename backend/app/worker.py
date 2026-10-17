@@ -31,6 +31,7 @@ from app.workflows.members import MemberActivities, MemberRemovedWorkflow
 from app.workflows.ping import PingWorkflow, ping
 from app.workflows.report_activities import ReportActivities
 from app.workflows.reports import ScheduledReportWorkflow, ScheduleSyncWorkflow
+from app.workflows.roles import PreviewActivities, RolePreviewWorkflow
 from app.workflows.slack import AgentRequestWorkflow, PublishHomeWorkflow, SyncWorkspaceWorkflow
 from app.workflows.slack_activities import SlackActivities, SlackDeps
 from app.workflows.task import TaskWorkflow
@@ -115,8 +116,12 @@ def build_worker(client: Client, settings: Settings, slack: SlackActivities | No
             slack.publish_home,
         ]
         if slack.tasks is not None:
-            workflows += [TaskWorkflow, GitHubNoticeWorkflow]
-            activities += [*slack.tasks.all(), GitHubActivities(slack.tasks.r).notice]
+            workflows += [TaskWorkflow, GitHubNoticeWorkflow, RolePreviewWorkflow]
+            activities += [
+                *slack.tasks.all(),
+                GitHubActivities(slack.tasks.r).notice,
+                PreviewActivities(slack.tasks.r.d).preview,
+            ]
         if slack.reports is not None:
             workflows += [
                 ScheduledReportWorkflow,

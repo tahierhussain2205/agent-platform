@@ -137,7 +137,8 @@ export function TasksPage() {
                     <td className="max-w-md py-2.5 pr-3">
                       <Link
                         to={`/tasks/${task.id}`}
-                        className="font-medium text-fg hover:underline"
+                        className="line-clamp-2 font-medium text-fg hover:underline"
+                        title={titleOf(task)}
                       >
                         {titleOf(task)}
                       </Link>

@@ -29,6 +29,7 @@ from app.agent.implementation import Implementation
 from app.agent.investigation import Investigation
 from app.agent.outbox import Sink, SlackSink, post_once
 from app.agent.playbooks import BUILTIN, PlaybookSpec, keys, latest
+from app.agent.roles import profile_of
 from app.agent.types import (
     ActionOutcome,
     ApprovalState,
@@ -147,7 +148,7 @@ class AgentRunner:
             ).fetchone()
             roles = await (
                 await conn.execute(
-                    "select r.title, r.description, mr.is_primary from app.membership_roles mr "
+                    "select r.title, r.description, mr.is_primary, r.profile from app.membership_roles mr "
                     "join app.custom_roles r on r.id = mr.role_id "
                     "where mr.membership_id = %s and r.status = 'active'",
                     (ref.membership_id,),
@@ -156,7 +157,7 @@ class AgentRunner:
         if row is None:
             raise RuntimeError("task context not found")
         channel_name = row[3] or ("direct message" if ref.channel_type == "im" else ref.channel)
-        role_info = [prompts.RoleInfo(t, d, p) for t, d, p in roles]
+        role_info = [prompts.RoleInfo(t, d, p, profile_of(f)) for t, d, p, f in roles]
         return Context(row[0], row[1], row[2], channel_name, role_info, email[0] if email else None)
 
     def _call(self, ref: TaskRef, purpose: str) -> CallContext:
