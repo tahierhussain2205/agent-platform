@@ -75,6 +75,17 @@ def test_plain_text_normalisation() -> None:
     )
 
 
+def test_channel_links_without_a_name_get_the_channels_name() -> None:
+    """Staging: Slack sent #agent-test as a link with no name, and the agent looked for a channel
+    called "c0c9s2y6z1b"."""
+    names = {"#C0BUGS": "bugs"}
+    assert (
+        plain("in <#C0BUGS> and <#C0BUGS|> and <#C0BUGS|old-name>", names)
+        == "in #bugs and #bugs and #old-name"
+    )
+    assert plain("in <#C0OTHER>", names) == "in #C0OTHER"  # not known: the id stays
+
+
 def test_cap_truncates_on_a_line_boundary() -> None:
     text = "\n".join(f"line {i}" for i in range(5000))
     capped = cap(text, 100)
@@ -123,6 +134,17 @@ def tool_ctx(stack: Stack, who: str = "bob") -> ToolContext:
         slack=stack.slack,
         kv=stack.kv,
     )
+
+
+@needs_fakes
+async def test_a_channel_is_found_by_its_id_in_any_case(stack: Stack) -> None:
+    from app.tools.slack import SlackAdapter
+
+    adapter = SlackAdapter("U0ACMEBOT")
+    for given in ("C0GENERAL", "c0general", "<#C0GENERAL>", "#general"):
+        target = await adapter.resolve_target(tool_ctx(stack), "read_channel", {"channel": given})
+        assert target is not None, given
+        assert (target.external_id, target.name) == ("C0GENERAL", "general")
 
 
 @needs_fakes

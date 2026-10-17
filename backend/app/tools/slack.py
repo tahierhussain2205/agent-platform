@@ -153,7 +153,7 @@ class SlackAdapter:
             row = await (
                 await conn.execute(
                     "select id, external_id, name, is_private from app.channels where workspace_id = %s "
-                    "and (external_id = %s or lower(name) = lower(%s)) "
+                    "and (upper(external_id) = upper(%s) or lower(name) = lower(%s)) "
                     "order by archived, created_at desc limit 1",
                     (ctx.workspace_id, wanted, wanted),
                 )
@@ -396,6 +396,18 @@ class SlackAdapter:
         names: dict[str, str] = {}
         for uid in sorted(ids):
             names[uid] = await self._name(ctx, uid)
+        # Channel links can come without a name (<#C0C9S2Y6Z1B> or <#C0C9S2Y6Z1B|>): ours has it.
+        channels = {c for m in messages for c in re.findall(r"<#([A-Z0-9]+)(?:\|[^>]*)?>", m.get("text", ""))}
+        if channels:
+            async with tenant_tx(ctx.pool, ctx.org_id) as conn:
+                rows = await (
+                    await conn.execute(
+                        "select external_id, name from app.channels where workspace_id = %s "
+                        "and external_id = any(%s) and name is not null",
+                        (ctx.workspace_id, sorted(channels)),
+                    )
+                ).fetchall()
+            names.update({f"#{row[0]}": str(row[1]) for row in rows})
         return names
 
     async def _name(self, ctx: ToolContext, uid: str) -> str:
@@ -426,8 +438,11 @@ def plain(text: str, names: dict[str, str]) -> str:
     text = re.sub(
         r"<@([A-Z0-9]+)(?:\|([^>]*))?>", lambda m: "@" + names.get(m.group(1), m.group(2) or m.group(1)), text
     )
-    text = re.sub(r"<#([A-Z0-9]+)\|([^>]*)>", r"#\2", text)
-    text = re.sub(r"<#([A-Z0-9]+)>", r"#\1", text)
+    text = re.sub(
+        r"<#([A-Z0-9]+)(?:\|([^>]*))?>",
+        lambda m: "#" + (m.group(2) or names.get(f"#{m.group(1)}") or m.group(1)),
+        text,
+    )
     text = re.sub(r"<!(here|channel|everyone)[^>]*>", r"@\1", text)
     text = re.sub(r"<(https?://[^|>]+)\|([^>]+)>", r"\2 (\1)", text)
     text = re.sub(r"<(https?://[^>]+)>", r"\1", text)
