@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
+import pytest
 import pytest_asyncio
 
 from app.agent.types import PlannedAction, TaskRef, Understanding
@@ -403,8 +404,75 @@ async def test_a_component_the_project_does_not_have_is_left_out(tickets: Agent)
     )  # fmt: skip
     actions = await agent.runner.plan(ref, u, f, "standard")
     assert [(a.skip, a.args["component"]) for a in actions] == [(None, ""), (None, "Checkout")]
-    assert "PAY has no component cart-service, so the ticket has none" in actions[0].evidence
-    assert not any("has no component" in e for e in actions[1].evidence)
+    # Nobody asked for "cart-service" as a component (the model took the service's name): the approver
+    # is not told about a field nobody asked for (run 1, #9). A component the request names is.
+    assert not any("has no component" in e for a in actions for e in a.evidence)
+    from app.agent.tickets import missing_was_asked
+
+    said = "PAY has no component Billing, so the ticket has none"
+    assert missing_was_asked(said, "file it under the Billing component")
+    assert not missing_was_asked(said, "create Jira tickets for the problems reported today")
+
+
+async def test_without_a_project_the_only_one_is_used_or_the_choices_are_named(
+    tickets: Agent, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run 1, #4: no project in the request or the catalog dropped every ticket without saying which
+    projects there are."""
+    from app.tools.executor import ExecResult, ToolExecutor
+
+    agent = tickets
+    name, external = await channel(agent)
+    await ui_post("U0QUINN", external, "Gift card balances are wrong at checkout")
+    ref = await ask(agent, f"create Jira tickets for the problems reported today in #{name}")
+    u = await agent.runner.understand(ref, "ask")
+    f = await agent.runner.gather(ref, u, "standard")
+    loose = {"summary": "Gift cards show a zero balance", "description": "From Slack"}
+    from tests.agent.conftest import script_model
+
+    async def plan_with(projects: list[str]) -> Any:
+        async def listed(self: Any, name: str, args: dict[str, Any], **kw: Any) -> ExecResult:
+            if name == "jira_list_projects":
+                return ExecResult("projects", data={"projects": [{"key": k} for k in projects]})
+            return await real(self, name, args, **kw)
+
+        monkeypatch.setattr(ToolExecutor, "run", listed)
+        await script_model(
+            [{"type": "tool_use", "name": "submit_plan", "input": {"actions": [
+                {"tool": "jira", "operation": "create_issue", "args": loose, "summary": "Ticket"}]}}]
+        )  # fmt: skip
+        try:
+            return await agent.runner.plan(ref, u, f, "standard")
+        finally:
+            monkeypatch.setattr(ToolExecutor, "run", real)
+
+    real = ToolExecutor.run
+    (one,) = await plan_with(["PAY"])
+    assert (one.skip, one.args["project"]) == (None, "PAY")
+    (two,) = await plan_with(["PAY", "WEB"])
+    assert (
+        two.skip == 'No Jira project for "Gift cards show a zero balance": name one (PAY, WEB) and ask again.'
+    )
+
+
+async def test_the_requester_named_as_reporter_is_not_an_assignee_named_in_the_request(
+    tickets: Agent,
+) -> None:
+    """Run 1, #10: the requester is in every request ("reported by …"); that is not naming an assignee."""
+    from app.agent.tickets import choose_assignee
+
+    agent = tickets
+    ref = await ask(agent, "create a Jira ticket for gift cards")
+    ctx = await agent.runner._context(ref)
+    from app.tools.base import RefBook
+
+    _, _, _, executor = await agent.runner._tools(ref, ctx, "ask", RefBook())
+    bob = executor.ctx.requester_email
+    assert bob
+    chosen = await choose_assignee(executor, bob, [], "Bob Builder reported gift cards failing")
+    assert chosen.email == ""
+    quinn = await choose_assignee(executor, "quinn@acme.test", [], "assign it to Quinn Tester")
+    assert (quinn.email, quinn.why) == ("quinn@acme.test", "named in the request")
 
 
 async def test_plans_naming_actions_by_their_combined_name_still_count(tickets: Agent) -> None:
@@ -485,9 +553,12 @@ async def test_the_answer_is_told_not_to_claim_changes(tickets: Agent) -> None:
     report = [r for r in await model_requests() if "Step: write the answer" in json.dumps(r.get("system"))][
         -1
     ]
-    assert "Never say that something was created, changed, assigned, posted or sent" in json.dumps(
-        report["system"]
-    )
+    # A ticket request has its own, short answer: the tickets are listed by code below it (run 1, #6).
+    assert "do not say they were or will be created" in json.dumps(report["system"])
+    assert "Put nothing in not_verified" in json.dumps(report["system"])
+    from app.agent import prompts
+
+    assert "Never say that something was created, changed, assigned, posted or sent" in prompts.REPORT
 
 
 # ------------------------------------------------------------------ through the task workflow
@@ -528,8 +599,8 @@ async def test_ask_requests_approvals_together_and_creates_what_is_approved(
         f"create Jira tickets for the problems reported today in #{name}", channel=external
     )
     pending = await wait_for(
-        lambda: len(approvals(tickets, event_id)) == 2 and approvals(tickets, event_id), 90
-    )
+        lambda: len(approvals(tickets, event_id)) == 2 and approvals(tickets, event_id), 180
+    )  # a loaded CI runner took longer than 90 s once (run 1, #8)
     discount = next(a for a in pending if "Discount codes" in a[2])
     refunds = next(a for a in pending if "Refund emails" in a[2])
     assert "Assignee: Bob Builder (bob@acme.test), owner of cart-service" in discount[2]

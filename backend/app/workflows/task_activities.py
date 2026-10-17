@@ -215,6 +215,13 @@ class TaskActivities:
     ) -> ActionOutcome:
         return await self.r.execute(ref, u, action, n, answer)
 
+    @activity.defn(name="agent_move_tickets")
+    @translated
+    async def move_tickets(
+        self, ref: TaskRef, u: Understanding, keys: list[str], status: str, link: str | None, approved: bool
+    ) -> list[str]:
+        return await self.r.move_tickets(ref, u, keys, status, link, approved)
+
     @activity.defn(name="agent_deliver")
     @translated
     async def deliver(self, ref: TaskRef, u: Understanding, c: Composed, notes: list[str]) -> Delivered:
@@ -234,5 +241,5 @@ class TaskActivities:
             self.execute, self.deliver, self.propose_schedule, self.orient, self.investigate,
             self.plan_investigation, self.prepare_change, self.implement, self.verify_change,
             self.review_change,
-            self.export_change, self.report_change,
+            self.export_change, self.report_change, self.move_tickets,
         ]  # fmt: skip

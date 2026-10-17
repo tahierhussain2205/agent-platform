@@ -223,7 +223,10 @@ async def test_a_ticket_becomes_a_sourced_plan(world: Agent) -> None:
                               "read": True}]  # fmt: skip
     kinds = {s.get("kind") for s in composed.sources}
     assert {"logs", "github"} <= kinds
-    assert composed.answer.startswith("*Plan: Checkout returns 500 for carts with 20 or more items*")
+    assert composed.answer.startswith(
+        "*Plan for <https://acme.atlassian.net/browse/PAY-101|PAY-101>: Checkout returns 500 for carts with 20 or "
+        "more items*"
+    )
     assert "[1]" in composed.answer
     assert composed.not_verified == []
 
@@ -243,6 +246,37 @@ async def test_a_follow_up_in_the_thread_revises_the_plan(world: Agent) -> None:
     assert plan["revision"]["changed"] is True
     assert "_Revised: " in composed.answer
     assert plan["summary"].startswith("On your follow-up")
+
+
+async def test_a_plan_for_these_tickets_covers_the_ones_made_in_the_thread(world: Agent) -> None:
+    """The demo: tickets made in a thread, then "a detailed plan to address these tickets" there. The
+    agent does not read its own messages back: the tickets come from what earlier tasks created."""
+    first = await ask(world, "create Jira tickets for these issues")
+    for n, key in enumerate(("PAY-102", "PAY-104"), 1):
+        world.sql(
+            "insert into app.external_actions (org_id, task_id, integration_key, operation, target_ref, "
+            "idempotency_key, status, performed_at) values (%s, %s, 'jira', 'create_issue', %s, %s, 'succeeded', "
+            "now() + %s * interval '1 second')",
+            (world.world.acme.id, first.task_id, f"jira:{key}", f"task:{first.task_id}:action:{n}", n),
+        )
+    await world.runner.finish(first, "completed")
+    follow = await ask(
+        world, "come up with a detailed plan to address these tickets", thread_ts=first.message_ts
+    )
+    case, _, composed = await investigate(world, follow)
+    assert [i["key"] for i in case.issues] == ["PAY-102", "PAY-104"]
+    assert case.issue is not None
+    assert case.issue["key"] == "PAY-102"
+    plan = stored_plan(world, follow)
+    assert [i["key"] for i in plan["case"]["issues"]] == ["PAY-102", "PAY-104"]
+    assert [i["key"] for i in plan["issues"]] == ["PAY-102", "PAY-104"]
+    assert composed.answer.startswith(
+        "*Plan for <https://acme.atlassian.net/browse/PAY-102|PAY-102>, "
+        "<https://acme.atlassian.net/browse/PAY-104|PAY-104>: "
+    )
+    # Another thread's tickets are not this thread's.
+    other = await ask(world, "come up with a detailed plan to address these tickets")
+    assert await world.runner._session_tickets(other) == []
 
 
 async def test_what_could_not_be_read_is_said_and_lowers_confidence(world: Agent) -> None:

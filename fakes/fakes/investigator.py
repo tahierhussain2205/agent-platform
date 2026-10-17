@@ -81,11 +81,17 @@ def _shift(iso: str | None, days: float) -> str | None:
         return None
 
 
+def first_issue(case: dict[str, Any]) -> dict[str, Any]:
+    """The case's first issue (the platform sends ``issues``; before several issues, ``issue``)."""
+    issues = case.get("issues") or ([case["issue"]] if case.get("issue") else [])
+    return dict(issues[0]) if issues else {}
+
+
 def _wanted(kind: str, case: dict[str, Any], results: list[tuple[str, str]], tools: set[str]) -> list[dict[str, Any]]:
     service = case.get("service") or {}
     name, repo = service.get("name"), service.get("repository")
     window = case.get("window") or {}
-    issue = case.get("issue") or {}
+    issue = first_issue(case)
     calls: list[dict[str, Any]] = []
     if kind == "logs" and name:
         search = next((t for t in tools if t.endswith("_search_events")), None)
@@ -202,7 +208,7 @@ def plan(user: str) -> dict[str, Any]:
     files = [{"repo": repo, "path": path, "why": "where the problem is"}] if repo and path else []
     return {
         "summary": summary,
-        "goal": (case.get("issue") or {}).get("summary") or goal,
+        "goal": first_issue(case).get("summary") or goal,
         "evidence": evidence,
         "hypotheses": [{"text": cause or "Unknown: no error, code or change found", "confidence": confidence,
                         "evidence": used, "confirm": "A failing test that reproduces it"}],

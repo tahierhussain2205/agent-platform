@@ -442,7 +442,7 @@ test('Example 2: a ticket is investigated into a sourced plan, refined in the th
   const channel = await ticketsChannel(browser, ['U0BOB', 'U0ALICE'], 'incident')
   const ts = await say(page, 'Bob Builder', channel, '@agent investigate PAY-101 and plan a fix')
   const thread = await threadOf(page, ts)
-  await expect(thread).toContainText('Plan: Checkout returns 500 for carts with 20 or more items')
+  await expect(thread).toContainText('Plan for PAY-101: Checkout returns 500 for carts with 20 or more items')
   await expect(thread).toContainText('confidence high')
   await expect(thread).toContainText('IndexError: list assignment index out of range')
   await expect(thread).toContainText('Preallocate price slots for faster totals')
@@ -465,7 +465,7 @@ test('Example 2: the plan becomes a pull request; a review comes back and is add
   const channel = await ticketsChannel(browser, ['U0BOB', 'U0ALICE'], 'change')
   const ts = await say(page, 'Bob Builder', channel, '@agent investigate PAY-101 and plan a fix')
   const thread = await threadOf(page, ts)
-  await expect(thread).toContainText('Plan: Checkout returns 500 for carts with 20 or more items')
+  await expect(thread).toContainText('Plan for PAY-101: Checkout returns 500 for carts with 20 or more items')
 
   // "Implement the plan" in the thread: tests first in a sandbox, reviewed, checked, then the push
   // waits for Bob's approval (Ask mode).

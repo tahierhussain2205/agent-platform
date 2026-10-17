@@ -78,6 +78,7 @@ class CaseFile:
     points: list[dict[str, Any]] = field(default_factory=list)  # findings: the issue, the catalog entry
     notes: list[str] = field(default_factory=list)  # what could not be found
     code_at: str | None = None  # a past incident: read the code as it was then (ISO time)
+    issues: list[dict[str, Any]] = field(default_factory=list)  # all the case's issues (issue: the first)
 
 
 @dataclass
@@ -183,6 +184,7 @@ class ChangeCase:
     private: bool = True
     notes: list[str] = field(default_factory=list)
     stopped: str | None = None  # nothing can be implemented: what to tell the thread
+    issue_keys: list[str] = field(default_factory=list)  # every issue of the plan (issue_key: the first)
 
 
 @dataclass

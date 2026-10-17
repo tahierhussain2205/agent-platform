@@ -218,6 +218,16 @@ class TaskWorkflow:
             await self._status(ref, "⏹ Nothing was changed.", running=False)
             return "stopped"
         done.append(f"prepared {case.repo} at {case.base_sha[:7]}")
+        # The plan's tickets follow the change: In Progress now (where the policy allows it without
+        # asking), In Review when the pull request opens.
+        tickets = list(case.issue_keys) or ([case.issue_key] if case.issue_key else [])
+        follow = workflow.patched("ticket-status") and bool(tickets) and case.revision is None
+        if follow:
+            started: list[str] = await self._do(
+                TaskActivities.move_tickets, ref, u, tickets, "In Progress", None, False
+            )
+            if started:
+                await self._do(TaskActivities.reply, ref, "\n".join(started), "tickets-started")
         attempts: list[Implemented] = []
         feedback: dict[str, Any] = {}
         failures = 0
@@ -274,7 +284,14 @@ class TaskWorkflow:
                     outcome = await self._do(TaskActivities.execute, ref, u, action, 1, "")
                 else:
                     outcome = ActionOutcome("skipped", f"the push was {state.status}.")
-        return await self._report_change(ref, u, case, attempts, verification, review, exported, outcome)
+        notes: list[str] = []
+        if follow and outcome is not None and outcome.status == "done":
+            # Approving the push approved these: its request listed them.
+            link = str((outcome.result or {}).get("url") or "") or None
+            notes = await self._do(TaskActivities.move_tickets, ref, u, tickets, "In Review", link, True)
+        return await self._report_change(
+            ref, u, case, attempts, verification, review, exported, outcome, notes
+        )
 
     async def _report_change(
         self,
@@ -286,12 +303,13 @@ class TaskWorkflow:
         review: ReviewResult | None,
         exported: Exported | None,
         outcome: ActionOutcome | None,
+        notes: list[str] | None = None,
     ) -> str:
         c: Composed = await self._do(
             TaskActivities.report_change, ref, u, case, attempts, verification, review, exported, outcome
         )
         self.stage = "delivering"
-        await self._do(TaskActivities.deliver, ref, u, c, [])
+        await self._do(TaskActivities.deliver, ref, u, c, notes or [])
         usage = await self._do(TaskActivities.usage, ref)
         await self._do(TaskActivities.finish, ref, "completed", c.stopped)
         self.stage = "completed"

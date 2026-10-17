@@ -510,6 +510,24 @@ def test_jira_projects_have_their_own_issue_types(client: TestClient) -> None:
     assert issue["issuetype"] == {"name": "Task"}
 
 
+def test_jira_issues_move_between_statuses(client: TestClient) -> None:
+    bob = jira_tokens(client, "acc-bob")["access_token"]
+    dave = jira_tokens(client, "acc-dave")["access_token"]
+    moves = jira(client, bob, "issue/PAY-102/transitions").json()["transitions"]
+    assert {t["to"]["name"]: t["id"] for t in moves} == {
+        "To Do": "11",
+        "In Progress": "21",
+        "In Review": "31",
+        "Done": "41",
+    }
+    assert jira(client, bob, "issue/PAY-102/transitions", "POST", json={"transition": {"id": "31"}}).status_code == 204
+    issue = jira(client, bob, "issue/PAY-102?fields=status").json()["fields"]["status"]
+    assert issue == {"name": "In Review", "statusCategory": {"key": "indeterminate", "name": "In Progress"}}
+    assert jira(client, bob, "issue/PAY-102/transitions", "POST", json={"transition": {"id": "99"}}).status_code == 400
+    assert jira(client, dave, "issue/PAY-102/transitions", "POST", json={"transition": {"id": "41"}}).status_code == 404
+    assert jira(client, bob, "issue/SEC-3/transitions").status_code == 404  # Bob cannot browse SEC
+
+
 def test_state_saved_by_an_older_stand_in_is_started_afresh(tmp_path: Path) -> None:
     config = Config(state_dir=tmp_path, seed_fixture=tmp_path / "none.json", github_app_public_key=PUBLIC)
     saved = tmp_path / "state.json"

@@ -385,6 +385,102 @@ async def test_a_rejected_push_pushes_nothing(world: Agent, live: Live) -> None:
     assert await wait_for(reported, 60)
 
 
+async def tickets_for_the_change(world: Agent, *summaries: str) -> list[str]:
+    """Fresh PAY tickets (the seed's stay as they are), and Bob's own Jira link: status changes act
+    with the requester's account."""
+    from tests.tools.test_jira_writes import as_quinn
+
+    keys = []
+    for summary in summaries:
+        made = await as_quinn("issue", "POST", json={"fields": {
+            "project": {"key": "PAY"}, "summary": summary, "issuetype": {"name": "Bug"}}})  # fmt: skip
+        keys.append(made["key"])
+    return keys
+
+
+def plan_for_tickets(keys: list[str]) -> dict[str, Any]:
+    return {**plan_for("src/pricing/cart.py", issue=None), "case": {"issues": [{"key": k} for k in keys]}}
+
+
+async def statuses(keys: list[str]) -> list[str]:
+    from tests.tools.test_jira_writes import as_quinn
+
+    return [(await as_quinn(f"issue/{k}?fields=status"))["fields"]["status"]["name"] for k in keys]
+
+
+async def test_ask_moves_the_tickets_to_in_review_with_the_approved_push(world: Agent, live: Live) -> None:
+    """The demo in Ask: nothing moves before the person decides; the push's approval request lists the
+    ticket updates, and approving it opens the pull request and moves every ticket to In Review with
+    a comment linking it."""
+    from tests.connect import delete_jira_issues
+    from tests.tools.test_jira_writes import as_quinn
+
+    run = uuid.uuid4().hex[:6]
+    link = await connect_jira(world.stack, world.world.acme, "acc-bob", world.world.acme.user)
+    try:
+        keys = await tickets_for_the_change(
+            world, f"Large carts undercharged {run}", f"Negative totals {run}"
+        )
+        channel = await own_channel(world)
+        first = await thread_with_plan(world, plan_for_tickets(keys), channel=channel)
+        event_id, _ = await live.request(
+            "go ahead and implement the plan", channel=channel, thread_ts=first.message_ts
+        )
+        approval_id, message_ts = await live.approval(event_id)
+        assert await statuses(keys) == ["To Do", "To Do"]  # Ask: nothing moved before the decision
+        summary = world.sql("select action_summary from app.approvals where id = %s", (approval_id,))[0][0]
+        assert f"Then {keys[0]}, {keys[1]} move to In Review, each with a link to the pull request" in summary
+        assert (await live.click("U0BOB", "approval_approve", approval_id, channel=channel,
+                                 ts=message_ts)).status_code == 200  # fmt: skip
+        assert await asyncio_result(live, event_id) == "completed"
+        assert await statuses(keys) == ["In Review", "In Review"]
+        pr = world.sql("select url from app.task_links where task_id = %s", (live.task_row(event_id)[0],))[0][
+            0
+        ]
+        for key in keys:
+            comments = (await as_quinn(f"issue/{key}/comment"))["comments"]
+            assert any(pr in json.dumps(c["body"]) for c in comments), key
+        state = github_state()
+        title = next(p["title"] for p in state["pulls"] if p["html_url"] == pr)
+        assert title.startswith(f"{keys[0]}, {keys[1]}: ")
+
+        async def reported() -> Any:
+            return [m for m in thread_of(await channel_messages(channel), first.message_ts)
+                    if f"{keys[0]}, {keys[1]} moved to In Review with a link to the pull request" in json.dumps(m)]  # fmt: skip
+
+        assert await wait_for(reported, 60)
+    finally:
+        world.sql("update app.connections set status = 'revoked' where id = %s", (link,))
+        await delete_jira_issues(run)
+
+
+async def test_auto_moves_the_tickets_as_the_work_happens(world: Agent, live: Live) -> None:
+    from tests.connect import delete_jira_issues
+
+    run = uuid.uuid4().hex[:6]
+    link = await connect_jira(world.stack, world.world.acme, "acc-bob", world.world.acme.user)
+    set_auto(world, True)
+    try:
+        keys = await tickets_for_the_change(world, f"Carts over 19 lines {run}")
+        channel = await own_channel(world)
+        first = await thread_with_plan(world, plan_for_tickets(keys), channel=channel)
+        event_id, _ = await live.request(
+            "go ahead and implement the plan", channel=channel, thread_ts=first.message_ts
+        )
+
+        async def started() -> Any:
+            return [m for m in thread_of(await channel_messages(channel), first.message_ts)
+                    if f"{keys[0]} moved to In Progress." in json.dumps(m)]  # fmt: skip
+
+        assert await wait_for(started, 120)  # said in the thread as it happens
+        assert await asyncio_result(live, event_id) == "completed"
+        assert await statuses(keys) == ["In Review"]
+    finally:
+        set_auto(world, False)
+        world.sql("update app.connections set status = 'revoked' where id = %s", (link,))
+        await delete_jira_issues(run)
+
+
 async def test_review_comments_come_back_and_revise_the_same_pull_request(world: Agent, live: Live,
                                                                            monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
     from app.settings import get_settings
