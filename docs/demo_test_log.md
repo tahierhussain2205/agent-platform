@@ -71,6 +71,7 @@ In #agent-test (staging), as a member whose Jira and GitHub accounts are linked 
 | 27 | 3 | bug | A plan came back empty and was posted that way: "Plan for KAN-11, KAN-12: · confidence low" with no goal, evidence or steps (the model's call carried none of the plan's fields; asked again, it gave a full plan). | fixed: an empty plan is asked for once more, then the agent says it could not write one instead of posting an empty plan; the schema repair also unwraps fields put under a key of the model's own; the shape is logged (names and types only) |
 | 28 | 3 | UX | "Not covered" lines from the investigators carry our refs ("… [L1]") and tool names ("confirmed via catalog_find_owners lookup"). | fixed: refs are stripped from gaps, and the investigators are told points and gaps are read by people |
 | 29 | CI | test | The Slack stand-in's `test_rate_limits` failed on main once: one call a second, and its two calls straddled a second. | fixed: three later calls, at least one limited |
+| 30 | — | bug | Found by the smoke test after bringing Phase 13 to staging: "what pricing problems were reported in #agent-test today?" in a DM got "the channel #C0C9S2Y6Z1B is not accessible": Slack sent the channel as a link without a name, and the agent looked for a channel called "c0c9s2y6z1b". | fixed: such links read as the channel's name, and channel ids match in any case; on staging the question now gets both problems, cited, in 33 s |
 
 ## Runs
 
