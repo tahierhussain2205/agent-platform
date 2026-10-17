@@ -242,6 +242,17 @@ async def test_a_plan_becomes_a_pull_request(world: Agent) -> None:
     assert composed.not_verified == []
 
 
+def test_the_report_leaves_tickets_and_the_push_to_the_platform() -> None:
+    """Run 2, #20: the implementer's notes said "Did not create or update any Jira ticket (e.g.
+    KAN-8)" under the note that KAN-8 moved, and listed what it had checked as not verified."""
+    from app.agent.implementation import PLATFORM_NOTE
+
+    for platform in ("Did not create or update any Jira ticket (e.g. KAN-8)", "Did not push the branch",
+                     "Confirmed all three new tests fail before the fix", "The pull request needs a reviewer"):  # fmt: skip
+        assert PLATFORM_NOTE.search(platform), platform
+    assert not PLATFORM_NOTE.search("Could not run the integration tests: they need a database")
+
+
 async def model_requests() -> list[dict[str, Any]]:
     async with httpx.AsyncClient() as client:
         data: list[dict[str, Any]] = (await client.get(f"{FAKES}/_admin/anthropic/requests")).json()

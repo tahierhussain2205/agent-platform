@@ -412,6 +412,20 @@ async def test_a_component_the_project_does_not_have_is_left_out(tickets: Agent)
     said = "PAY has no component Billing, so the ticket has none"
     assert missing_was_asked(said, "file it under the Billing component")
     assert not missing_was_asked(said, "create Jira tickets for the problems reported today")
+    # Run 2, #17: the repository's name is not a component asked for.
+    lacks = "KAN has no component cart-service, so the ticket has none"
+    assert not missing_was_asked(lacks, "create tickets for the bugs in tahier-agent-lab/cart-service")
+
+
+def test_our_refs_never_reach_jira() -> None:
+    """Run 2, #16: a ticket description ended with "[S1]"."""
+    from app.agent.tickets import without_refs
+
+    assert without_refs("only the first 19 lines are counted in the total. [S1]") == (
+        "only the first 19 lines are counted in the total."
+    )
+    assert without_refs("Totals went negative [S1] [C2].") == "Totals went negative."
+    assert without_refs("lines[19] is dropped; [WIP] stays") == "lines[19] is dropped; [WIP] stays"
 
 
 async def test_without_a_project_the_only_one_is_used_or_the_choices_are_named(
@@ -554,11 +568,15 @@ async def test_the_answer_is_told_not_to_claim_changes(tickets: Agent) -> None:
         -1
     ]
     # A ticket request has its own, short answer: the tickets are listed by code below it (run 1, #6).
-    assert "do not say they were or will be created" in json.dumps(report["system"])
+    assert "do not say they were, will be or need not be created" in json.dumps(report["system"])
     assert "Put nothing in not_verified" in json.dumps(report["system"])
     from app.agent import prompts
 
     assert "Never say that something was created, changed, assigned, posted or sent" in prompts.REPORT
+    # Run 2, #15 and #18: a closed ticket does not cover a problem reported again; no "Not verified".
+    assert "A ticket that is done or closed does not cover a problem reported again" in prompts.PLAN
+    composed = await agent.runner.compose(ref, u, f, "standard")
+    assert composed.not_verified == []
 
 
 # ------------------------------------------------------------------ through the task workflow

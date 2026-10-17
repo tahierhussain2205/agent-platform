@@ -1029,10 +1029,9 @@ class AgentRunner:
             if tickets_only
             else [d for d in model_unverified if not any(tickets.similar(d, g) for g in f.gaps)]
         )
-        not_verified = [
-            escape(t) for t in [*gaps, *(p["text"][:120] for p in points if not p["sources"]), *doubts]
-        ]
-        if points and not order:
+        uncited = [] if tickets_only else [p["text"][:120] for p in points if not p["sources"]]
+        not_verified = [escape(t) for t in [*gaps, *uncited, *doubts]]
+        if points and not order and not tickets_only:
             not_verified.append("The answer does not cite its sources.")
         sources = await self._permalinks(ref, [numbered[old - 1] for old in order])
         summary = f"{verified} of {len(points)} points cite messages that were read"
@@ -1354,7 +1353,7 @@ class AgentRunner:
                 continue
             moved.append(key)
             if link:
-                text = f"The agent opened a pull request for this issue: {link}"
+                text = f"Pull request opened: {link}"
                 comment = PlannedAction(
                     "jira", "add_comment", {"key": key, "text": text}, f"Link {link} on {key}"
                 )
