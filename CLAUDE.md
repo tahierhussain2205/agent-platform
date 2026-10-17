@@ -9,6 +9,7 @@ A multi tenant AI agent that works as a teammate inside Slack. Each customer is 
 - Initial schema (source of migration 001): [spec/schema.sql](spec/schema.sql)
 - Decisions and blockers log: [spec/decisions_and_blockers.md](spec/decisions_and_blockers.md)
 - Per phase plans: [docs/plans/](docs/plans/), delivery log: [docs/progress.md](docs/progress.md)
+- Reviewer guide (technical, features, decisions, with Excalidraw diagrams in a dark theme): [docs/project-guide/](docs/project-guide/README.md). Diagram sources sit next to each PNG as `.excalidraw`; keep them current when a flow changes.
 
 ## Architecture
 
