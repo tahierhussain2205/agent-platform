@@ -75,6 +75,7 @@ In #agent-test (staging), as a member whose Jira and GitHub accounts are linked 
 | 28 | 3 | UX | "Not covered" lines from the investigators carry our refs ("… [L1]") and tool names ("confirmed via catalog_find_owners lookup"). | fixed: refs are stripped from gaps, and the investigators are told points and gaps are read by people |
 | 29 | CI | test | The Slack stand-in's `test_rate_limits` failed on main once: one call a second, and its two calls straddled a second. | fixed: three later calls, at least one limited |
 | 30 | — | bug | Found by the smoke test after bringing Phase 13 to staging: "what pricing problems were reported in #agent-test today?" in a DM got "the channel #C0C9S2Y6Z1B is not accessible": Slack sent the channel as a link without a name, and the agent looked for a channel called "c0c9s2y6z1b". | fixed: such links read as the channel's name, and channel ids match in any case; on staging the question now gets both problems, cited, in 33 s |
+| 31 | 6 | UX | On the Tasks timeline, the policy's recheck when an approved write runs (the push, and the ticket moves that ride on its approval) read "Ask mode: reversible writes need approval" in amber, right before the write succeeded. | fixed: a recheck followed by its own successful write, with no new approval request between, reads "Done under the approval given above" in green |
 
 ## Runs
 
@@ -122,3 +123,13 @@ Settings, Autonomy, "Let people choose Auto" in the console (#25: saved and kept
 - Step 5: KAN-13 and KAN-14 In Review, each with "Pull request opened: <link>".
 - No new issues. Afterwards: the run's tickets moved to Done and its pull request closed (not merged), so the next demo starts from a clean board with both bugs still in `main`; the requester's mode set back to Ask (the org ceiling stays at "Let people choose Auto").
 
+
+### Run 6 (2026-10-17, staging at d3bac96, Ask mode, with the buttons)
+
+- Before: a "Tech Lead" role created in the console, approving `github.push_changes` (held by nobody); an "Engineering manager" role with a profile, previewed on the real model.
+- Step 1: posted the two bugs in #agent-test.
+- Step 2: `@agent … create Jira tickets` (the browser's mention autocomplete scrambled the words; the agent still understood): two approvals, "the requester or an admin decides"; KAN-15 and KAN-16 created; the answer has a **Plan a fix** button.
+- Step 3: **Plan a fix** clicked: the button became "@Tahier Hussain chose Plan a fix" and "Plan for KAN-15, KAN-16: Count every cart line and refuse discounts over 100% · confidence high" came in about 70 s, with an **Implement this plan** button.
+- Step 4: **Implement this plan** clicked (the first automated click landed while Slack re-rendered the thread and never reached the API; the second did): the push's approval read "**a Tech Lead or an admin decides**"; approved as admin; pull request tahier-agent-lab/cart-service#5 opened, with a **View pull request** button.
+- Step 5: KAN-15 and KAN-16 In Review. The console's Tasks page listed the three tasks; the change's timeline showed the brief, the sandbox edits and test runs, the review, the approval and who decided, the push and both tickets moved and commented (#31 found here).
+- Afterwards: the tickets moved to Done and the pull request closed (not merged).

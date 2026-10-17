@@ -146,3 +146,46 @@ async def test_a_task_timeline_shows_what_the_agent_did(
     assert action["title"] == "Created a Jira issue"
     assert action["detail"] == "KAN-7"
     assert action["tone"] == "green"
+
+
+def test_a_recheck_after_an_approval_reads_as_approved() -> None:
+    """The push's approval covers the ticket moves that ride on it (D-198): their rechecks are not
+    "needs approval" in the timeline; a write that gets its own approval request still is."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.api.console.tasks import _events
+
+    t0 = datetime(2026, 10, 17, 12, 0, tzinfo=UTC)
+
+    def at(seconds: int) -> datetime:
+        return t0 + timedelta(seconds=seconds)
+
+    def check(seconds: int, target: str) -> dict[str, Any]:
+        return {"at": at(seconds), "action": "policy.tool", "target": target, "decision": "info",
+                "reason": "Ask mode: reversible writes need approval.", "outcome": "needs_approval",
+                "code": "approval_required", "tier": "reversible_write"}  # fmt: skip
+
+    decisions = [
+        check(10, "github.push_changes"),
+        check(30, "jira.transition_issue"),
+        check(40, "slack.post_message"),
+    ]
+    approvals = [
+        {"created_at": at(11), "action_summary": "Push", "approver_rule": "requester_or_admin", "approver_role": None,
+         "status": "approved", "decided_at": at(20), "decided_by": "alice@acme.test"},
+        {"created_at": at(41), "action_summary": "Post", "approver_rule": "requester_or_admin", "approver_role": None,
+         "status": "pending", "decided_at": None, "decided_by": None},
+    ]  # fmt: skip
+    actions = [
+        {"integration_key": "jira", "operation": "transition_issue", "target_ref": "jira:KAN-15",
+         "status": "succeeded", "created_at": at(31), "performed_at": at(31)},
+        {"integration_key": "slack", "operation": "post_message", "target_ref": "C1:1.2",
+         "status": "succeeded", "created_at": at(60), "performed_at": at(60)},
+    ]  # fmt: skip
+    events = {
+        e["target"]: e for e in _events([], decisions, approvals, actions, [], []) if e["kind"] == "policy"
+    }
+    assert events["jira.transition_issue"]["tone"] == "green"
+    assert events["jira.transition_issue"]["detail"] == "Done under the approval given above."
+    assert events["github.push_changes"]["tone"] == "amber"  # asked for its own approval
+    assert events["slack.post_message"]["tone"] == "amber"  # a new approval request came first

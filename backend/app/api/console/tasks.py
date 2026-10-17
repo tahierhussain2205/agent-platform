@@ -310,4 +310,24 @@ def _events(
         )
         add(art["created_at"], "artifact", f"Saved the {art['kind']}", (text or "")[:300] or None)
     events.sort(key=lambda e: e["at"])
+    _covered(events)
     return events[:MAX_EVENTS]
+
+
+def _covered(events: list[Event]) -> None:
+    """A write the policy rechecks when it runs, after a person approved it (or approved the push
+    it rides on, D-198), reads "needs approval" right before it is done: say it was approved."""
+    for i, event in enumerate(events):
+        if event["kind"] != "policy" or event.get("outcome") != "needs_approval":
+            continue
+        name = str(event.get("target") or "").split(" ", 1)[0]
+        for later in events[i + 1 :]:
+            if later["kind"] == "approval" and later.get("status") and later["title"] == "Approval requested":
+                break  # its own approval comes next
+            if later["kind"] == "action" and later.get("operation") == name:
+                if later.get("status") == "succeeded" and any(
+                    e["kind"] == "approval" and e["title"].startswith("Approved by") for e in events[:i]
+                ):
+                    event["tone"] = "green"
+                    event["detail"] = "Done under the approval given above."
+                break
