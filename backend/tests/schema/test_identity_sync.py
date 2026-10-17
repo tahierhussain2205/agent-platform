@@ -238,6 +238,34 @@ def test_deleted_user_is_disabled_but_never_leaves_an_org_without_admin(world: W
         )
 
 
+def test_a_deleted_user_can_sign_up_again_with_the_same_email(world: World) -> None:
+    with tx(world.url, SYNC) as conn:
+        call(conn, "identity_disable_user", "user_bob")
+        call(conn, "identity_upsert_org", "org_new2", "New Co")
+        call(
+            conn,
+            "identity_upsert_membership",
+            "org_new2",
+            "New Co",
+            "user_bob2",
+            "BOB@acme.test",
+            "Bob",
+            "org:admin",
+        )
+        assert membership(conn, "org_new2", "bob@acme.test") == ("active", "admin", "user_bob2", True)
+        # Nothing else comes back with the account: the membership removed with the deletion stays removed.
+        assert membership(conn, "org_acme", "bob@acme.test")[0] == "removed"  # type: ignore[index]
+        conn.execute("reset role")
+        assert conn.execute(
+            "select clerk_user_id, status from app.users where lower(email) = 'bob@acme.test'"
+        ).fetchall() == [("user_bob2", "active")]
+
+
+def test_an_active_users_email_cannot_be_taken_by_another_account(world: World) -> None:
+    with tx(world.url, SYNC) as conn, pytest.raises(psycopg.errors.UniqueViolation):
+        call(conn, "identity_upsert_user", "user_impostor", "bob@acme.test", "Not Bob")
+
+
 def test_deleted_org_goes_to_offboarding_and_stops_routing(world: World) -> None:
     with tx(world.url, SYNC) as conn:
         call(conn, "identity_offboard_org", "org_globex")

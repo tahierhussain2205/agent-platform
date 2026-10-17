@@ -5,7 +5,7 @@ The key technical decisions behind the platform, why we made them, what they cos
 ## How decisions were made and recorded
 
 - The specification (`spec/slack_agent_platform_spec.md`, section 5) settled the product, technical and data model decisions before any code: each reviewed, with the main reason for rejected alternatives.
-- During the build, every decision with a lasting effect was logged in `spec/decisions_and_blockers.md` (D-001 to D-205), with its reason. Blockers (missing accounts, unknown platform behavior) were logged there too, with the workaround used until they were cleared.
+- During the build, every decision with a lasting effect was logged in `spec/decisions_and_blockers.md` (D-001 to D-206), with its reason. Blockers (missing accounts, unknown platform behavior) were logged there too, with the workaround used until they were cleared.
 - The invariants in `CLAUDE.md` are the decisions that are never traded away: a change that would weaken one stops and is raised instead.
 
 This folder distills the decisions a reviewer most needs, grouped by theme. Each one says **what** we decided, **why**, the **tradeoffs** we accepted and the **alternatives** we considered, with references to the full log (D-numbers) or the specification (T-numbers).

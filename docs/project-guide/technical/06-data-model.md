@@ -67,6 +67,7 @@ Each guarantee has a test in `backend/tests/schema/`, and the mutation suite pro
 | 010 production readiness | Plans, shadow mode, retention and offboarding functions, alerts |
 | 011 connection labels | A readable label for each connection |
 | 012 roles and tasks | Role profiles and limits, approvals routed to a role, the purpose of each model call |
+| 013 returning users | Someone deleted in the identity provider can sign up again with the same email (their old memberships stay removed) |
 
 Rules for migrations (enforced by the runner and by review):
 
