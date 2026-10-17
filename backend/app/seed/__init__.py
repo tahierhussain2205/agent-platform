@@ -62,11 +62,11 @@ def seed(database_url: str, fixture: dict[str, Any] | None = None, envelope: Any
             org_id = _one(
                 cur,
                 """
-                insert into app.orgs (clerk_org_id, name) values (%s, %s)
-                on conflict (clerk_org_id) do update set name = excluded.name
+                insert into app.orgs (clerk_org_id, name, plan) values (%s, %s, %s)
+                on conflict (clerk_org_id) do update set name = excluded.name, plan = excluded.plan
                 returning id
                 """,
-                (org["clerk_org_id"], org["name"]),
+                (org["clerk_org_id"], org["name"], org.get("plan", "free")),
             )
             org_ids[org["key"]] = org_id
             _seed_org(cur, org_id, org, user_ids)
@@ -85,7 +85,7 @@ def _seed_org(cur: psycopg.Cursor[Any], org_id: UUID, org: dict[str, Any], user_
         update app.org_settings
            set allowed_model_tiers = %s::app.model_tier[], default_model_tier = %s,
                user_daily_token_limit = %s, org_monthly_token_limit = %s,
-               max_concurrent_tasks = %s, max_schedules = %s, retention_days = %s
+               max_concurrent_tasks = %s, max_schedules = %s, retention_days = %s, shadow_mode = false
          where org_id = %s
         """,
         (

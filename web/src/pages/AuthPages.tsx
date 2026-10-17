@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router'
 import { useAuth } from '../auth/context'
+import { ThemeSwitcher } from '../components/ThemeSwitcher'
 import { Button, ErrorNotice, Field, Input } from '../components/ui'
 
 /** Sign in, sign up, create org and invitations for the dev auth adapter (local Clerk stand-in). */
@@ -15,14 +16,17 @@ function AuthCard({
   children: ReactNode
 }) {
   return (
-    <main className="flex min-h-full items-center justify-center px-4 py-12">
+    <main className="relative flex min-h-full items-center justify-center px-4 py-12">
+      <div className="absolute right-4 top-4">
+        <ThemeSwitcher />
+      </div>
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <p className="text-sm font-semibold text-indigo-600">Agent Platform</p>
+          <p className="text-sm font-semibold text-fg-3">Agent Platform</p>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">{title}</h1>
-          {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
+          {subtitle && <p className="mt-1 text-sm text-fg-2">{subtitle}</p>}
         </div>
-        <div className="rounded-lg bg-white p-6 shadow-sm ring-1 ring-slate-200">{children}</div>
+        <div className="rounded-lg bg-surface p-6 shadow-sm ring-1 ring-line">{children}</div>
       </div>
     </main>
   )
@@ -90,22 +94,23 @@ export function SignInPage() {
           Sign in
         </Button>
       </form>
-      <p className="mt-4 text-center text-sm text-slate-600">
+      <p className="mt-4 text-center text-sm text-fg-2">
         No account?{' '}
-        <Link to="/sign-up" className="font-semibold text-indigo-600 hover:text-indigo-500">
+        <Link
+          to="/sign-up"
+          className="font-semibold font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg"
+        >
           Sign up
         </Link>
       </p>
-      <div className="mt-6 border-t border-slate-200 pt-4">
-        <p className="text-xs font-medium text-slate-500">
-          Seeded accounts (password: password123)
-        </p>
+      <div className="mt-6 border-t border-line pt-4">
+        <p className="text-xs font-medium text-fg-3">Seeded accounts (password: password123)</p>
         <div className="mt-2 flex flex-wrap gap-2">
           {DEV_ACCOUNTS.map((account) => (
             <button
               key={account}
               type="button"
-              className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700 hover:bg-slate-200"
+              className="rounded bg-muted px-2 py-1 text-xs text-fg-2 hover:bg-line"
               onClick={() => {
                 setEmail(account)
                 setPassword('password123')
@@ -182,9 +187,12 @@ export function SignUpPage() {
           Sign up
         </Button>
       </form>
-      <p className="mt-4 text-center text-sm text-slate-600">
+      <p className="mt-4 text-center text-sm text-fg-2">
         Already have an account?{' '}
-        <Link to="/sign-in" className="font-semibold text-indigo-600 hover:text-indigo-500">
+        <Link
+          to="/sign-in"
+          className="font-semibold font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg"
+        >
           Sign in
         </Link>
       </p>
@@ -211,7 +219,7 @@ export function CreateOrgPage() {
       subtitle="You will be its admin. You can invite people next."
     >
       {auth.invitations.length > 0 && (
-        <p className="mb-4 rounded-md bg-indigo-50 p-3 text-sm text-indigo-800">
+        <p className="mb-4 rounded-md bg-muted p-3 text-sm text-fg">
           You have {auth.invitations.length} pending invitation
           {auth.invitations.length > 1 ? 's' : ''}.{' '}
           <Link to="/invitations" className="font-semibold underline">
@@ -247,14 +255,14 @@ export function InvitationsPage() {
     <AuthCard title="Invitations" subtitle={auth.user?.email}>
       <ErrorNotice error={error} />
       {auth.invitations.length === 0 ? (
-        <p className="text-sm text-slate-600">No pending invitations.</p>
+        <p className="text-sm text-fg-2">No pending invitations.</p>
       ) : (
-        <ul className="divide-y divide-slate-200">
+        <ul className="divide-y divide-line">
           {auth.invitations.map((invitation) => (
             <li key={invitation.id} className="flex items-center justify-between py-3">
               <div>
                 <p className="text-sm font-medium">{invitation.organizationName}</p>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-fg-3">
                   as {invitation.role === 'org:admin' ? 'admin' : 'member'}
                 </p>
               </div>
@@ -274,12 +282,15 @@ export function InvitationsPage() {
         </ul>
       )}
       <div className="mt-4 flex justify-between text-sm">
-        <Link to="/create-org" className="text-indigo-600 hover:text-indigo-500">
+        <Link
+          to="/create-org"
+          className="font-medium text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg"
+        >
           Create an organization instead
         </Link>
         <button
           type="button"
-          className="text-slate-600 hover:text-slate-900"
+          className="text-fg-2 hover:text-fg"
           onClick={() => void auth.signOut()}
         >
           Sign out

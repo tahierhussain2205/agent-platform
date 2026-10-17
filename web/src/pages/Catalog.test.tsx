@@ -175,6 +175,33 @@ describe('Catalog page', () => {
     expect(await screen.findByRole('listitem', { name: 'Refunds' })).toBeInTheDocument()
   })
 
+  it('shows the proposed services even when the run finishes before it is seen running', async () => {
+    let status: CatalogProposal = { status: 'none' }
+    let reported = false // the list has the new service once the run is reported finished
+    stub('admin', [], {
+      'GET /api/catalog': () => ({
+        body: {
+          services: reported ? [proposedRefunds, service()] : [service()],
+          can_manage: true,
+          last_proposal: null,
+        },
+      }),
+      'POST /api/catalog/propose': () => {
+        // Done before the page asks again: it never sees "running".
+        status = { status: 'completed', finished_at: '2026-10-17T10:00:00Z', proposed: 1 }
+        return { status: 202, body: { status: 'running' } }
+      },
+      'GET /api/catalog/proposal': () => {
+        reported = status.status === 'completed'
+        return { body: status }
+      },
+    })
+    renderRoutes(routes, { path: '/catalog' })
+    await userEvent.click(await screen.findByRole('button', { name: 'Propose services' }))
+    expect(await screen.findByText('Last proposal: 1 proposed.')).toBeInTheDocument()
+    expect(await screen.findByRole('listitem', { name: 'Refunds' })).toBeInTheDocument()
+  })
+
   it('edits owners and links', async () => {
     let sent: unknown = null
     stub('admin', [service()], {

@@ -521,33 +521,106 @@ async def test_clearing_roles(
 # ------------------------------------------------------------------ settings and audit
 
 
-async def test_settings(console: httpx.AsyncClient, signing_key: SigningKey) -> None:
+def set_plan(world: World, clerk_org_id: str, plan: str) -> None:
+    with psycopg.connect(world.url) as conn:
+        conn.execute("update app.orgs set plan = %s where clerk_org_id = %s", (plan, clerk_org_id))
+
+
+async def test_settings(console: httpx.AsyncClient, signing_key: SigningKey, module_world: World) -> None:
     h = auth(signing_key, *DAVE)
     current = (await console.get("/api/settings", headers=h)).json()
     assert current["allowed_model_tiers"] == ["fast", "standard"]
-    updated = await console.patch(
-        "/api/settings",
-        json={
-            "retention_days": 45,
-            "max_schedules": 7,
-            "allowed_model_tiers": ["advanced", "fast", "fast"],
-            "default_model_tier": "advanced",
-            "display_settings": {"theme": "dark"},
-        },
-        headers=h,
+    assert current["shadow_mode"] is False
+    assert current["plan"]["key"] == "free"
+    assert current["plan"]["model_tiers"] == ["fast", "standard"]
+    set_plan(module_world, "org_globex", "team")
+    try:
+        updated = await console.patch(
+            "/api/settings",
+            json={
+                "retention_days": 45,
+                "max_schedules": 7,
+                "allowed_model_tiers": ["advanced", "fast", "fast"],
+                "default_model_tier": "advanced",
+                "display_settings": {"theme": "dark"},
+                "shadow_mode": True,
+            },
+            headers=h,
+        )
+        body = updated.json()
+        assert (
+            body["retention_days"],
+            body["max_schedules"],
+            body["allowed_model_tiers"],
+            body["default_model_tier"],
+            body["shadow_mode"],
+        ) == (45, 7, ["fast", "advanced"], "advanced", True)
+        assert body["display_settings"] == {"theme": "dark"}
+        off = (await console.patch("/api/settings", json={"shadow_mode": False}, headers=h)).json()
+        assert off["shadow_mode"] is False
+        audited = q(
+            module_world,
+            "select metadata->>'shadow_mode' from app.audit_log where action = 'settings.updated' "
+            "and metadata ? 'shadow_mode' order by occurred_at desc limit 1",
+        )
+        assert audited == "false"
+        refused = await console.patch("/api/settings", json={"clear_user_daily_token_limit": True}, headers=h)
+        assert refused.status_code == 422
+        assert refused.json()["error"]["code"] == "plan_limit"
+        set_plan(module_world, "org_globex", "enterprise")  # no ceiling: the limit may go
+        cleared = (
+            await console.patch("/api/settings", json={"clear_user_daily_token_limit": True}, headers=h)
+        ).json()
+        assert cleared["user_daily_token_limit"] is None
+    finally:
+        set_plan(module_world, "org_globex", "free")
+        await console.patch(
+            "/api/settings",
+            json={
+                "allowed_model_tiers": ["fast", "standard"],
+                "default_model_tier": "standard",
+                "user_daily_token_limit": 50000,
+                "retention_days": 30,
+                "max_schedules": 5,
+            },
+            headers=h,
+        )
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        ({"allowed_model_tiers": ["fast", "advanced"]}, "does not include the advanced model tier"),
+        ({"user_daily_token_limit": 250_001}, "at most 250,000 tokens per person per day"),
+        ({"org_monthly_token_limit": 6_000_000}, "at most 5,000,000 tokens per month"),
+        ({"clear_org_monthly_token_limit": True}, "needs a limit on tokens per month"),
+        ({"max_concurrent_tasks": 4}, "at most 3 concurrent tasks"),
+        ({"max_schedules": 6}, "at most 5 scheduled reports"),
+        ({"retention_days": 91}, "at most 90 days of retention"),
+    ],
+)
+async def test_settings_beyond_the_plan_are_refused(
+    console: httpx.AsyncClient, signing_key: SigningKey, body: dict[str, Any], reason: str
+) -> None:
+    response = await console.patch("/api/settings", json=body, headers=auth(signing_key, *DAVE))
+    assert response.status_code == 422, response.text
+    error = response.json()["error"]
+    assert error["code"] == "plan_limit"
+    assert error["message"].startswith("The Free plan")
+    assert reason in error["message"]
+
+
+async def test_settings_within_the_plan_are_saved(
+    console: httpx.AsyncClient, signing_key: SigningKey
+) -> None:
+    h = auth(signing_key, *DAVE)
+    saved = await console.patch(
+        "/api/settings", json={"user_daily_token_limit": 250_000, "retention_days": 90}, headers=h
     )
-    body = updated.json()
-    assert (
-        body["retention_days"],
-        body["max_schedules"],
-        body["allowed_model_tiers"],
-        body["default_model_tier"],
-    ) == (45, 7, ["fast", "advanced"], "advanced")
-    assert body["display_settings"] == {"theme": "dark"}
-    cleared = (
-        await console.patch("/api/settings", json={"clear_user_daily_token_limit": True}, headers=h)
-    ).json()
-    assert cleared["user_daily_token_limit"] is None
+    assert saved.status_code == 200, saved.text
+    await console.patch(
+        "/api/settings", json={"user_daily_token_limit": 50000, "retention_days": 30}, headers=h
+    )
 
 
 @pytest.mark.parametrize(

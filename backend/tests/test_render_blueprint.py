@@ -124,7 +124,8 @@ def test_backend_services_share_one_image(service: dict[str, Any]) -> None:
     assert service["dockerfilePath"] == "./backend/Dockerfile"
     assert (ROOT / service["dockerfilePath"]).is_file()
     assert service["branch"] == "main"
-    assert service["autoDeployTrigger"] == "checksPass"
+    # Every commit while CI is paused (D-200); back to "checksPass" when it runs on every push again.
+    assert service["autoDeployTrigger"] == "commit"
     assert "backend/**" in service["buildFilter"]["paths"]
 
 

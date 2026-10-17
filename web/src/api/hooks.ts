@@ -77,7 +77,47 @@ export interface OrgSettings {
   max_schedules: number
   retention_days: number
   display_settings: Record<string, unknown>
+  // Absent from an API older than the console (they deploy separately): the page copes without.
+  shadow_mode?: boolean
   updated_at: string
+  plan?: Plan
+}
+
+/** What the org's plan lets admins set (null token ceilings: the limit may be lifted). */
+export interface Plan {
+  key: string
+  title: string
+  user_daily_token_limit: number | null
+  org_monthly_token_limit: number | null
+  max_concurrent_tasks: number
+  max_schedules: number
+  max_retention_days: number
+  model_tiers: Tier[]
+}
+
+export interface Usage {
+  days: number
+  limits: { user_daily_token_limit: number | null; org_monthly_token_limit: number | null }
+  today: { tokens: number; cost: number }
+  month: { tokens: number; cost: number }
+  daily: { day: string; tokens: number; cost: number }[]
+  people: {
+    membership_id: string | null
+    email: string | null
+    name: string | null
+    tokens: number
+    cost: number
+    today_tokens: number
+  }[]
+  playbooks: { key: string; title: string; tasks: number; tokens: number; cost: number }[]
+  models: {
+    model: string
+    input_tokens: number
+    output_tokens: number
+    cached_tokens: number
+    sandbox_seconds: number
+    cost: number
+  }[]
 }
 
 export interface AuditEntry {
@@ -321,6 +361,15 @@ export function useSettings() {
   const api = useApi()
   const org = useOrgKey()
   return useQuery({ queryKey: [org, 'settings'], queryFn: () => api<OrgSettings>('/api/settings') })
+}
+
+export function useUsage(days: number) {
+  const api = useApi()
+  const org = useOrgKey()
+  return useQuery({
+    queryKey: [org, 'usage', days],
+    queryFn: () => api<Usage>(`/api/usage?days=${days}`),
+  })
 }
 
 export function useAudit(filters: {

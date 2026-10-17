@@ -343,6 +343,7 @@ services:
       npm_config_store_dir: /pnpm-store
       VITE_API_URL: http://localhost:8000
       VITE_DEV_AUTH_URL: http://localhost:4100/clerk
+      VITE_WATCH_POLLING: "1"  # file events on the bind mount are unreliable (vite.config.ts)
     ports: ["5173:5173"]
     volumes:
       - ./web:/app

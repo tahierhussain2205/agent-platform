@@ -80,7 +80,7 @@ projects:
             region: oregon
             plan: starter
             branch: main
-            autoDeployTrigger: checksPass
+            autoDeployTrigger: commit  # checksPass while CI runs on every push (D-200)
             dockerContext: ./backend
             dockerfilePath: ./backend/Dockerfile
             dockerCommand: app api
@@ -189,7 +189,7 @@ projects:
             region: oregon
             plan: starter
             branch: main
-            autoDeployTrigger: checksPass
+            autoDeployTrigger: commit  # checksPass while CI runs on every push (D-200)
             dockerContext: ./backend
             dockerfilePath: ./backend/Dockerfile
             dockerCommand: app worker
@@ -262,7 +262,7 @@ projects:
             region: oregon
             plan: starter
             branch: main
-            autoDeployTrigger: checksPass
+            autoDeployTrigger: commit  # checksPass while CI runs on every push (D-200)
             dockerContext: ./backend
             dockerfilePath: ./backend/Dockerfile
             dockerCommand: app vault
@@ -308,14 +308,14 @@ projects:
               - key: OTEL_EXPORTER_OTLP_ENDPOINT
                 sync: false
 
-          # Partition creation, retention pruning, Slack membership reconciliation.
+          # Partitions, retention and offboarding, Slack and task reconciliation, schedule sync, alerts.
           - type: cron
             name: maintenance-staging
             runtime: docker
             region: oregon
             plan: starter
             branch: main
-            autoDeployTrigger: checksPass
+            autoDeployTrigger: commit  # checksPass while CI runs on every push (D-200)
             schedule: "*/15 * * * *"
             dockerContext: ./backend
             dockerfilePath: ./backend/Dockerfile
@@ -332,12 +332,27 @@ projects:
                 sync: false
               - key: SANDBOX_API_KEY
                 sync: false
-              # Starts Slack membership reconciliations through Temporal.
+              # Starts Slack membership reconciliations through Temporal; offboarding deletes schedules.
               - key: TEMPORAL_ADDRESS
                 sync: false
               - key: TEMPORAL_NAMESPACE
                 sync: false
               - key: TEMPORAL_API_KEY
+                sync: false
+              # Alerts go to a Slack incoming webhook; unset, they are only logged (plan phase 13).
+              - key: ALERT_WEBHOOK_URL
+                sync: false
+              # Retention and offboarding delete objects and an offboarded org's keys (plan phase 13).
+              - key: REDIS_URL
+                fromService:
+                  type: keyvalue
+                  name: kv-staging
+                  property: connectionString
+              - key: S3_ENDPOINT_URL
+                sync: false
+              - key: S3_ACCESS_KEY_ID
+                sync: false
+              - key: S3_SECRET_ACCESS_KEY
                 sync: false
               - key: DATABASE_URL
                 fromDatabase:
@@ -349,7 +364,7 @@ projects:
             name: web-staging
             runtime: static
             branch: main
-            autoDeployTrigger: checksPass
+            autoDeployTrigger: commit  # checksPass while CI runs on every push (D-200)
             buildCommand: cd web && corepack pnpm install --frozen-lockfile && corepack pnpm build
             staticPublishPath: ./web/dist
             buildFilter:
@@ -376,6 +391,20 @@ projects:
               - path: /*
                 name: Strict-Transport-Security
                 value: max-age=31536000; includeSubDomains
+              # Report only until the Clerk sign in is verified on staging (B-003), then enforced
+              # (Content-Security-Policy). Clerk's Frontend API, its bot check and the API only.
+              - path: /*
+                name: Content-Security-Policy-Report-Only
+                value: >-
+                  default-src 'self';
+                  script-src 'self' https://*.clerk.accounts.dev https://challenges.cloudflare.com;
+                  connect-src 'self' https://api-staging-u9gh.onrender.com https://*.clerk.accounts.dev;
+                  img-src 'self' data: https://img.clerk.com;
+                  style-src 'self' 'unsafe-inline';
+                  font-src 'self' data:;
+                  frame-src https://challenges.cloudflare.com;
+                  worker-src 'self' blob:;
+                  object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
               - path: /assets/*
                 name: Cache-Control
                 value: public, max-age=31536000, immutable

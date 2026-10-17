@@ -1,6 +1,13 @@
 import { useState, type FormEvent } from 'react'
 import { ApiRequestError } from '../api/client'
-import { json, useApiMutation, useSettings, type OrgSettings, type Tier } from '../api/hooks'
+import {
+  json,
+  useApiMutation,
+  useSettings,
+  type OrgSettings,
+  type Plan,
+  type Tier,
+} from '../api/hooks'
 import { AutonomyCard } from '../components/AutonomyCard'
 import {
   Button,
@@ -27,6 +34,20 @@ interface FormState {
   max_concurrent_tasks: string
   max_schedules: string
   retention_days: string
+  shadow_mode: boolean
+}
+
+const count = new Intl.NumberFormat('en-US')
+
+/** The field's hint: the plan's ceiling, or the schema's range when there is none (or no plan known). */
+function within(
+  plan: Plan | undefined,
+  ceiling: number | null | undefined,
+  otherwise: string,
+): string {
+  return !plan || ceiling == null
+    ? otherwise
+    : `At most ${count.format(ceiling)} on the ${plan.title} plan`
 }
 
 const toForm = (s: OrgSettings): FormState => ({
@@ -37,6 +58,7 @@ const toForm = (s: OrgSettings): FormState => ({
   max_concurrent_tasks: s.max_concurrent_tasks.toString(),
   max_schedules: s.max_schedules.toString(),
   retention_days: s.retention_days.toString(),
+  shadow_mode: s.shadow_mode ?? false,
 })
 
 export function SettingsPage() {
@@ -101,16 +123,18 @@ function SettingsForm({
         max_concurrent_tasks: Number(form.max_concurrent_tasks),
         max_schedules: Number(form.max_schedules),
         retention_days: Number(form.retention_days),
+        shadow_mode: form.shadow_mode,
       },
       { onSuccess: () => setSaved(true) },
     )
   }
   const defaultNotAllowed = !form.allowed_model_tiers.includes(form.default_model_tier)
+  const plan = initial.plan
   return (
     <>
       <PageHeader
         title="Settings"
-        description="Models, limits and retention for this organization."
+        description={`Models, limits and retention for this organization${plan ? `, within the ${plan.title} plan` : ''}.`}
       />
       <div className="mb-6">
         <AutonomyCard isAdmin />
@@ -118,25 +142,50 @@ function SettingsForm({
       <form onSubmit={submit} className="space-y-6" aria-label="Organization settings">
         <ErrorNotice error={save.error} />
         {saved && (
-          <p role="status" className="rounded-md bg-green-50 p-2 text-sm text-green-800">
+          <p role="status" className="rounded-md bg-ok-soft p-2 text-sm text-ok">
             Settings saved.
           </p>
         )}
+        <Card title="Agent">
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={form.shadow_mode}
+              onChange={(e) => setForm({ ...form, shadow_mode: e.target.checked })}
+            />
+            <span>
+              <span className="font-medium text-fg">Shadow mode</span>
+              <span className="block text-fg-2">
+                The agent reads, plans and answers, and says what it would have done, but makes no
+                changes: no tickets, messages elsewhere, pull requests or other writes. Turn it off
+                once you trust its plans.
+              </span>
+            </span>
+          </label>
+        </Card>
         <Card title="Models">
           <div className="grid gap-4 sm:grid-cols-2">
             <fieldset>
-              <legend className="text-sm font-medium text-slate-800">Allowed tiers</legend>
+              <legend className="text-sm font-medium text-fg">Allowed tiers</legend>
               <div className="mt-2 space-y-1">
-                {TIERS.map((tier) => (
-                  <label key={tier.value} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={form.allowed_model_tiers.includes(tier.value)}
-                      onChange={() => toggleTier(tier.value)}
-                    />
-                    {tier.label}
-                  </label>
-                ))}
+                {TIERS.map((tier) => {
+                  const offered = !plan || plan.model_tiers.includes(tier.value)
+                  return (
+                    <label key={tier.value} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={form.allowed_model_tiers.includes(tier.value)}
+                        disabled={!offered && !form.allowed_model_tiers.includes(tier.value)}
+                        onChange={() => toggleTier(tier.value)}
+                      />
+                      {tier.label}
+                      {!offered && (
+                        <span className="text-xs text-fg-3">(not on the {plan?.title} plan)</span>
+                      )}
+                    </label>
+                  )
+                })}
               </div>
             </fieldset>
             <Field
@@ -167,7 +216,7 @@ function SettingsForm({
             <Field
               label="Tokens per user per day"
               htmlFor="user-daily"
-              hint="Empty for no limit"
+              hint={within(plan, plan?.user_daily_token_limit, 'Empty for no limit')}
               error={fieldError('user_daily_token_limit')}
             >
               <Input
@@ -181,7 +230,7 @@ function SettingsForm({
             <Field
               label="Tokens per org per month"
               htmlFor="org-monthly"
-              hint="Empty for no limit"
+              hint={within(plan, plan?.org_monthly_token_limit, 'Empty for no limit')}
               error={fieldError('org_monthly_token_limit')}
             >
               <Input
@@ -195,7 +244,7 @@ function SettingsForm({
             <Field
               label="Concurrent tasks"
               htmlFor="concurrent"
-              hint="1 to 1000"
+              hint={within(plan, plan?.max_concurrent_tasks, '1 to 1000')}
               error={fieldError('max_concurrent_tasks')}
             >
               <Input
@@ -208,7 +257,7 @@ function SettingsForm({
             <Field
               label="Active schedules"
               htmlFor="schedules"
-              hint="0 to 10000"
+              hint={within(plan, plan?.max_schedules, '0 to 10000')}
               error={fieldError('max_schedules')}
             >
               <Input
@@ -221,7 +270,7 @@ function SettingsForm({
             <Field
               label="Retention (days)"
               htmlFor="retention"
-              hint="1 to 3650"
+              hint={within(plan, plan?.max_retention_days, '1 to 3650')}
               error={fieldError('retention_days')}
             >
               <Input

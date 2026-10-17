@@ -19,7 +19,14 @@ interface DevSession {
   invitations: { id: string; organization_name: string; role: string }[]
 }
 
-class DevAuthError extends Error {}
+class DevAuthError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
 
 function readSession(): string | null {
   try {
@@ -49,6 +56,7 @@ async function call<T>(path: string, init: RequestInit = {}, session?: string | 
       ?.errors?.[0]
     throw new DevAuthError(
       message?.long_message ?? message?.message ?? `Sign in failed (${response.status}).`,
+      response.status,
     )
   }
   return body as T
@@ -100,17 +108,23 @@ export function DevAuthProvider({ children }: { children: ReactNode }) {
     const now = Date.now() / 1000
     if (cached && cached.exp - 10 > now && cached.org === (session?.active_org_id ?? null))
       return cached.jwt
-    const { jwt } = await call<{ jwt: string }>(
-      '/dev/session/tokens',
-      { method: 'POST' },
-      sessionId,
-    )
+    let jwt: string
+    try {
+      ;({ jwt } = await call<{ jwt: string }>('/dev/session/tokens', { method: 'POST' }, sessionId))
+    } catch (error) {
+      // The session ended (signed out elsewhere, or the stand-in was reset): back to sign in.
+      if (error instanceof DevAuthError && error.status === 401) {
+        adopt(null)
+        return null
+      }
+      throw error
+    }
     const payload = JSON.parse(atob(jwt.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/'))) as {
       exp: number
     }
     tokenCache.current = { jwt, exp: payload.exp, org: session?.active_org_id ?? null }
     return jwt
-  }, [sessionId, session?.active_org_id])
+  }, [sessionId, session?.active_org_id, adopt])
 
   const value = useMemo<AuthState>(() => {
     const user: AuthUser | null = session

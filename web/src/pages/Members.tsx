@@ -50,7 +50,7 @@ function InviteForm() {
     <form onSubmit={submit} className="space-y-3" aria-label="Invite a member">
       <ErrorNotice error={invite.error} />
       {sent && (
-        <p role="status" className="rounded-md bg-green-50 p-2 text-sm text-green-800">
+        <p role="status" className="rounded-md bg-ok-soft p-2 text-sm text-ok">
           Invitation sent to {sent}.
         </p>
       )}
@@ -112,11 +112,11 @@ function RoleEditor({ member, onClose }: { member: Member; onClose: () => void }
         <EmptyState>No roles yet. Create roles on the Roles page.</EmptyState>
       ) : (
         <fieldset>
-          <legend className="text-sm text-slate-600">
+          <legend className="text-sm text-fg-2">
             Roles shape how the agent responds to {member.name ?? member.email}. Exactly one is
             primary.
           </legend>
-          <ul className="mt-3 divide-y divide-slate-200 rounded-md ring-1 ring-slate-200">
+          <ul className="mt-3 divide-y divide-line rounded-md ring-1 ring-line">
             {roles.data?.map((role) => (
               <li key={role.id} className="flex items-center justify-between px-3 py-2">
                 <label className="flex items-center gap-2 text-sm">
@@ -127,7 +127,7 @@ function RoleEditor({ member, onClose }: { member: Member; onClose: () => void }
                   />
                   {role.title}
                 </label>
-                <label className="flex items-center gap-1 text-xs text-slate-600">
+                <label className="flex items-center gap-1 text-xs text-fg-2">
                   <input
                     type="radio"
                     name="primary"
@@ -171,7 +171,7 @@ function ConfirmRemove({ member, onClose }: { member: Member; onClose: () => voi
   return (
     <div className="space-y-4">
       <ErrorNotice error={remove.error} />
-      <p className="text-sm text-slate-700">
+      <p className="text-sm text-fg-2">
         Remove <strong>{member.name ?? member.email}</strong> from this organization? Their linked
         accounts are revoked, schedules they own are paused and their sessions are closed.
       </p>
@@ -219,9 +219,9 @@ function MemberRow({
       <td className="py-3 pr-3">
         <p className="text-sm font-medium">
           {member.name ?? member.email}
-          {isSelf && <span className="ml-1 text-xs text-slate-500">(you)</span>}
+          {isSelf && <span className="ml-1 text-xs text-fg-3">(you)</span>}
         </p>
-        <p className="text-xs text-slate-500">{member.email}</p>
+        <p className="text-xs text-fg-3">{member.email}</p>
         {error && (
           <div className="mt-2">
             <ErrorNotice error={error} onDismiss={() => (change.reset(), revoke.reset())} />
@@ -241,15 +241,15 @@ function MemberRow({
         )}
       </td>
       <td className="py-3 pr-3">
-        <Badge tone={member.privilege === 'admin' ? 'indigo' : 'slate'}>
+        <Badge tone={member.privilege === 'admin' ? 'strong' : 'neutral'}>
           {member.privilege === 'admin' ? 'Admin' : 'Member'}
         </Badge>
       </td>
       <td className="py-3 pr-3">
         <div className="flex flex-wrap gap-1">
-          {member.roles.length === 0 && <span className="text-xs text-slate-400">None</span>}
+          {member.roles.length === 0 && <span className="text-xs text-fg-4">None</span>}
           {member.roles.map((role) => (
-            <Badge key={role.id} tone={role.primary ? 'indigo' : 'slate'}>
+            <Badge key={role.id} tone={role.primary ? 'strong' : 'neutral'}>
               {role.title}
               {role.primary ? ' ★' : ''}
             </Badge>
@@ -271,14 +271,14 @@ function MemberRow({
                 <Button variant="ghost" onClick={onEditRoles}>
                   Edit roles
                 </Button>
-                <Button variant="ghost" className="text-red-600" onClick={onRemove}>
+                <Button variant="ghost" className="text-bad" onClick={onRemove}>
                   Remove
                 </Button>
               </>
             ) : (
               <Button
                 variant="ghost"
-                className="text-red-600"
+                className="text-bad"
                 busy={revoke.isPending}
                 onClick={() => revoke.mutate(member.id)}
               >
@@ -308,7 +308,7 @@ function AccessRequestRow({ request }: { request: AccessRequest }) {
     >
       <div>
         <p className="text-sm font-medium">{request.email ?? 'Unknown email'}</p>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-fg-3">
           Slack user {request.external_user_id} · asked{' '}
           {new Date(request.created_at).toLocaleString()}
         </p>
@@ -339,10 +339,10 @@ function AccessRequests() {
   return (
     <div className="mb-6">
       <Card title={`Access requests (${pending.length})`}>
-        <p className="text-sm text-slate-600">
+        <p className="text-sm text-fg-2">
           People who mentioned the agent in Slack without being invited.
         </p>
-        <ul className="divide-y divide-slate-200">
+        <ul className="divide-y divide-line">
           {pending.map((request) => (
             <AccessRequestRow key={request.id} request={request} />
           ))}
@@ -378,9 +378,9 @@ export function MembersPage() {
         ) : members.error ? (
           <ErrorNotice error={members.error} />
         ) : (
-          <div className="overflow-x-auto">
+          <div className="relative overflow-x-auto">
             <table className="w-full text-left">
-              <thead className="text-xs uppercase text-slate-500">
+              <thead className="text-xs uppercase text-fg-3">
                 <tr>
                   <th className="pb-2 pr-3 font-medium">Person</th>
                   <th className="pb-2 pr-3 font-medium">Status</th>
@@ -389,7 +389,7 @@ export function MembersPage() {
                   {isAdmin && <th className="pb-2 font-medium sr-only">Actions</th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200">
+              <tbody className="divide-y divide-line">
                 {members.data.map((member) => (
                   <MemberRow
                     key={member.id}

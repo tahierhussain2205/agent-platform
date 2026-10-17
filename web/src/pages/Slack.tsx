@@ -37,7 +37,7 @@ function InstallBanner() {
       {installed ? (
         <div
           role="status"
-          className="flex justify-between rounded-md bg-green-50 p-3 text-sm text-green-800 ring-1 ring-green-200"
+          className="flex justify-between rounded-md bg-ok-soft p-3 text-sm text-ok ring-1 ring-ok-line"
         >
           <span>Connected to the {installed} Slack workspace. Channels are being synced.</span>
           <button type="button" onClick={dismiss} aria-label="Dismiss">
@@ -70,7 +70,7 @@ function ChannelRow({ channel, isAdmin }: { channel: SlackChannel; isAdmin: bool
   const allowed = requested ?? channel.is_allowlisted
   return (
     <tr data-testid={`channel-${channel.name}`}>
-      <td className="py-2 pr-3 text-sm font-medium">
+      <td className="whitespace-nowrap py-2 pr-3 text-sm font-medium">
         {channel.is_private ? '🔒 ' : '# '}
         {channel.name ?? channel.external_id}
         {toggle.error && (
@@ -79,7 +79,7 @@ function ChannelRow({ channel, isAdmin }: { channel: SlackChannel; isAdmin: bool
           </div>
         )}
         {paused > 0 && (
-          <p className="mt-1 text-xs text-amber-700">
+          <p className="mt-1 text-xs text-warn">
             {paused} schedule(s) delivering here were paused.
           </p>
         )}
@@ -96,7 +96,7 @@ function ChannelRow({ channel, isAdmin }: { channel: SlackChannel; isAdmin: bool
           )}
         </div>
       </td>
-      <td className="py-2 pr-3 text-sm text-slate-600">{channel.members}</td>
+      <td className="py-2 pr-3 text-sm text-fg-2">{channel.members}</td>
       <td className="py-2 text-right">
         <label className="inline-flex items-center gap-2 text-sm">
           <input
@@ -176,18 +176,18 @@ export function SlackPage() {
         >
           <ErrorNotice error={connectError ?? sync.error ?? disconnect.error} />
           {sync.isSuccess && (
-            <p role="status" className="mb-2 text-sm text-green-700">
+            <p role="status" className="mb-2 text-sm text-ok">
               Sync started. Channels and members refresh in a few seconds.
             </p>
           )}
           {workspace ? (
             <p className="text-sm">
               Connected to <strong>{workspace.name}</strong>{' '}
-              <span className="text-slate-500">({workspace.external_id})</span>
+              <span className="text-fg-3">({workspace.external_id})</span>
             </p>
           ) : isAdmin ? (
             <div className="flex items-center justify-between gap-4">
-              <p className="text-sm text-slate-600">Slack is not connected yet.</p>
+              <p className="text-sm text-fg-2">Slack is not connected yet.</p>
               <Button
                 busy={connecting}
                 disabled={!slack.data.install_configured}
@@ -197,7 +197,7 @@ export function SlackPage() {
               </Button>
             </div>
           ) : (
-            <p className="text-sm text-slate-600">
+            <p className="text-sm text-fg-2">
               Slack is not connected yet. Ask an admin to connect it.
             </p>
           )}
@@ -207,9 +207,9 @@ export function SlackPage() {
             {channels.length === 0 ? (
               <EmptyState>No channels yet. Use Sync now after the first install.</EmptyState>
             ) : (
-              <div className="overflow-x-auto">
+              <div className="relative overflow-x-auto">
                 <table className="w-full text-left">
-                  <thead className="text-xs uppercase text-slate-500">
+                  <thead className="text-xs uppercase text-fg-3">
                     <tr>
                       <th className="pb-2 pr-3 font-medium">Channel</th>
                       <th className="pb-2 pr-3 font-medium">Status</th>
@@ -217,7 +217,7 @@ export function SlackPage() {
                       <th className="pb-2 text-right font-medium">Agent access</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-200">
+                  <tbody className="divide-y divide-line">
                     {channels.map((channel) => (
                       <ChannelRow key={channel.id} channel={channel} isAdmin={isAdmin} />
                     ))}
@@ -230,7 +230,7 @@ export function SlackPage() {
       </div>
       <Dialog open={confirm} title="Disconnect Slack" onClose={() => setConfirm(false)}>
         <div className="space-y-4">
-          <p className="text-sm text-slate-700">
+          <p className="text-sm text-fg-2">
             The agent stops working in Slack and its token is deleted. You can connect again later.
           </p>
           <div className="flex justify-end gap-2">

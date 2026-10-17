@@ -4,6 +4,7 @@ import { ApiRequestError } from '../api/client'
 import { useMe } from '../api/hooks'
 import { useAuth } from '../auth/context'
 import { MeContext, useMember } from './member'
+import { ThemeSwitcher } from './ThemeSwitcher'
 import { Badge, Button, ErrorNotice, Spinner } from './ui'
 
 const ClerkOrgSwitcher = lazy(() =>
@@ -27,9 +28,9 @@ function NoAccess({ error }: { error: ApiRequestError }) {
   const others = auth.orgs.filter((o) => o.id !== auth.activeOrgId)
   return (
     <FullPage>
-      <div className="max-w-md rounded-lg bg-white p-6 text-center shadow-sm ring-1 ring-slate-200">
+      <div className="max-w-md rounded-lg bg-surface p-6 text-center shadow-sm ring-1 ring-line">
         <h1 className="text-lg font-semibold">No access</h1>
-        <p className="mt-2 text-sm text-slate-600">{NO_ACCESS[error.code] ?? error.message}</p>
+        <p className="mt-2 text-sm text-fg-2">{NO_ACCESS[error.code] ?? error.message}</p>
         <div className="mt-4 flex flex-wrap justify-center gap-2">
           {others.map((org) => (
             <Button key={org.id} variant="secondary" onClick={() => void auth.setActiveOrg(org.id)}>
@@ -102,7 +103,7 @@ function OrgSwitcher() {
       <span className="sr-only">Organization</span>
       <select
         aria-label="Organization"
-        className="rounded-md border-0 bg-slate-800 py-1 pl-2 pr-8 text-sm font-medium text-white ring-1 ring-slate-700 focus:ring-2 focus:ring-indigo-400"
+        className="max-w-[45vw] truncate rounded-md border-0 bg-surface py-1 pl-2 pr-8 text-sm font-medium text-fg ring-1 ring-inset ring-line-strong focus:ring-2 focus:ring-fg sm:max-w-xs"
         value={auth.activeOrgId ?? ''}
         disabled={busy}
         onChange={async (e) => {
@@ -139,6 +140,7 @@ function Shell() {
     { to: '/schedules', label: 'Schedules' },
     ...(isAdmin
       ? [
+          { to: '/usage', label: 'Usage' },
           { to: '/settings', label: 'Settings' },
           { to: '/audit', label: 'Audit log' },
         ]
@@ -146,8 +148,8 @@ function Shell() {
   ]
   return (
     <div className="flex min-h-full">
-      <aside className="hidden w-56 shrink-0 bg-slate-900 text-slate-300 md:block">
-        <div className="px-4 py-4 text-sm font-semibold text-white">Agent Platform</div>
+      <aside className="hidden w-56 shrink-0 border-r border-line bg-surface md:block">
+        <div className="px-4 py-4 text-sm font-semibold text-fg">Agent Platform</div>
         <nav aria-label="Main" className="space-y-1 px-2">
           {nav.map((item) => (
             <NavLink
@@ -155,7 +157,7 @@ function Shell() {
               to={item.to}
               end={item.end}
               className={({ isActive }) =>
-                `block rounded-md px-3 py-2 text-sm font-medium ${isActive ? 'bg-slate-800 text-white' : 'hover:bg-slate-800 hover:text-white'}`
+                `block rounded-md px-3 py-2 text-sm font-medium ${isActive ? 'bg-muted text-fg' : 'text-fg-2 hover:bg-subtle hover:text-fg'}`
               }
             >
               {item.label}
@@ -164,23 +166,30 @@ function Shell() {
         </nav>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex items-center justify-between gap-4 bg-slate-900 px-4 py-2.5 md:bg-white md:ring-1 md:ring-slate-200">
-          <div className="flex items-center gap-3 rounded-md md:bg-slate-900 md:px-2 md:py-1">
+        <header className="flex items-center justify-between gap-2 border-b border-line bg-surface px-4 py-2.5 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-3">
             <OrgSwitcher />
           </div>
-          <div className="flex items-center gap-3 text-sm">
-            <span className="hidden text-slate-700 sm:inline" data-testid="current-user">
+          <div className="flex shrink-0 items-center gap-2 text-sm sm:gap-3">
+            <ThemeSwitcher />
+            <span className="hidden text-fg-2 sm:inline" data-testid="current-user">
               {auth.user?.email}
             </span>
-            <Badge tone={isAdmin ? 'indigo' : 'slate'}>{isAdmin ? 'Admin' : 'Member'}</Badge>
-            <Button variant="secondary" onClick={() => void auth.signOut()}>
+            <span className="hidden sm:inline-flex">
+              <Badge tone={isAdmin ? 'strong' : 'neutral'}>{isAdmin ? 'Admin' : 'Member'}</Badge>
+            </span>
+            <Button
+              variant="secondary"
+              className="whitespace-nowrap"
+              onClick={() => void auth.signOut()}
+            >
               Sign out
             </Button>
           </div>
         </header>
         <nav
           aria-label="Mobile"
-          className="flex gap-1 overflow-x-auto border-b border-slate-200 bg-white px-2 py-1 md:hidden"
+          className="flex gap-1 overflow-x-auto border-b border-line bg-surface px-2 py-1 [scrollbar-width:none] md:hidden"
         >
           {nav.map((item) => (
             <NavLink
@@ -188,7 +197,7 @@ function Shell() {
               to={item.to}
               end={item.end}
               className={({ isActive }) =>
-                `whitespace-nowrap rounded px-2 py-1 text-sm ${isActive ? 'bg-slate-100 font-semibold' : ''}`
+                `whitespace-nowrap rounded px-2 py-1 text-sm ${isActive ? 'bg-muted font-semibold text-fg' : 'text-fg-2 hover:text-fg'}`
               }
             >
               {item.label}

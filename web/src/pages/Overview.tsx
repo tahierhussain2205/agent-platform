@@ -14,8 +14,8 @@ import {
 
 function Stat({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="rounded-lg bg-white p-4 shadow-sm ring-1 ring-slate-200">
-      <dt className="text-sm text-slate-500">{label}</dt>
+    <div className="rounded-lg bg-surface p-4 shadow-sm ring-1 ring-line">
+      <dt className="text-sm text-fg-3">{label}</dt>
       <dd
         className="mt-1 text-2xl font-semibold tracking-tight"
         data-testid={`stat-${label.toLowerCase().replace(/\s+/g, '-')}`}
@@ -99,21 +99,21 @@ export function OverviewPage() {
         <Card title="Slack workspace">
           {workspace ? (
             <p className="text-sm">
-              {workspace.name} <span className="text-slate-500">({workspace.external_id})</span>{' '}
+              {workspace.name} <span className="text-fg-3">({workspace.external_id})</span>{' '}
               <Badge tone="green">{workspace.status}</Badge>
             </p>
           ) : (
-            <p className="text-sm text-slate-600">Not connected yet.</p>
+            <p className="text-sm text-fg-2">Not connected yet.</p>
           )}
         </Card>
         <Card title="Your roles">
           {me.membership.roles.length === 0 ? (
-            <p className="text-sm text-slate-600">No roles assigned.</p>
+            <p className="text-sm text-fg-2">No roles assigned.</p>
           ) : (
             <ul className="flex flex-wrap gap-2">
               {me.membership.roles.map((role) => (
                 <li key={role.id}>
-                  <Badge tone={role.is_primary ? 'indigo' : 'slate'}>
+                  <Badge tone={role.is_primary ? 'strong' : 'neutral'}>
                     {role.title}
                     {role.is_primary ? ' (primary)' : ''}
                   </Badge>

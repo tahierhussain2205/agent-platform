@@ -13,6 +13,7 @@
       "key": "acme",
       "clerk_org_id": "org_acme",
       "name": "Acme Corp",
+      "plan": "team",
       "settings": {
         "default_model_tier": "standard",
         "allowed_model_tiers": ["fast", "standard", "advanced"],
@@ -55,6 +56,7 @@
     {
       "key": "globex",
       "clerk_org_id": "org_globex",
+      "plan": "free",
       "name": "Globex Inc",
       "settings": {
         "default_model_tier": "fast",

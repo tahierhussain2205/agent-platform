@@ -34,20 +34,20 @@ const SOURCES: Record<CatalogOwner['source'], string> = {
 }
 
 function Owners({ owners }: { owners: CatalogOwner[] }) {
-  if (owners.length === 0) return <p className="text-sm text-amber-700">No owners yet</p>
+  if (owners.length === 0) return <p className="text-sm text-warn">No owners yet</p>
   return (
     <ul className="space-y-1" aria-label="Owners">
       {owners.map((o) => (
-        <li key={o.membership_id} className="text-sm text-slate-700">
+        <li key={o.membership_id} className="text-sm text-fg-2">
           <span className="font-medium">{o.name ?? o.email}</span>{' '}
-          <span className="text-slate-500">{o.email}</span> <Badge>{SOURCES[o.source]}</Badge>
+          <span className="text-fg-3">{o.email}</span> <Badge>{SOURCES[o.source]}</Badge>
           {!o.active && (
             <>
               {' '}
               <Badge tone="red">Not an active member</Badge>
             </>
           )}
-          {o.reason && <span className="block text-xs text-slate-500">{o.reason}</span>}
+          {o.reason && <span className="block text-xs text-fg-3">{o.reason}</span>}
         </li>
       ))}
     </ul>
@@ -65,7 +65,7 @@ function Links({ service }: { service: CatalogService }) {
       `Channels ${service.channels.map((c) => `#${c.name}`).join(', ')}`,
   ].filter(Boolean)
   if (parts.length === 0) return null
-  return <p className="text-xs text-slate-600">{parts.join(' · ')}</p>
+  return <p className="text-xs text-fg-2">{parts.join(' · ')}</p>
 }
 
 function ServiceRow({
@@ -89,7 +89,7 @@ function ServiceRow({
     <li aria-label={service.name} className="space-y-2 px-4 py-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="font-medium text-slate-900">
+          <p className="font-medium text-fg">
             {service.name}{' '}
             {service.status === 'proposed' ? (
               <Badge tone="amber">Proposed</Badge>
@@ -97,7 +97,7 @@ function ServiceRow({
               <Badge tone="green">Confirmed</Badge>
             )}
           </p>
-          {service.description && <p className="text-sm text-slate-600">{service.description}</p>}
+          {service.description && <p className="text-sm text-fg-2">{service.description}</p>}
           <Links service={service} />
         </div>
         {canManage && (
@@ -125,7 +125,7 @@ function ServiceRow({
       </div>
       <Owners owners={service.owners} />
       {service.evidence.length > 0 && (
-        <details className="text-xs text-slate-600">
+        <details className="text-xs text-fg-2">
           <summary className="cursor-pointer">Why this was proposed</summary>
           <ul className="mt-1 list-disc pl-5">
             {service.evidence.map((e) => (
@@ -279,7 +279,7 @@ function ServiceForm({
         />
       </Field>
       <fieldset className="space-y-2">
-        <legend className="text-sm font-medium text-slate-700">Logs (Google Cloud Logging)</legend>
+        <legend className="text-sm font-medium text-fg-2">Logs (Google Cloud Logging)</legend>
         <div className="grid grid-cols-2 gap-3">
           <Field
             label="Log project"
@@ -316,7 +316,7 @@ function ServiceForm({
         </div>
       </fieldset>
       <fieldset>
-        <legend className="text-sm font-medium text-slate-700">Owners</legend>
+        <legend className="text-sm font-medium text-fg-2">Owners</legend>
         <div className="mt-1 max-h-40 space-y-1 overflow-y-auto">
           {members.map((m) => (
             <label key={m.membership_id} className="flex items-center gap-2 text-sm">
@@ -333,7 +333,7 @@ function ServiceForm({
         </div>
       </fieldset>
       <fieldset>
-        <legend className="text-sm font-medium text-slate-700">Channels</legend>
+        <legend className="text-sm font-medium text-fg-2">Channels</legend>
         <div className="mt-1 max-h-32 space-y-1 overflow-y-auto">
           {options.channels.map((c) => (
             <label key={c.id} className="flex items-center gap-2 text-sm">
@@ -374,18 +374,18 @@ function ProposalStatus({ proposal }: { proposal: CatalogProposal | undefined })
   if (!proposal || proposal.status === 'none' || proposal.status === 'unknown') return null
   if (proposal.status === 'running')
     return (
-      <p className="flex items-center gap-2 text-sm text-slate-600" data-testid="proposal-status">
+      <p className="flex items-center gap-2 text-sm text-fg-2" data-testid="proposal-status">
         <Spinner className="h-4 w-4" /> Proposing services from GitHub and Jira…
       </p>
     )
   if (proposal.status === 'failed')
     return (
-      <p className="text-sm text-red-700" data-testid="proposal-status">
+      <p className="text-sm text-bad" data-testid="proposal-status">
         The last proposal failed. Try again, or check the integrations.
       </p>
     )
   return (
-    <div className="text-sm text-slate-600" data-testid="proposal-status">
+    <div className="text-sm text-fg-2" data-testid="proposal-status">
       <p>Last proposal: {counts(proposal)}.</p>
       {(proposal.notes ?? []).length > 0 && (
         <ul className="list-disc pl-5 text-xs">
@@ -410,14 +410,19 @@ export function CatalogPage() {
     (api) => api('/api/catalog/propose', { method: 'POST' }),
     ['catalog'],
   )
-  // When a running proposal finishes, show the services it proposed.
-  const previous = useRef(proposal.data?.status)
+  // When a proposal finishes, show the services it proposed. Keyed on when the latest run
+  // finished, not on seeing it running: a quick run can finish between two polls.
+  const seen = useRef<string | undefined>(undefined)
+  const finished =
+    proposal.data && proposal.data.status !== 'running'
+      ? `${proposal.data.status}@${proposal.data.finished_at ?? ''}`
+      : undefined
   useEffect(() => {
-    const status = proposal.data?.status
-    if (previous.current === 'running' && status && status !== 'running')
+    if (finished === undefined) return
+    if (seen.current !== undefined && finished !== seen.current)
       void client.invalidateQueries({ queryKey: [org, 'catalog'], exact: true })
-    previous.current = status
-  }, [client, org, proposal.data?.status])
+    seen.current = finished
+  }, [client, org, finished])
 
   if (catalog.isPending) return <Spinner />
   if (catalog.error) return <ErrorNotice error={catalog.error} />
@@ -451,11 +456,11 @@ export function CatalogPage() {
       {canManage && <ProposalStatus proposal={proposal.data} />}
       {proposed.length > 0 && (
         <Card title="Proposed services">
-          <p className="px-4 pt-3 text-sm text-slate-600">
+          <p className="px-4 pt-3 text-sm text-fg-2">
             Proposed from GitHub CODEOWNERS and Jira components you can read. Confirm a service to
             let the agent suggest its owners; edit it first if something is off.
           </p>
-          <ul className="divide-y divide-slate-100" aria-label="Proposed services">
+          <ul className="divide-y divide-line" aria-label="Proposed services">
             {proposed.map((s) => (
               <ServiceRow
                 key={s.id}
@@ -474,7 +479,7 @@ export function CatalogPage() {
             {canManage && ' Propose services from GitHub and Jira, or add one.'}
           </EmptyState>
         ) : (
-          <ul className="divide-y divide-slate-100" aria-label="Confirmed services">
+          <ul className="divide-y divide-line" aria-label="Confirmed services">
             {confirmed.map((s) => (
               <ServiceRow
                 key={s.id}

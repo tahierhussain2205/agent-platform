@@ -1,4 +1,4 @@
-"""Request context: request id, tenant reset, access log, last resort error response."""
+"""Request context: request id, tenant reset, access log, last resort error response; security headers."""
 
 import json
 import logging
@@ -65,3 +65,37 @@ class RequestContextMiddleware:
                 extra={"http_method": scope.get("method"), "http_path": path, "http_status": status,
                        "duration_ms": round((time.perf_counter() - started) * 1000, 1)},
             )  # fmt: skip
+
+
+# The API answers JSON (and OAuth redirects) only: nothing of it may be framed, sniffed, cached or
+# run as a page.
+SECURITY_HEADERS = [
+    (b"x-content-type-options", b"nosniff"),
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"no-referrer"),
+    (b"content-security-policy", b"default-src 'none'; frame-ancestors 'none'"),
+    (b"cache-control", b"no-store"),
+]
+HSTS = (b"strict-transport-security", b"max-age=31536000; includeSubDomains")
+
+
+class SecurityHeadersMiddleware:
+    def __init__(self, app: ASGIApp, hsts: bool) -> None:
+        self.app = app
+        self.headers = [*SECURITY_HEADERS, *([HSTS] if hsts else [])]
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                present = {name.lower() for name, _ in message.get("headers", [])}
+                message["headers"] = [
+                    *message.get("headers", []),
+                    *((n, v) for n, v in self.headers if n not in present),
+                ]
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)

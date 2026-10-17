@@ -75,6 +75,32 @@ async def test_unverifiable_requests_are_refused(
     assert stack.temporal.started == []
 
 
+async def test_acknowledgment_latency_is_recorded_for_verified_requests_only(api: httpx.AsyncClient) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from app import kv
+    from app.alerts import _minute_key
+    from tests.stack import kv_url
+
+    client = kv.make_client(kv_url(13))
+
+    async def counted() -> int:
+        now = datetime.now(UTC)
+        total = 0
+        for at in (now, now - timedelta(minutes=1)):  # a minute may turn during the test
+            total += sum(int(v) for v in (await client.hgetall(_minute_key(at))).values())
+        return total
+
+    try:
+        before = await counted()
+        await post_event(api, {"type": "url_verification", "challenge": "abc123", "token": "x"})
+        await post_event(api, event_payload(mention()), secret="wrong")  # forged: not counted
+        assert await counted() == before + 1
+        assert await client.ttl(_minute_key(datetime.now(UTC))) > 0
+    finally:
+        await client.aclose()
+
+
 async def test_missing_signature_headers(api: httpx.AsyncClient) -> None:
     response = await api.post(
         "/slack/events",

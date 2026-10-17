@@ -205,6 +205,30 @@ async def test_action_tiers_against_the_mode(stack: Stack, channels: dict[str, T
     assert (await auto.check_tool("slack", "post_message", channels["leads-private"])).code == "not_a_member"
 
 
+async def test_shadow_mode_reads_and_plans_but_never_writes(
+    stack: Stack, channels: dict[str, Target]
+) -> None:
+    acme = stack.env.world.acme
+    q(stack, "update app.org_settings set shadow_mode = true where org_id = %s", (acme.id,))
+    try:
+        for mode in ("ask", "auto"):
+            p = policy(stack, mode=mode)
+            assert (await p.check_tool("jira", "search", None)).outcome == "allowed"
+            assert (await p.check_tool("slack", "read_channel", channels["bugs"])).outcome == "allowed"
+            for adapter, operation, target in (("jira", "create_issue", None), ("jira", "delete_issue", None),
+                                               ("slack", "post_message", channels["bugs"])):  # fmt: skip
+                decision = await p.check_tool(adapter, operation, target)
+                assert (decision.outcome, decision.code) == ("denied", "shadow_mode"), (mode, operation)
+                assert decision.reason.startswith("Shadow mode:")
+        # The channel rule still answers first for a channel the requester may not use.
+        assert (
+            await policy(stack).check_tool("slack", "post_message", channels["leads-private"])
+        ).code == "not_a_member"
+    finally:
+        q(stack, "update app.org_settings set shadow_mode = false where org_id = %s", (acme.id,))
+    assert (await policy(stack, mode="auto").check_tool("jira", "create_issue", None)).outcome == "allowed"
+
+
 async def test_every_decision_is_audited(stack: Stack, channels: dict[str, Target]) -> None:
     bob = policy(stack)
     await bob.check_tool("slack", "read_channel", channels["bugs"])

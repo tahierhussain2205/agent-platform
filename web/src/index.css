@@ -1,7 +1,95 @@
 @import 'tailwindcss';
 
+/* Dark mode follows the `dark` class on <html>: the viewer's choice, or their system's (src/theme.ts). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/*
+ * Semantic colors: components use these (bg-surface, text-fg, border-line, ...) instead of a fixed
+ * palette, so every page works in both themes. Light is white and greys; dark is black and greys.
+ * Status colors (ok, warn, bad) keep their hue in both.
+ */
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-subtle: var(--subtle);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-fg-4: var(--fg-4);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-disabled: var(--accent-disabled);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-ok-line: var(--ok-line);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-line: var(--warn-line);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-bad-line: var(--bad-line);
+}
+
+:root {
+  color-scheme: light;
+  --canvas: #f5f5f5;
+  --surface: #ffffff;
+  --subtle: #fafafa;
+  --muted: #efefef;
+  --line: #e5e5e5;
+  --line-strong: #d4d4d4;
+  --fg: #171717;
+  --fg-2: #4d4d4d;
+  --fg-3: #666666;
+  --fg-4: #a3a3a3;
+  --accent: #171717;
+  --accent-hover: #3a3a3a;
+  --accent-fg: #ffffff;
+  --accent-disabled: #a3a3a3;
+  --ok: #15803d;
+  --ok-soft: #f0fdf4;
+  --ok-line: #bbf7d0;
+  --warn: #b45309;
+  --warn-soft: #fffbeb;
+  --warn-line: #fde68a;
+  --bad: #b91c1c;
+  --bad-soft: #fef2f2;
+  --bad-line: #fecaca;
+}
+
+:root.dark {
+  color-scheme: dark;
+  --canvas: #000000;
+  --surface: #121212;
+  --subtle: #1a1a1a;
+  --muted: #242424;
+  --line: #2a2a2a;
+  --line-strong: #3d3d3d;
+  --fg: #f5f5f5;
+  --fg-2: #d4d4d4;
+  --fg-3: #a3a3a3;
+  --fg-4: #6b6b6b;
+  --accent: #f5f5f5;
+  --accent-hover: #d4d4d4;
+  --accent-fg: #0a0a0a;
+  --accent-disabled: #525252;
+  --ok: #4ade80;
+  --ok-soft: rgb(34 197 94 / 0.12);
+  --ok-line: rgb(34 197 94 / 0.3);
+  --warn: #fcd34d;
+  --warn-soft: rgb(245 158 11 / 0.12);
+  --warn-line: rgb(245 158 11 / 0.3);
+  --bad: #f87171;
+  --bad-soft: rgb(239 68 68 / 0.12);
+  --bad-line: rgb(239 68 68 / 0.35);
 }
 
 html,
@@ -11,5 +99,51 @@ body,
 }
 
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+  @apply bg-canvas text-fg antialiased;
+}
+
+@layer base {
+  /* Everything that can be clicked shows a pointer; disabled controls say they are not available.
+     Tailwind 4 no longer gives buttons a pointer, so this is set once for every kind of control.
+     :where() keeps both rules at no specificity, so the disabled one (later) always wins and any
+     cursor utility on a component still overrides them. */
+  :where(
+    a[href],
+    button,
+    [role='button'],
+    [role='tab'],
+    [role='menuitem'],
+    [role='option'],
+    [role='switch'],
+    select,
+    summary,
+    label:has(input[type='checkbox'], input[type='radio']),
+    input[type='checkbox'],
+    input[type='radio'],
+    input[type='file'],
+    input[type='range'],
+    input[type='submit'],
+    input[type='button'],
+    input[type='reset'],
+    input[type='color']
+  ) {
+    cursor: pointer;
+  }
+  :where(:disabled, [aria-disabled='true'], label:has(input:disabled)) {
+    cursor: not-allowed;
+  }
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: var(--accent);
+  }
+  /* A control that cannot be used looks it, not only on hover. */
+  :where(input[type='checkbox'], input[type='radio']):disabled {
+    opacity: 0.45;
+  }
+  :where(label:has(input[type='checkbox']:disabled, input[type='radio']:disabled)) {
+    color: var(--fg-3);
+  }
+  dialog {
+    @apply bg-surface text-fg;
+  }
 }

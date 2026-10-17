@@ -8,6 +8,8 @@ message text. Channel and membership events are small idempotent writes done inl
 
 import json
 import logging
+import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import parse_qs, urlencode
 from uuid import UUID, uuid4
@@ -15,10 +17,12 @@ from uuid import UUID, uuid4
 import psycopg
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+from starlette.background import BackgroundTask
 from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from app import kv
+from app.alerts import record_ingress_latency
 from app.api import slack_schedules
 from app.api.temporal_client import temporal_client
 from app.auth.console import resources
@@ -54,6 +58,7 @@ CHANNEL_EVENTS = {
     "group_deleted",
 }
 ARCHIVE_EVENTS = {"channel_archive", "channel_deleted", "group_archive", "group_deleted"}
+UNVERIFIED = {401, 413, 503}  # refused before the signature held: not counted in the latency
 
 
 def ok() -> Response:
@@ -99,8 +104,23 @@ async def _verified_body(request: Request) -> bytes | Response:
     return body
 
 
+async def _timed(request: Request, handler: Callable[[Request], Awaitable[Response]]) -> Response:
+    """Acknowledgment latency for the alerts (spec 16: Slack waits 3 seconds), recorded after the
+    response is sent so it costs the acknowledgment nothing."""
+    started = time.perf_counter()
+    response = await handler(request)
+    if response.status_code not in UNVERIFIED and response.background is None:
+        ms = (time.perf_counter() - started) * 1000
+        response.background = BackgroundTask(record_ingress_latency, resources(request).kv, ms)
+    return response
+
+
 @router.post("/slack/events", include_in_schema=False)
 async def events(request: Request) -> Response:
+    return await _timed(request, _events)
+
+
+async def _events(request: Request) -> Response:
     body = await _verified_body(request)
     if isinstance(body, Response):
         return body
@@ -212,6 +232,10 @@ async def _route(
 
 @router.post("/slack/interactions", include_in_schema=False)
 async def interactions(request: Request) -> Response:
+    return await _timed(request, _interactions)
+
+
+async def _interactions(request: Request) -> Response:
     body = await _verified_body(request)
     if isinstance(body, Response):
         return body

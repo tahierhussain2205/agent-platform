@@ -76,6 +76,7 @@ MAX_ACTIONS = 5
 MAX_TICKETS = 5  # tickets a change moves along (the plan's issues)
 TICKET_ACTIONS = 100  # action numbers of those updates, apart from the plan's and the push
 AUTO_PLAN_LIMIT = 3  # Auto drops to Ask above this many changes (spec 4.5.3)
+SHADOW_HINT = "An admin can turn shadow mode off in the console to let me act."
 CONVERSATION_LIMIT = 50
 TERMINAL = ("completed", "failed", "cancelled")
 TIERS: tuple[Tier, ...] = ("fast", "standard", "advanced")
@@ -1084,6 +1085,10 @@ class AgentRunner:
         target = await adapter.resolve_target(tctx, op.name, args)
         decision = await policy.check_tool(adapter.key, op.name, target)
         await self.step(ref, "act", "running", action.summary)
+        if decision.code == "shadow_mode":  # say what would have happened; nothing to approve
+            return ActionOutcome(
+                "denied", f"Not done (shadow mode): {action.summary.rstrip('.')}. {SHADOW_HINT}"
+            )
         if decision.outcome == "denied":
             return ActionOutcome("denied", decision.reason)
         if target is not None:  # what is shared must be fit for the audience it is shared with
