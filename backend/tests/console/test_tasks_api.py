@@ -125,7 +125,7 @@ async def test_a_task_timeline_shows_what_the_agent_did(
     assert {"kind": "pull_request", "label": "acme/api#1", "url": None} in detail["links"]
     [approval] = detail["approvals"]
     assert approval["status"] == "approved"
-    assert approval["decided_by"] == "alice@acme.test"
+    assert approval["decided_by"] == "Alice Admin"  # the name, not the email (demo rehearsal)
     assert approval["decides"] == "the requester or an admin"
 
     events = detail["events"]
@@ -141,7 +141,7 @@ async def test_a_task_timeline_shows_what_the_agent_did(
     model = next(e for e in events if e["kind"] == "model")
     assert model["title"] == "Model call: classify"
     assert model["input_tokens"] == 100
-    assert any(e["title"] == "Approved by alice@acme.test" for e in events)
+    assert any(e["title"] == "Approved by Alice Admin" for e in events)
     [action] = [e for e in events if e["kind"] == "action"]  # the task's own status message is not listed
     assert action["title"] == "Created a Jira issue"
     assert action["detail"] == "KAN-7"

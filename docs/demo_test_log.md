@@ -13,7 +13,7 @@ Each run is recorded below with what was seen; every gap, bug, improvement and U
 entry in the issue list, which is kept up to date (status **open**, **fixed**, or **won't fix** with
 the reason).
 
-**Status (2026-10-17, after run 5): no open issues.** Run 3 (Ask) and run 5 (Auto) went through all
+**Status (2026-10-17, after run 7): no open issues.** Run 3 (Ask) and run 5 (Auto) went through all
 five steps on staging without a problem; the last found issues (#27, #28, #29) were fixed and
 deployed before run 5.
 
@@ -76,6 +76,8 @@ In #agent-test (staging), as a member whose Jira and GitHub accounts are linked 
 | 29 | CI | test | The Slack stand-in's `test_rate_limits` failed on main once: one call a second, and its two calls straddled a second. | fixed: three later calls, at least one limited |
 | 30 | — | bug | Found by the smoke test after bringing Phase 13 to staging: "what pricing problems were reported in #agent-test today?" in a DM got "the channel #C0C9S2Y6Z1B is not accessible": Slack sent the channel as a link without a name, and the agent looked for a channel called "c0c9s2y6z1b". | fixed: such links read as the channel's name, and channel ids match in any case; on staging the question now gets both problems, cited, in 33 s |
 | 31 | 6 | UX | On the Tasks timeline, the policy's recheck when an approved write runs (the push, and the ticket moves that ride on its approval) read "Ask mode: reversible writes need approval" in amber, right before the write succeeded. | fixed: a recheck followed by its own successful write, with no new approval request between, reads "Done under the approval given above" in green |
+| 32 | 2 | UX | Ticket descriptions ended with "Finding 1." / "Finding 2.": the model cites the numbered findings it is given. | fixed: finding numbers are stripped from ticket text like our citation refs |
+| 33 | 6 | UX | The Tasks timeline said "Approved by <email>" instead of the approver's name (in the three person demo that put a real email on screen). | fixed: the approver's name, falling back to the email |
 
 ## Runs
 
@@ -133,3 +135,15 @@ Settings, Autonomy, "Let people choose Auto" in the console (#25: saved and kept
 - Step 4: **Implement this plan** clicked (the first automated click landed while Slack re-rendered the thread and never reached the API; the second did): the push's approval read "**a Tech Lead or an admin decides**"; approved as admin; pull request tahier-agent-lab/cart-service#5 opened, with a **View pull request** button.
 - Step 5: KAN-15 and KAN-16 In Review. The console's Tasks page listed the three tasks; the change's timeline showed the brief, the sandbox edits and test runs, the review, the approval and who decided, the push and both tickets moved and commented (#31 found here).
 - Afterwards: the tickets moved to Done and the pull request closed (not merged).
+
+### Run 7 (2026-10-17, staging at 2c9f796, Ask mode, the three person rehearsal)
+
+A fresh org "Northwind Shop" set up from the console (CEO Tahier Hussain as admin; Alex Johnson with the Manager role, which approves pushes and has no planning or code playbooks; John Doe with the Engineer role, owner of cart-service in the catalog), in #checkout with exactly these three. Notes in `notes/demo-script/` (not in the repository).
+
+- Step 1: the CEO posted the two problems in #checkout.
+- Step 2: Alex: `@agent create Jira tickets for these two issues in the KAN project and assign both to John Doe (…)`: two approvals, "Assignee: John Doe, owner of cart-service (manual)", approved by Alex; KAN-17 and KAN-18 created with Alex as reporter and John as assignee; the answer posted in the thread (everyone there may see the sources); no Plan a fix button (Alex's role excludes planning) (#32).
+- Step 3: John: a summary of KAN-17 and KAN-18 (33 s), then "investigate KAN-17 and KAN-18 and come up with a detailed plan": "Plan for KAN-17, KAN-18: Count every cart line toward the order total and reject discounts over 100% · confidence medium" (about 1 minute).
+- Step 4: John clicked **Implement this plan**; the push request (2 files, +26 −4, all tests pass) was approved by Alex as Manager; pull request tahier-agent-lab/cart-service#6 opened by the app on `agent/kan-17-…`.
+- Step 5: KAN-17 and KAN-18 In Review, each with "Pull request opened: <link>" from John's own Jira account. The Tasks page listed the four tasks; the change's timeline showed the approval (#33).
+- Setup findings logged as B-013 (the Atlassian app is not shared: Alex and John are contributors on it) and D-207 (only members of tahier-agent-lab can link GitHub).
+

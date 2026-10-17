@@ -427,6 +427,12 @@ def test_our_refs_never_reach_jira() -> None:
     )
     assert without_refs("Totals went negative [S1] [C2].") == "Totals went negative."
     assert without_refs("lines[19] is dropped; [WIP] stays") == "lines[19] is dropped; [WIP] stays"
+    # Demo rehearsal: descriptions ended with "Finding 1." (the model citing our numbered findings).
+    assert without_refs("repository: acme/cart. Finding 1.") == "repository: acme/cart."
+    assert without_refs("Totals went negative (finding 2).") == "Totals went negative."
+    assert without_refs("Findings were mixed; finding the cause took a day.") == (
+        "Findings were mixed; finding the cause took a day."
+    )
 
 
 async def test_without_a_project_the_only_one_is_used_or_the_choices_are_named(

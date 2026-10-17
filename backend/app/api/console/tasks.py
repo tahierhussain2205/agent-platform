@@ -145,7 +145,8 @@ async def get_task(
     approvals = await fetch_all(
         conn,
         "select a.id, a.created_at, a.action_summary, a.action_tier, a.approver_rule, "
-        "r.title as approver_role, a.status, a.decided_at, a.expires_at, u.email as decided_by "
+        "r.title as approver_role, a.status, a.decided_at, a.expires_at, "
+        "coalesce(nullif(btrim(u.name), ''), u.email) as decided_by "
         "from app.approvals a "
         "left join app.custom_roles r on r.id = a.approver_role_id "
         "left join app.org_memberships m on m.id = a.decided_by left join app.users u on u.id = m.user_id "

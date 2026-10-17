@@ -331,11 +331,14 @@ def missing_was_asked(missing: str, goal: str) -> bool:
 
 
 REF = re.compile(r"\s+\[(?:[A-Z]{1,2})?\d{1,3}\](?=[\s.,;:)]|$)")  # after a space: not code like a[1]
+# The model sees the findings numbered and sometimes cites them ("Finding 1.", "(finding 2)").
+FINDING = re.compile(r"\s*\([Ff]inding #?\d{1,2}\)|\s*\b[Ff]inding #?\d{1,2}\b\.?(?=\s|$)")
 
 
 def without_refs(text: str) -> str:
-    """Model text without our citation refs ([S1], [C2], [3]): they mean nothing in Jira."""
-    return REF.sub("", text)
+    """Model text without our citation refs ([S1], [C2], [3]) and finding numbers: they mean nothing
+    in Jira."""
+    return FINDING.sub("", REF.sub("", text))
 
 
 async def _component_of(executor: ToolExecutor, project: str, component: str) -> tuple[str, str]:
