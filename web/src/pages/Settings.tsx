@@ -8,6 +8,7 @@ import {
   type Plan,
   type Tier,
 } from '../api/hooks'
+import { AutonomyCard } from '../components/AutonomyCard'
 import {
   Button,
   Card,
@@ -135,6 +136,9 @@ function SettingsForm({
         title="Settings"
         description={`Models, limits and retention for this organization${plan ? `, within the ${plan.title} plan` : ''}.`}
       />
+      <div className="mb-6">
+        <AutonomyCard isAdmin />
+      </div>
       <form onSubmit={submit} className="space-y-6" aria-label="Organization settings">
         <ErrorNotice error={save.error} />
         {saved && (

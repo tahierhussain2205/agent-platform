@@ -48,6 +48,7 @@ describe('Settings page', () => {
     const fetch = mockFetch({
       'GET /api/me': () => ({ body: me }),
       'GET /api/settings': () => ({ body: settings }),
+      'GET /api/autonomy': () => ({ body: { org: 'ask', set: false } }),
       'PATCH /api/settings': (init) => {
         sent = JSON.parse(String(init?.body))
         return { body: { ...settings, shadow_mode: false, updated_at: '2026-10-16T10:00:00Z' } }
@@ -67,12 +68,38 @@ describe('Settings page', () => {
     expect(sent.shadow_mode).toBe(false)
   })
 
+  it('lets people choose Auto, saved as soon as it is chosen', async () => {
+    let sent: Record<string, unknown> = {}
+    let org = 'ask'
+    vi.stubGlobal(
+      'fetch',
+      mockFetch({
+        'GET /api/me': () => ({ body: me }),
+        'GET /api/settings': () => ({ body: settings }),
+        'GET /api/autonomy': () => ({ body: { org, set: org !== 'ask' } }),
+        'PUT /api/autonomy': (init) => {
+          sent = JSON.parse(String(init?.body))
+          org = String(sent.org)
+          return { body: { org, set: true } }
+        },
+      }).fn,
+    )
+    renderRoutes(routes, { path: '/settings' })
+    const ask = await screen.findByRole('radio', { name: /Ask before every change/ })
+    expect(ask).toBeChecked()
+    await userEvent.click(screen.getByRole('radio', { name: /Let people choose Auto/ }))
+    expect(await screen.findByText('Saved.')).toBeInTheDocument()
+    expect(sent).toEqual({ org: 'auto' })
+    expect(screen.getByRole('radio', { name: /Let people choose Auto/ })).toBeChecked()
+  })
+
   it('shows why a value is beyond the plan', async () => {
     vi.stubGlobal(
       'fetch',
       mockFetch({
         'GET /api/me': () => ({ body: me }),
         'GET /api/settings': () => ({ body: settings }),
+        'GET /api/autonomy': () => ({ body: { org: 'ask', set: false } }),
         'PATCH /api/settings': () => ({
           status: 422,
           body: {
