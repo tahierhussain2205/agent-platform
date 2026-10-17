@@ -324,8 +324,14 @@ async def test_one_connection_per_sandbox_is_reused(sdk: FakeSDK) -> None:
 
 
 def test_settings_choose_the_provider() -> None:
+    """Staging: E2B has no URL, and the agent's code tools were not offered (run 1, #14)."""
+    from app.sandbox import sandbox_configured
+
     http: Any = None
     e2b = Settings(sandbox_provider="e2b", sandbox_api_key=KEY, sandbox_url=None)
+    assert sandbox_configured(e2b)
+    assert not sandbox_configured(Settings(sandbox_provider="e2b", sandbox_api_key=None))
+    assert not sandbox_configured(Settings(sandbox_url=None, sandbox_api_key="k"))
     chosen = provider_from_settings(e2b, http)
     assert isinstance(chosen, E2BSandboxProvider)
     assert provider_from_settings(e2b, http) is chosen  # one client per process

@@ -249,15 +249,21 @@ class HttpSandboxProvider:
                 raise
 
 
+def sandbox_configured(settings: Any) -> bool:
+    """Whether a provider is configured (what ``provider_from_settings`` needs), without building one:
+    E2B needs only its key, the HTTP provider its URL as well."""
+    if settings is None or settings.sandbox_api_key is None:
+        return False
+    return getattr(settings, "sandbox_provider", "http") == "e2b" or bool(settings.sandbox_url)
+
+
 def provider_from_settings(settings: Any, http: httpx.AsyncClient) -> SandboxProvider | None:
     """The configured provider, or None (code tools then say there is none)."""
-    if settings is None or settings.sandbox_api_key is None:
+    if not sandbox_configured(settings):
         return None
     key = settings.sandbox_api_key.get_secret_value()
     if getattr(settings, "sandbox_provider", "http") == "e2b":
         return _e2b(key, settings.sandbox_template)
-    if not settings.sandbox_url:
-        return None
     return HttpSandboxProvider(settings.sandbox_url, key, http)
 
 

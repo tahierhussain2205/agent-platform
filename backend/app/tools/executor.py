@@ -129,6 +129,7 @@ class ToolExecutor:
 async def build_registry(ctx: ToolContext, bot_user_id: str | None, executor_factory: Any = None) -> Registry:
     """Slack, the service catalog, and the integrations this org enabled. MCP servers bring their tools
     from discovery (cached in the integration's config)."""
+    from app.sandbox import sandbox_configured
     from app.tools.catalog import CatalogAdapter
     from app.tools.github import GitHubAdapter
     from app.tools.jira import JiraAdapter
@@ -161,6 +162,6 @@ async def build_registry(ctx: ToolContext, bot_user_id: str | None, executor_fac
             )
         elif kind == "custom_mcp" and approved and config.get("url"):
             registry.register(McpAdapter(key, str(config["url"]), config.get("tools") or [], "org"))
-    if "github" in registry.adapters and settings is not None and settings.sandbox_url:
+    if "github" in registry.adapters and sandbox_configured(settings):
         registry.register(SandboxAdapter())  # working copies of the org's repositories
     return registry

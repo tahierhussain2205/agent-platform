@@ -73,9 +73,11 @@ async def check_sandbox(settings: Settings) -> str:
     import httpx
 
     from app.agent.recipes import PYTEST
-    from app.sandbox import Limits, SandboxError, provider_from_settings
+    from app.sandbox import Limits, SandboxError, provider_from_settings, sandbox_configured
     from app.sandbox.workspaces import BASELINE
 
+    if not sandbox_configured(settings):  # the agent offers the code tools only then
+        raise RuntimeError("the agent would not offer the sandbox tools with these settings")
     async with httpx.AsyncClient(timeout=60) as http:
         provider = provider_from_settings(settings, http)
         if provider is None:
