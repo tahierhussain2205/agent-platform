@@ -76,3 +76,16 @@ def test_cut_markup() -> None:
     assert cut_markup("done.</answer>") == "done.</answer>"  # another field's tag is content
     assert cut_markup('x <parameter name="y">z') == "x"
     assert cut_markup("plain") == "plain"
+
+
+def test_fields_put_under_a_key_of_the_models_own_are_unwrapped() -> None:
+    """Demo run 4: a plan came back with nothing the schema knows at its top level."""
+    tool = submit_tool("submit_investigation_plan", "Submit the plan.")
+    plan = {"goal": "Count every line", "steps": [{"kind": "implement", "text": "Fix it"}]}
+    value, fixed = repaired("submit_investigation_plan", {"plan": plan}, tool)
+    assert value == plan
+    assert fixed == ["submit_investigation_plan.plan"]
+    value, _ = repaired("submit_investigation_plan", {"plan": json.dumps(plan), "summary": "Outside"}, tool)
+    assert value == {**plan, "summary": "Outside"}
+    for left in ({"plan": {"unrelated": 1}}, {"a": plan, "b": plan}, {"note": "just text"}):
+        assert repaired("submit_investigation_plan", left, tool)[0] == left, left
